@@ -197,6 +197,40 @@ class Config:
         ])
     
     @property
+    def embeddings_enabled(self) -> bool:
+        """Get whether embeddings are enabled."""
+        return self.get("embeddings.enabled", False)
+    
+    @property
+    def embeddings_provider(self) -> Optional[str]:
+        """Get embedding provider name."""
+        return self.get("embeddings.provider")
+    
+    @property
+    def embeddings_model(self) -> Optional[str]:
+        """Get embedding model name or path."""
+        return self.get("embeddings.model")
+    
+    @property
+    def embeddings_dimension(self) -> int:
+        """Get embedding dimension."""
+        return self.get("embeddings.dimension", 768)
+    
+    @property
+    def embeddings_cache_dir(self) -> Optional[str]:
+        """Get embeddings cache directory."""
+        return self.get("embeddings.cache_dir")
+    
+    @property
+    def embeddings_api_key(self) -> Optional[str]:
+        """Get embeddings API key (for OpenAI)."""
+        api_key = self.get("embeddings.api_key")
+        if not api_key:
+            # Fall back to OPENAI_API_KEY environment variable
+            api_key = os.getenv("OPENAI_API_KEY")
+        return api_key
+    
+    @property
     def embeddings_kwargs(self) -> dict:
         """Get additional embeddings provider kwargs."""
         embeddings_config = self.get("embeddings", {})

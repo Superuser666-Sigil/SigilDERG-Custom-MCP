@@ -43,12 +43,22 @@ Configuration in `config.json`:
 ```json
 {
   "embeddings": {
+    "enabled": true,
     "provider": "sentence-transformers",
-    "model": "sentence-transformers/all-MiniLM-L6-v2",
-    "device": "cuda"
+    "model": "all-MiniLM-L6-v2",
+    "dimension": 384,
+    "cache_dir": "~/.cache/sigil-embeddings"
   }
 }
 ```
+
+**Configuration Properties:**
+- `embeddings.enabled`: Enable/disable embedding features (default: `false`)
+- `embeddings.provider`: Provider name: `sentence-transformers`, `openai`, or `llamacpp`
+- `embeddings.model`: Model identifier (for sentence-transformers/openai) or path to GGUF file (for llamacpp)
+- `embeddings.dimension`: Expected embedding dimension (e.g., 384, 768, 1536)
+- `embeddings.cache_dir`: Cache directory for downloaded models (optional, defaults to system cache)
+- `embeddings.api_key`: API key for cloud providers (optional, falls back to `OPENAI_API_KEY` env var)
 
 **Why?** PyTorch has excellent CUDA support out of the box. sentence-transformers will automatically use your GPU.
 
@@ -66,8 +76,10 @@ Configuration in `config.json`:
 ```json
 {
   "embeddings": {
+    "enabled": true,
     "provider": "llamacpp",
-    "model_path": "/path/to/model.gguf",
+    "model": "/path/to/model.gguf",
+    "dimension": 768,
     "n_gpu_layers": 99,
     "n_ctx": 512
   }
@@ -96,8 +108,10 @@ Configuration in `config.json`:
 ```json
 {
   "embeddings": {
+    "enabled": true,
     "provider": "llamacpp",
-    "model_path": "/path/to/model.gguf",
+    "model": "/path/to/model.gguf",
+    "dimension": 768,
     "n_gpu_layers": 99,
     "n_ctx": 512
   }
@@ -114,19 +128,21 @@ Best option: **llama.cpp CPU**
 
 ```bash
 pip install -e .[embeddings-llamacpp-cpu]
-```
-
 Configuration in `config.json`:
 ```json
 {
   "embeddings": {
+    "enabled": true,
     "provider": "llamacpp",
-    "model_path": "/path/to/model.gguf",
+    "model": "/path/to/model.gguf",
+    "dimension": 768,
     "n_threads": 8,
     "n_ctx": 512
   }
 }
 ```
+
+**Why?** llama.cpp is highly optimized for CPU inference with AVX2/AVX512 support.
 
 **Why?** llama.cpp is highly optimized for CPU inference with AVX2/AVX512 support.
 
@@ -143,14 +159,14 @@ Best option: **OpenAI API**
 
 ```bash
 pip install -e .[embeddings-openai]
-```
-
 Configuration in `config.json`:
 ```json
 {
   "embeddings": {
+    "enabled": true,
     "provider": "openai",
     "model": "text-embedding-3-small",
+    "dimension": 1536,
     "api_key": "sk-..."
   }
 }
@@ -160,6 +176,8 @@ Or use environment variable:
 ```bash
 export OPENAI_API_KEY="sk-..."
 ```
+
+**Why?** No local compute needed, highest quality embeddings, automatic scaling.
 
 **Why?** No local compute needed, highest quality embeddings, automatic scaling.
 
@@ -194,13 +212,14 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, ROCm: {torch
 
 *ROCm requires manual PyTorch installation
 
-## Configuration Examples
-
 ### Minimal Config (Auto-detect)
 ```json
 {
   "embeddings": {
-    "provider": "sentence-transformers"
+    "enabled": true,
+    "provider": "sentence-transformers",
+    "model": "all-MiniLM-L6-v2",
+    "dimension": 384
   }
 }
 ```
@@ -209,8 +228,10 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, ROCm: {torch
 ```json
 {
   "embeddings": {
+    "enabled": true,
     "provider": "llamacpp",
-    "model_path": "./models/nomic-embed-text-v1.5.Q4_K_M.gguf",
+    "model": "./models/nomic-embed-text-v1.5.Q4_K_M.gguf",
+    "dimension": 768,
     "n_gpu_layers": 99,
     "n_ctx": 512,
     "n_batch": 512,
@@ -228,9 +249,13 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, ROCm: {torch
     "repo2": "/path/to/repo2"
   },
   "embeddings": {
+    "enabled": true,
     "provider": "llamacpp",
-    "model_path": "./models/nomic-embed-text-v1.5.Q4_K_M.gguf"
+    "model": "./models/nomic-embed-text-v1.5.Q4_K_M.gguf",
+    "dimension": 768
   }
+}
+```
 }
 ```
 

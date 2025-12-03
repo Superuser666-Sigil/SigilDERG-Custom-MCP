@@ -6,9 +6,28 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
+
+# Optional dependencies - import at top level
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SentenceTransformer = None  # type: ignore
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OpenAI = None  # type: ignore
+    OPENAI_AVAILABLE = False
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer as SentenceTransformerType
+    from openai import OpenAI as OpenAIType
 
 
 class EmbeddingProvider(Protocol):
@@ -49,20 +68,18 @@ def create_embedding_provider(  # noqa: C901
         ImportError: If required dependencies are not installed
     """
     if provider == "sentence-transformers":
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError as e:
+        if not SENTENCE_TRANSFORMERS_AVAILABLE:
             raise ImportError(
                 "sentence-transformers is required for this provider. "
                 "Install it with: pip install sentence-transformers"
-            ) from e
+            )
 
         cache_dir = kwargs.get("cache_dir")
         logger.info(f"Loading sentence-transformers model: {model}")
         model_obj = SentenceTransformer(model, cache_folder=cache_dir)
 
         class STProvider:
-            def __init__(self, model: SentenceTransformer, dim: int) -> None:
+            def __init__(self, model: "SentenceTransformerType", dim: int) -> None:
                 self.model = model
                 self.dimension = dim
 
@@ -80,13 +97,11 @@ def create_embedding_provider(  # noqa: C901
         return STProvider(model_obj, dimension)
 
     elif provider == "openai":
-        try:
-            from openai import OpenAI
-        except ImportError as e:
+        if not OPENAI_AVAILABLE:
             raise ImportError(
                 "openai is required for this provider. "
                 "Install it with: pip install openai"
-            ) from e
+            )
 
         api_key = kwargs.get("api_key")
         if not api_key:
@@ -96,7 +111,7 @@ def create_embedding_provider(  # noqa: C901
 
         class OpenAIProvider:
             def __init__(
-                self, client: OpenAI, model: str, dim: int
+                self, client: "OpenAIType", model: str, dim: int
             ) -> None:
                 self.client = client
                 self.model = model

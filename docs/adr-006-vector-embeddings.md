@@ -42,12 +42,25 @@ Extend `SigilIndex` with optional vector embedding capabilities:
    - 10-line overlap prevents boundary issues
    - Line tracking enables jumping to exact locations
 
-3. **Pluggable Embedding Functions**: Accept `EmbeddingFn` callable
-   - Type: `Callable[[Sequence[str]], np.ndarray]` returns (N, dim) array
-   - Supports OpenAI, sentence-transformers, local models, etc.
-   - No hardcoded dependencies—users provide their own
+3. **Configuration-Based Provider Selection**: Support multiple embedding providers via config
+   - **sentence-transformers**: Local models with GPU/CPU support
+   - **OpenAI**: Cloud API for highest quality embeddings
+   - **llamacpp**: GGUF models with multi-platform acceleration
+   - Configuration properties:
+     * `embeddings.enabled`: Enable/disable embedding features
+     * `embeddings.provider`: Provider name (sentence-transformers, openai, llamacpp)
+     * `embeddings.model`: Model identifier or path
+     * `embeddings.dimension`: Expected embedding dimension
+     * `embeddings.cache_dir`: Cache directory for downloaded models (optional)
+     * `embeddings.api_key`: API key for cloud providers (optional, falls back to env vars)
 
-4. **Persistent Storage**: Vectors stored as float32 BLOBs in SQLite
+4. **Pluggable Provider Architecture**: Factory pattern for provider instantiation
+   - Type: `EmbeddingProvider` protocol with `embed_documents()` and `embed_query()` methods
+   - Providers wrap external libraries (sentence_transformers, openai, llama_cpp_python)
+   - Graceful handling of missing optional dependencies
+   - Top-level imports with availability flags for testability
+
+5. **Persistent Storage**: Vectors stored as float32 BLOBs in SQLite
    - Compressed blob storage already exists for file content
    - Metadata tracks model version for compatibility
    - Dimension stored per embedding for validation
@@ -67,6 +80,40 @@ Extend `SigilIndex` with optional vector embedding capabilities:
    - Query embedding compared against all chunk embeddings
    - Top-k results returned with scores and line ranges
    - O(N) complexity suitable for small-to-medium repos (1K-10K chunks)
+
+## Implementation Details
+
+### Configuration Example
+
+```json
+{
+  "embeddings": {
+    "enabled": true,
+    "provider": "sentence-transformers",
+    "model": "all-MiniLM-L6-v2",
+    "dimension": 384,
+    "cache_dir": "~/.cache/sigil-embeddings"
+  }
+}
+```
+
+### Provider Initialization
+
+The server's `_create_embedding_function()` reads configuration and initializes the appropriate provider:
+
+1. Checks `embeddings.enabled` flag
+2. Validates provider and model configuration
+3. Calls `create_embedding_provider()` from `sigil_mcp.embeddings` module
+4. Wraps provider in numpy-returning function for compatibility with SigilIndex
+5. Returns `(embed_fn, model_name)` tuple or `(None, None)` if disabled
+
+### Python 3.12 Best Practices
+
+The embedding provider module follows modern Python patterns:
+- Optional dependencies imported at module level with availability flags
+- No conditional imports inside functions (anti-pattern)
+- TYPE_CHECKING used for type hints to avoid circular imports
+- Graceful ImportError handling with clear error messages
 
 ## Consequences
 

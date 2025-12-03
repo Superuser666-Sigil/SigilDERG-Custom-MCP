@@ -220,14 +220,75 @@ _INDEX: Optional[SigilIndex] = None
 _WATCHER: Optional[FileWatchManager] = None
 
 
-def _embed_texts(texts: List[str]) -> np.ndarray:
+def _create_embedding_function():
     """
-    Stub embedding function. Replace with real local model.
-    Must return shape (len(texts), dim) float32.
+    Create embedding function based on configuration.
+    
+    Returns:
+        Tuple of (embed_fn, model_name) or (None, None) if embeddings disabled
     """
-    dim = 768
-    rng = np.random.default_rng(42)
-    return rng.normal(size=(len(texts), dim)).astype("float32")
+    if not config.embeddings_enabled:
+        logger.info("Embeddings disabled in config")
+        return None, None
+    
+    provider = config.embeddings_provider
+    if not provider:
+        logger.warning(
+            "Embeddings enabled but no provider configured. "
+            "Set embeddings.provider in config.json. Embeddings disabled."
+        )
+        return None, None
+    
+    try:
+        from sigil_mcp.embeddings import create_embedding_provider
+        
+        model = config.embeddings_model
+        if not model:
+            logger.error(
+                f"Embeddings provider '{provider}' requires model configuration. "
+                "Set embeddings.model in config.json. Embeddings disabled."
+            )
+            return None, None
+        
+        dimension = config.embeddings_dimension
+        
+        # Build kwargs for provider
+        kwargs = dict(config.embeddings_kwargs)
+        if config.embeddings_cache_dir:
+            kwargs["cache_dir"] = config.embeddings_cache_dir
+        if provider == "openai" and config.embeddings_api_key:
+            kwargs["api_key"] = config.embeddings_api_key
+        
+        logger.info(f"Initializing {provider} embedding provider with model: {model}")
+        embedding_provider = create_embedding_provider(
+            provider=provider,
+            model=model,
+            dimension=dimension,
+            **kwargs
+        )
+        
+        # Create wrapper function that matches SigilIndex expectations
+        def embed_fn(texts: List[str]) -> np.ndarray:
+            embeddings_list = embedding_provider.embed_documents(texts)
+            return np.array(embeddings_list, dtype="float32")
+        
+        model_name = f"{provider}:{model}"
+        logger.info(f"Embeddings initialized: {model_name} (dim={dimension})")
+        return embed_fn, model_name
+        
+    except ImportError as e:
+        logger.error(
+            f"Failed to import embedding provider '{provider}': {e}. "
+            "Install required dependencies. See docs/EMBEDDING_SETUP.md. "
+            "Embeddings disabled."
+        )
+        return None, None
+    except Exception as e:
+        logger.error(
+            f"Failed to initialize embedding provider '{provider}': {e}. "
+            "Embeddings disabled."
+        )
+        return None, None
 
 
 def _get_index() -> SigilIndex:
@@ -235,7 +296,8 @@ def _get_index() -> SigilIndex:
     global _INDEX
     if _INDEX is None:
         index_path = config.index_path
-        _INDEX = SigilIndex(index_path, embed_fn=_embed_texts, embed_model="dummy-768")
+        embed_fn, embed_model = _create_embedding_function()
+        _INDEX = SigilIndex(index_path, embed_fn=embed_fn, embed_model=embed_model)
         logger.info(f"Initialized index at {index_path}")
     return _INDEX
 

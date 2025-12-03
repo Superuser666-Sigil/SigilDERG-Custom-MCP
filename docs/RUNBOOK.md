@@ -207,8 +207,10 @@ Default search order:
   },
   "embeddings": {
     "enabled": false,
+    "provider": "sentence-transformers",
     "model": "all-MiniLM-L6-v2",
-    "chunk_size": 512
+    "dimension": 384,
+    "cache_dir": "~/.cache/sigil-embeddings"
   }
 }
 ```
@@ -881,6 +883,20 @@ python -m sigil_mcp.server
   }
 }
 ```
+
+**Enable embeddings with specific provider:**
+```json
+{
+  "embeddings": {
+    "enabled": true,
+    "provider": "sentence-transformers",
+    "model": "all-MiniLM-L6-v2",
+    "dimension": 384
+  }
+}
+```
+
+See [EMBEDDING_SETUP.md](EMBEDDING_SETUP.md) for hardware-specific provider recommendations.
 
 ### Search Performance
 
