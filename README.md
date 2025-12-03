@@ -314,6 +314,7 @@ For detailed troubleshooting, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING
 ## Contributing
 
 Contributions welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines including:
+- [Contributor License Agreement (CLA)](CLA.md) - **Required for all contributors**
 - Developer Certificate of Origin (DCO) requirements
 - Code standards and testing requirements
 - Pull request process

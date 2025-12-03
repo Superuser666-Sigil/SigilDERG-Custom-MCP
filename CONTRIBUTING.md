@@ -19,13 +19,18 @@ This project adheres to a Code of Conduct that all contributors are expected to 
 
 ## License Agreement
 
-### AGPLv3 License
+### Contributor License Agreement (CLA)
 
-By contributing to this project, you agree that your contributions will be licensed under the GNU Affero General Public License v3.0 (AGPLv3). This means:
+All contributors must agree to our [Contributor License Agreement (CLA)](CLA.md) before their contributions can be accepted. The CLA clarifies the intellectual property rights granted with your contributions.
 
+**Key points:**
+- By contributing to this project, you agree that your contributions will be licensed under the GNU Affero General Public License v3.0 (AGPLv3)
 - Your contributions become part of the open-source codebase
 - Users who interact with the software over a network must have access to the source code
 - Any modifications to the software must also be released under AGPLv3
+- The project maintainer may offer commercial licenses at their discretion
+
+Please read the full [CLA](CLA.md) for complete terms.
 
 ### Developer Certificate of Origin (DCO)
 
