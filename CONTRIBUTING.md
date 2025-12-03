@@ -2,6 +2,10 @@
 
 Thank you for considering contributing to Sigil MCP Server! This document provides guidelines for contributing to the project.
 
+**Sigil MCP Server is open-source under AGPLv3.**
+
+Individuals, hobbyists, and small teams are welcome to use and contribute under the open-source license. Larger organizations that can't or don't want to comply with AGPLv3 can contact me for commercial licensing.
+
 ## Table of Contents
 
 - [Code of Conduct](#code-of-conduct)
@@ -23,16 +27,21 @@ This project adheres to a Code of Conduct that all contributors are expected to 
 
 All contributors must agree to our [Contributor License Agreement (CLA)](CLA.md) before their contributions can be accepted. The CLA clarifies the intellectual property rights granted with your contributions.
 
+**The CLA lets me keep licensing rights clean so I can offer both AGPLv3 for the community and commercial licenses for organizations that need them.**
+
+**If you're just trying to fix a bug or improve the project, the CLA doesn't change that—your contribution is still open-source under AGPLv3. It just makes the legal side unambiguous for everyone.**
+
 **Key points:**
 - By contributing to this project, you agree that your contributions will be licensed under the GNU Affero General Public License v3.0 (AGPLv3)
 - Your contributions become part of the open-source codebase
-- Users who interact with the software over a network must have access to the source code
-- Any modifications to the software must also be released under AGPLv3
-- The project maintainer may offer commercial licenses at their discretion
+- If you modify and run Sigil MCP Server for users over a network, AGPLv3 requires that those users be able to get the corresponding source code for your modified version
+- By signing the CLA, you allow the maintainer to offer commercial licenses alongside the AGPLv3 open-source license
 
 Please read the full [CLA](CLA.md) for complete terms.
 
 ### Developer Certificate of Origin (DCO)
+
+**The DCO works together with the CLA:** the CLA covers how your contribution may be licensed, and the DCO certifies that you're legally allowed to contribute it.
 
 All contributors must sign off on their commits, certifying that they have the right to submit the code under the project's license. This is done by adding a `Signed-off-by` line to commit messages:
 
@@ -52,9 +61,23 @@ By signing off, you certify that:
 2. The contribution is based upon previous work that, to the best of your knowledge, is covered under an appropriate open-source license
 3. You understand and agree that your contribution is public and that a record of it will be maintained indefinitely
 
-### Commercial Licensing
+### For Companies and Internal Use
 
-If you're interested in commercial licensing options (for proprietary use without open-source requirements), please contact: davetmire85@gmail.com
+If you're an organization that:
+
+- wants to run Sigil MCP Server internally without AGPLv3 obligations, or
+- needs to keep modifications private, or
+- has a "no AGPL" policy,
+
+please contact: davetmire85@gmail.com to discuss commercial licensing.
+
+Commercial licensing provides:
+- Freedom to use internally without open-source requirements
+- Ability to keep your modifications proprietary
+- Indemnification and support options
+- Clear legal status for enterprise compliance
+
+For common licensing questions, see the [Licensing FAQ in README.md](README.md#licensing-faq).
 
 ## Getting Started
 
@@ -109,11 +132,9 @@ brew install universal-ctags
 
 ### Branching Strategy
 
-- `main` - Stable release branch
-- `develop` - Integration branch for features
+- `main` - Stable release branch (all development happens here)
 - `feature/*` - Feature branches
 - `bugfix/*` - Bug fix branches
-- `hotfix/*` - Critical fixes for production
 
 ### Workflow
 
@@ -220,7 +241,6 @@ All source files must include the AGPLv3 copyright header:
 1. **Before submitting:**
    - Ensure all tests pass
    - Update documentation if needed
-   - Add entries to CHANGELOG.md if applicable
    - Rebase on latest `main` if needed
 
 2. **PR Description should include:**
@@ -336,9 +356,9 @@ See [SECURITY.md](docs/SECURITY.md) for more details.
 ### Recognition
 
 Contributors are recognized in:
-- CHANGELOG.md for significant contributions
 - GitHub's contributor graph
 - Project documentation where appropriate
+- Release notes for significant contributions
 
 ### Getting Help
 

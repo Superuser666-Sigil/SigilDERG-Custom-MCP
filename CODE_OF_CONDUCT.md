@@ -50,8 +50,9 @@ decisions when appropriate.
 
 ## Scope
 
-This Code of Conduct applies within all community spaces, and also applies when
-an individual is officially representing the community in public spaces.
+This Code of Conduct applies to all public project spaces, including GitHub Issues, Discussions, pull requests, and any other community forums.
+
+It also applies when an individual is officially representing the community in public spaces.
 Examples of representing our community include using an official e-mail address,
 posting via an official social media account, or acting as an appointed
 representative at an online or offline event.
@@ -131,3 +132,7 @@ For answers to common questions about this code of conduct, see the FAQ at
 [Mozilla CoC]: https://github.com/mozilla/diversity
 [FAQ]: https://www.contributor-covenant.org/faq
 [translations]: https://www.contributor-covenant.org/translations
+
+---
+
+For details on how to contribute to this project, see [CONTRIBUTING.md](CONTRIBUTING.md).

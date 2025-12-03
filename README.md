@@ -347,6 +347,30 @@ Sigil is dual-licensed:
 
 See [LICENSE](LICENSE) file for full AGPLv3 text.
 
+### Licensing FAQ
+
+**Q: Can I run this inside my company under AGPLv3?**
+
+A: Yes, as long as you're comfortable with AGPLv3 and its requirements. If you expose the server to users over a network (like running it as an internal service), AGPLv3 requires making the source code available to those users, including any modifications you've made.
+
+**Q: We have a "no AGPL" policy. Can we still use Sigil?**
+
+A: Yes, via a commercial license. Email [davetmire85@gmail.com](mailto:davetmire85@gmail.com) to discuss your needs.
+
+**Q: Why do I have to sign a CLA to contribute?**
+
+A: The Contributor License Agreement keeps the licensing story clean—AGPLv3 for the open-source community, commercial licenses for organizations that need them—without legal ambiguity about who owns what. Your contribution remains open-source under AGPLv3; the CLA just clarifies the rights.
+
+**Q: What's included in a commercial license?**
+
+A: Commercial licenses provide freedom to use Sigil internally without open-source requirements, ability to keep modifications proprietary, indemnification and support options, and clear legal status for enterprise compliance. Contact me for details and pricing.
+
+**Q: Can I use this for my personal projects?**
+
+A: Absolutely! AGPLv3 is perfect for personal projects, hobbyist use, and small teams. You only need a commercial license if you have organizational requirements that conflict with AGPL.
+
+For more details on contributing, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Acknowledgments
 
 - Trigram indexing inspired by GitHub's Blackbird search engine
