@@ -1,0 +1,96 @@
+{
+    "_copyright": "Copyright (c) 2025 Dave Tofflemire, SigilDERG Project",
+    "_license": "Licensed under the GNU Affero General Public License v3.0 (AGPLv3)",
+    "_contact": "Commercial licenses available. Contact: davetmire85@gmail.com",
+    "_comment": "Copy this file to config.json and customize for your setup",
+    "server": {
+        "name": "sigil_repos",
+        "host": "127.0.0.1",
+        "port": 8000,
+        "log_level": "INFO"
+    },
+    "authentication": {
+        "enabled": true,
+        "oauth_enabled": true,
+        "allow_local_bypass": true,
+        "allowed_ips": []
+    },
+    "watch": {
+        "_comment": "File watching for automatic index updates (requires watchdog)",
+        "enabled": true,
+        "debounce_seconds": 2.0,
+        "ignore_dirs": [
+            ".git",
+            "__pycache__",
+            "node_modules",
+            "target",
+            "build",
+            "dist",
+            ".venv",
+            "venv",
+            "coverage"
+        ],
+        "ignore_extensions": [
+            ".pyc",
+            ".so",
+            ".exe",
+            ".pdf",
+            ".png",
+            ".jpg",
+            ".zip"
+        ]
+    },
+    "repositories": {
+        "_comment": "Map of repo_name: absolute_path",
+        "my_project": "/absolute/path/to/your/project",
+        "another_repo": "/path/to/another/repository"
+    },
+    "index": {
+        "path": "~/.sigil_index",
+        "skip_dirs": [
+            ".git",
+            "__pycache__",
+            "node_modules",
+            "target",
+            "build",
+            "dist",
+            ".venv",
+            "venv"
+        ],
+        "skip_extensions": [
+            ".pyc",
+            ".so",
+            ".o",
+            ".exe",
+            ".bin",
+            ".pdf",
+            ".png",
+            ".jpg",
+            ".zip"
+        ],
+        "max_file_size_mb": 1
+    },
+    "embeddings": {
+        "_comment": "Vector embeddings for semantic search (optional)",
+        "enabled": false,
+        "provider": "llamacpp",
+        "model": "~/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+        "dimension": 4096,
+        "context_size": 2048,
+        "n_gpu_layers": 0,
+        "use_mlock": false,
+        "_providers": "sentence-transformers, openai, or llamacpp",
+        "_sentence_transformers_example": {
+            "provider": "sentence-transformers",
+            "model": "all-MiniLM-L6-v2",
+            "dimension": 384,
+            "cache_dir": "./embeddings_cache"
+        },
+        "_openai_example": {
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "dimension": 1536,
+            "api_key": "sk-..."
+        }
+    }
+}

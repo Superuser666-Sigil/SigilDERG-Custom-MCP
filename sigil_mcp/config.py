@@ -1,0 +1,240 @@
+# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+# Commercial licenses are available. Contact: davetmire85@gmail.com
+
+"""
+Configuration loader for Sigil MCP Server.
+
+Loads configuration from config.json file with fallback to environment variables.
+"""
+
+import os
+import json
+from pathlib import Path
+from typing import Dict, Any, Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class Config:
+    """Configuration manager for Sigil MCP Server."""
+    
+    def __init__(self, config_path: Optional[Path] = None):
+        """
+        Initialize configuration.
+        
+        Args:
+            config_path: Path to config.json file. If None, searches in:
+                1. ./config.json (current directory)
+                2. ~/.sigil_mcp_server/config.json
+                3. Falls back to environment variables
+        """
+        self.config_data: Dict[str, Any] = {}
+        self._load_config(config_path)
+    
+    def _load_config(self, config_path: Optional[Path] = None):
+        """Load configuration from file or environment."""
+        # Try specified path first
+        if config_path and config_path.exists():
+            self._load_from_file(config_path)
+            return
+        
+        # Try current directory
+        local_config = Path("config.json")
+        if local_config.exists():
+            self._load_from_file(local_config)
+            return
+        
+        # Try user config directory
+        user_config = Path.home() / ".sigil_mcp_server" / "config.json"
+        if user_config.exists():
+            self._load_from_file(user_config)
+            return
+        
+        # Fall back to environment variables
+        logger.info("No config.json found, using environment variables")
+        self._load_from_env()
+    
+    def _load_from_file(self, path: Path):
+        """Load configuration from JSON file."""
+        try:
+            with open(path, 'r') as f:
+                self.config_data = json.load(f)
+            logger.info(f"Loaded configuration from {path}")
+        except Exception as e:
+            logger.error(f"Error loading config from {path}: {e}")
+            self._load_from_env()
+    
+    def _load_from_env(self):
+        """Load configuration from environment variables (backward compatibility)."""
+        self.config_data = {
+            "server": {
+                "name": os.getenv("SIGIL_MCP_NAME", "sigil_repos"),
+                "host": os.getenv("SIGIL_MCP_HOST", "127.0.0.1"),
+                "port": int(os.getenv("SIGIL_MCP_PORT", "8000")),
+                "log_level": os.getenv("SIGIL_MCP_LOG_LEVEL", "INFO")
+            },
+            "authentication": {
+                "enabled": os.getenv("SIGIL_MCP_AUTH_ENABLED", "true").lower() == "true",
+                "oauth_enabled": os.getenv("SIGIL_MCP_OAUTH_ENABLED", "true").lower() == "true",
+                "allow_local_bypass": (
+                    os.getenv("SIGIL_MCP_ALLOW_LOCAL_BYPASS", "true").lower() == "true"
+                ),
+                "allowed_ips": (
+                    os.getenv("SIGIL_MCP_ALLOWED_IPS", "").split(",")
+                    if os.getenv("SIGIL_MCP_ALLOWED_IPS")
+                    else []
+                )
+            },
+            "watch": {
+                "enabled": os.getenv("SIGIL_MCP_WATCH_ENABLED", "true").lower() == "true",
+                "debounce_seconds": float(os.getenv("SIGIL_MCP_WATCH_DEBOUNCE", "2.0")),
+                "ignore_dirs": [
+                    ".git", "__pycache__", "node_modules", "target",
+                    "build", "dist", ".venv", "venv", ".tox",
+                    ".mypy_cache", ".pytest_cache", "coverage", ".coverage"
+                ],
+                "ignore_extensions": [
+                    ".pyc", ".so", ".o", ".a", ".dylib", ".dll",
+                    ".exe", ".bin", ".pdf", ".png", ".jpg", ".gif",
+                    ".svg", ".ico", ".woff", ".woff2", ".ttf",
+                    ".zip", ".tar", ".gz", ".bz2", ".xz"
+                ],
+            },
+            "repositories": self._parse_repo_map(os.getenv("SIGIL_REPO_MAP", "")),
+            "index": {
+                "path": os.getenv("SIGIL_INDEX_PATH", "~/.sigil_index")
+            }
+        }
+    
+    def _parse_repo_map(self, repo_map_str: str) -> Dict[str, str]:
+        """Parse SIGIL_REPO_MAP environment variable format."""
+        repos = {}
+        if not repo_map_str:
+            return repos
+        
+        for entry in repo_map_str.split(";"):
+            entry = entry.strip()
+            if not entry or ":" not in entry:
+                continue
+            name, path = entry.split(":", 1)
+            repos[name.strip()] = path.strip()
+        
+        return repos
+    
+    # Getters for easy access
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get configuration value by dot-notation key."""
+        keys = key.split(".")
+        value = self.config_data
+        for k in keys:
+            if isinstance(value, dict):
+                value = value.get(k)
+            else:
+                return default
+        return value if value is not None else default
+    
+    @property
+    def server_name(self) -> str:
+        return self.get("server.name", "sigil_repos")
+    
+    @property
+    def server_host(self) -> str:
+        return self.get("server.host", "127.0.0.1")
+    
+    @property
+    def server_port(self) -> int:
+        return self.get("server.port", 8000)
+    
+    @property
+    def log_level(self) -> str:
+        return self.get("server.log_level", "INFO")
+    
+    @property
+    def auth_enabled(self) -> bool:
+        return self.get("authentication.enabled", True)
+    
+    @property
+    def oauth_enabled(self) -> bool:
+        return self.get("authentication.oauth_enabled", True)
+    
+    @property
+    def allow_local_bypass(self) -> bool:
+        return self.get("authentication.allow_local_bypass", True)
+    
+    @property
+    def allowed_ips(self) -> list:
+        return self.get("authentication.allowed_ips", [])
+    
+    @property
+    def watch_enabled(self) -> bool:
+        """Get whether file watching is enabled."""
+        return self.get("watch.enabled", True)
+    
+    @property
+    def watch_debounce_seconds(self) -> float:
+        """Get file watch debounce time in seconds."""
+        return self.get("watch.debounce_seconds", 2.0)
+    
+    @property
+    def watch_ignore_dirs(self) -> list[str]:
+        """Get directories to ignore when watching."""
+        return self.get("watch.ignore_dirs", [
+            ".git", "__pycache__", "node_modules", "target",
+            "build", "dist", ".venv", "venv", ".tox",
+            ".mypy_cache", ".pytest_cache", "coverage", ".coverage"
+        ])
+    
+    @property
+    def watch_ignore_extensions(self) -> list[str]:
+        """Get file extensions to ignore when watching."""
+        return self.get("watch.ignore_extensions", [
+            ".pyc", ".so", ".o", ".a", ".dylib", ".dll",
+            ".exe", ".bin", ".pdf", ".png", ".jpg", ".gif",
+            ".svg", ".ico", ".woff", ".woff2", ".ttf",
+            ".zip", ".tar", ".gz", ".bz2", ".xz"
+        ])
+    
+    @property
+    def embeddings_kwargs(self) -> dict:
+        """Get additional embeddings provider kwargs."""
+        embeddings_config = self.get("embeddings", {})
+        # Return all config except known keys
+        known_keys = {
+            "enabled",
+            "provider",
+            "model",
+            "dimension",
+            "cache_dir",
+            "api_key",
+        }
+        return {k: v for k, v in embeddings_config.items() if k not in known_keys}
+    
+    @property
+    def repositories(self) -> Dict[str, str]:
+        return self.get("repositories", {})
+    
+    @property
+    def index_path(self) -> Path:
+        path_str = self.get("index.path", "~/.sigil_index")
+        return Path(path_str).expanduser().resolve()
+
+
+# Global config instance
+_config: Optional[Config] = None
+
+
+def get_config() -> Config:
+    """Get or create global configuration instance."""
+    global _config
+    if _config is None:
+        _config = Config()
+    return _config
+
+
+def load_config(config_path: Optional[Path] = None):
+    """Load configuration from specified path."""
+    global _config
+    _config = Config(config_path)
+    return _config

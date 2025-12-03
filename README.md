@@ -1,0 +1,344 @@
+<!--
+Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+Commercial licenses are available. Contact: davetmire85@gmail.com
+-->
+
+# Sigil MCP Server
+
+A Model Context Protocol (MCP) server that provides IDE-like code navigation and search for local repositories. Gives AI assistants like ChatGPT powerful code exploration capabilities including symbol search, trigram indexing, and semantic navigation.
+
+## Features
+
+**Hybrid Code Search**
+- Fast text search using trigram indexing (inspired by GitHub's Blackbird)
+- Symbol-based search for functions, classes, methods, and variables
+- Semantic code search with vector embeddings (optional)
+- File structure view showing code outlines
+- Automatic index updates with file watching (optional)
+
+**Enterprise Security**
+- OAuth 2.0 authentication with PKCE support for remote access
+- Local connection bypass (no auth needed for localhost)
+- API key fallback and IP whitelisting
+
+**Available Tools**
+- `index_repository` - Build searchable index with symbol extraction
+- `search_code` - Fast substring search across repositories
+- `goto_definition` - Find symbol definitions
+- `list_symbols` - View file/repo structure
+- `build_vector_index` - Generate semantic embeddings for code (optional)
+- `semantic_search` - Natural language code search using embeddings
+- `list_repos`, `read_repo_file`, `list_repo_files`, `search_repo` - Basic operations
+- `get_index_stats`, `ping` - Server info and health checks
+
+## Quick Start
+
+### Installation
+
+Clone and install dependencies:
+
+```bash
+git clone https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP.git
+cd SigilDERG-Custom-MCP
+pip install -e .
+
+# Optional: Install file watching support
+pip install -e .[watch]
+
+# Optional: Install vector embeddings - choose based on your hardware:
+
+# For sentence-transformers (NVIDIA GPUs, or CPU)
+pip install -e .[embeddings-sentencetransformers]
+
+# For OpenAI API (cloud-based)
+pip install -e .[embeddings-openai]
+
+# For llama.cpp - choose your acceleration:
+pip install -e .[embeddings-llamacpp-cpu]      # CPU only
+pip install -e .[embeddings-llamacpp-cuda]     # NVIDIA GPU (CUDA)
+pip install -e .[embeddings-llamacpp-rocm]     # AMD GPU (ROCm)
+pip install -e .[embeddings-llamacpp-metal]    # Apple Silicon (Metal)
+
+# Or install all embedding providers (not recommended)
+pip install -e .[embeddings-all]
+```
+
+Install Universal Ctags for symbol extraction (optional but recommended):
+
+**macOS:** `brew install universal-ctags`
+**Ubuntu/Debian:** `sudo apt install universal-ctags`
+**Arch Linux:** `sudo pacman -S ctags`
+
+### Configuration
+
+Copy the example config and edit with your repository paths:
+
+```bash
+cp config.example.json config.json
+# Edit config.json
+```
+
+Example configuration:
+
+```json
+{
+  "repositories": {
+    "my_project": "/absolute/path/to/your/project",
+    "another_repo": "/path/to/another/repo"
+  }
+}
+```
+
+Alternatively, use environment variables:
+
+```bash
+export SIGIL_REPO_MAP="my_project:/path/to/project;another:/path/to/another"
+```
+
+### Running the Server
+
+```bash
+python server.py
+```
+
+On first run, OAuth credentials will be generated. Save the Client ID and Client Secret for connecting from ChatGPT.
+
+### Connecting to ChatGPT
+
+1. Expose via ngrok: `ngrok http 8000`
+2. In ChatGPT, add MCP connector with OAuth authentication
+3. Use the OAuth credentials from server startup
+4. Start using: "Search my code for async functions"
+
+See [docs/CHATGPT_SETUP.md](docs/CHATGPT_SETUP.md) for detailed instructions.
+
+## Configuration
+
+### Using config.json
+
+```json
+{
+  "server": {
+    "name": "sigil_repos",
+    "host": "127.0.0.1",
+    "port": 8000,
+    "log_level": "INFO"
+  },
+  "authentication": {
+    "enabled": true,
+    "oauth_enabled": true,
+    "allow_local_bypass": true,
+    "allowed_ips": []
+  },
+  "repositories": {
+    "repo_name": "/absolute/path/to/repo"
+  },
+  "watch": {
+    "enabled": true,
+    "debounce_seconds": 2.0,
+    "ignore_dirs": [".git", "__pycache__", "node_modules", "build"],
+    "ignore_extensions": [".pyc", ".so", ".pdf", ".png"]
+  },
+  "index": {
+    "path": "~/.sigil_index"
+  }
+}
+```
+
+### Using Environment Variables
+
+```bash
+export SIGIL_MCP_HOST=127.0.0.1
+export SIGIL_MCP_PORT=8000
+export SIGIL_MCP_AUTH_ENABLED=true
+export SIGIL_MCP_OAUTH_ENABLED=true
+export SIGIL_MCP_ALLOW_LOCAL_BYPASS=true
+export SIGIL_MCP_WATCH_ENABLED=true
+export SIGIL_MCP_WATCH_DEBOUNCE=2.0
+export SIGIL_REPO_MAP="name1:/path/to/repo1;name2:/path/to/repo2"
+export SIGIL_INDEX_PATH=~/.sigil_index
+```
+
+### File Watching (Optional)
+
+Enable automatic index updates when files change:
+
+```bash
+# Install watchdog
+pip install .[watch]
+
+# Enable in config.json or via environment
+export SIGIL_MCP_WATCH_ENABLED=true
+```
+
+The server will:
+- **Granularly re-index** individual files as they change (modified/created)
+- **Batch updates** with configurable debounce (default 2 seconds)
+- **Smart filtering** using configurable ignore patterns
+
+Configure what to ignore in `config.json`:
+
+```json
+{
+  "watch": {
+    "enabled": true,
+    "debounce_seconds": 2.0,
+    "ignore_dirs": [".git", "__pycache__", "coverage", "htmlcov"],
+    "ignore_extensions": [".pyc", ".so", ".pdf", ".png", ".jpg"]
+  }
+}
+```
+
+Environment variables:
+```bash
+export SIGIL_MCP_WATCH_ENABLED=true
+export SIGIL_MCP_WATCH_DEBOUNCE=2.0
+```
+
+## Authentication
+
+**OAuth 2.0 (Recommended for Remote Access)**
+
+OAuth credentials are generated on first run. Supports PKCE for enhanced security and token-based authentication with refresh capabilities. See [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md) for details.
+
+**Local Development**
+
+Localhost connections automatically bypass authentication. No credentials needed when connecting from 127.0.0.1.
+
+**API Key Fallback**
+
+```bash
+export SIGIL_MCP_API_KEY=your_secure_key_here
+```
+
+See [docs/SECURITY.md](docs/SECURITY.md) for security best practices.
+
+## Usage Examples
+
+Once connected to ChatGPT as an MCP server:
+```
+You: "Index my project repository"
+ChatGPT: Indexed 342 files, found 1,847 symbols in 3.2 seconds
+
+You: "Find where the HttpClient class is defined"
+ChatGPT: Found in project::src/http/client.py at line 45
+
+You: "Search for async functions"
+ChatGPT: Found 23 matches across 8 files
+
+You: "Build vector index for semantic search"
+ChatGPT: Indexed 856 chunks from 342 documents
+
+You: "Find code that handles user authentication"
+ChatGPT: Found 5 relevant code sections (semantic search):
+  - auth/handlers.py:45-145 (score: 0.89)
+  - middleware/auth.py:12-112 (score: 0.84)
+  ...
+```tGPT: Found 23 matches across 8 files
+```
+
+## Architecture
+
+**Indexing Process**
+
+1. File scanning (skips build artifacts)
+2. Content storage with SHA-256 deduplication
+3. Symbol extraction via universal-ctags
+4. Trigram inverted index generation
+5. Compression using zlib
+
+**Storage**
+```
+~/.sigil_index/
+├── repos.db       # SQLite: repos, documents, symbols, embeddings
+├── trigrams.db    # SQLite: trigram inverted index
+└── blobs/         # Compressed content
+``` blobs/         # Compressed content
+```
+
+**Performance**
+
+- Symbol lookup: O(log n) via SQLite indexes
+- Text search: O(k) where k = trigrams * documents per trigram
+- Typical query latency: 10-100ms
+
+## Security
+
+**Path Traversal Protection:** All paths validated to prevent escaping repository roots
+
+**Authentication Layers:** OAuth 2.0 (primary), Local bypass (localhost), API keys (fallback), IP whitelist (optional)
+
+**Protection:** Source code requires authentication for remote access, OAuth credentials stored with 0600 permissions, tokens expire after 1 hour with refresh support, PKCE prevents authorization code interception
+
+## Troubleshooting
+
+For detailed troubleshooting, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) and [docs/RUNBOOK.md](docs/RUNBOOK.md).
+
+**Quick fixes:**
+
+**"ctags not available":** Install universal-ctags (see Quick Start). Text search works without it.
+
+**"No repositories configured":** Set repositories in config.json or SIGIL_REPO_MAP environment variable.
+
+**"Authentication failed":** For localhost, verify allow_local_bypass is true. For remote, verify OAuth credentials.
+
+**"watchdog not available":** Install with `pip install sigil-mcp-server[watch]` to enable file watching.
+
+**More help:** See comprehensive [Troubleshooting Guide](docs/TROUBLESHOOTING.md) and [Operations Runbook](docs/RUNBOOK.md).
+
+## Documentation
+
+**Setup Guides**
+- [ChatGPT Setup Guide](docs/CHATGPT_SETUP.md)
+- [OAuth Configuration](docs/OAUTH_SETUP.md)
+- [Security Best Practices](docs/SECURITY.md)
+- [Operations Runbook](docs/RUNBOOK.md) 📖
+- [Troubleshooting Guide](docs/TROUBLESHOOTING.md) 🔧
+- [Llama.cpp Local Embeddings](docs/LLAMACPP_SETUP.md) 🦙
+
+**Architecture Decision Records (ADRs)**
+- [ADR-001: OAuth 2.0 Authentication](docs/adr-001-oauth2-authentication.md)
+- [ADR-002: Trigram-Based Indexing](docs/adr-002-trigram-indexing.md)
+- [ADR-003: Symbol Extraction with Ctags](docs/adr-003-symbol-search-ctags.md)
+- [ADR-004: JSON Configuration System](docs/adr-004-configuration-system.md)
+- [ADR-005: FastMCP Custom Routes](docs/adr-005-fastmcp-custom-routes.md)
+- [ADR-006: Vector Embeddings for Semantic Search](docs/adr-006-vector-embeddings.md)
+- [ADR-007: File Watching](docs/adr-007-file-watching.md)
+- [ADR-008: Granular Re-indexing and Configurable Patterns](docs/adr-008-granular-indexing.md)
+
+**Feature Documentation**
+- [Vector Embeddings Usage Guide](docs/VECTOR_EMBEDDINGS.md)
+- [Llama.cpp Setup Guide](docs/LLAMACPP_SETUP.md)
+
+## Contributing
+
+Contributions welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines including:
+- Developer Certificate of Origin (DCO) requirements
+- Code standards and testing requirements
+- Pull request process
+- Code of Conduct
+
+## Licensing
+
+Sigil is dual-licensed:
+
+- **Open Source**: Available under AGPLv3 for open-source projects and private use where source sharing requirements are met.
+
+- **Commercial**: A commercial license is required for organizations who wish to run Sigil internally without open-sourcing their own applications or who need indemnification and support.
+
+[Contact me](mailto:davetmire85@gmail.com) for commercial licensing options.
+
+See [LICENSE](LICENSE) file for full AGPLv3 text.
+
+## Acknowledgments
+
+- Trigram indexing inspired by GitHub's Blackbird search engine
+- Symbol extraction powered by Universal Ctags
+- Built on the Model Context Protocol (MCP) specification
+
+## Support
+
+Issues: [GitHub Issues](https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP/issues)
+Documentation: [docs/](docs/)
+Security: [docs/SECURITY.md](docs/SECURITY.md)

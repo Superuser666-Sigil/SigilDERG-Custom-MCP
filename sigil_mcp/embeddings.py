@@ -1,0 +1,140 @@
+# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+# Commercial licenses are available. Contact: davetmire85@gmail.com
+
+"""Embedding providers for semantic search."""
+
+import logging
+from pathlib import Path
+from typing import Any, Protocol
+
+logger = logging.getLogger(__name__)
+
+
+class EmbeddingProvider(Protocol):
+    """Protocol for embedding providers."""
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings for multiple documents."""
+        ...
+
+    def embed_query(self, text: str) -> list[float]:
+        """Generate embedding for a single query."""
+        ...
+
+    def get_dimension(self) -> int:
+        """Get the embedding dimension."""
+        ...
+
+
+def create_embedding_provider(  # noqa: C901
+    provider: str,
+    model: str,
+    dimension: int,
+    **kwargs: Any,
+) -> EmbeddingProvider:
+    """Create an embedding provider based on configuration.
+    
+    Args:
+        provider: Provider name ('sentence-transformers', 'openai', or 'llamacpp')
+        model: Model name or path
+        dimension: Expected embedding dimension
+        **kwargs: Additional provider-specific arguments
+        
+    Returns:
+        Configured embedding provider
+        
+    Raises:
+        ValueError: If provider is unknown or configuration is invalid
+        ImportError: If required dependencies are not installed
+    """
+    if provider == "sentence-transformers":
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as e:
+            raise ImportError(
+                "sentence-transformers is required for this provider. "
+                "Install it with: pip install sentence-transformers"
+            ) from e
+
+        cache_dir = kwargs.get("cache_dir")
+        logger.info(f"Loading sentence-transformers model: {model}")
+        model_obj = SentenceTransformer(model, cache_folder=cache_dir)
+
+        class STProvider:
+            def __init__(self, model: SentenceTransformer, dim: int) -> None:
+                self.model = model
+                self.dimension = dim
+
+            def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                embeddings = self.model.encode(texts, convert_to_numpy=True)
+                return embeddings.tolist()
+
+            def embed_query(self, text: str) -> list[float]:
+                embedding = self.model.encode([text], convert_to_numpy=True)
+                return embedding[0].tolist()
+
+            def get_dimension(self) -> int:
+                return self.dimension
+
+        return STProvider(model_obj, dimension)
+
+    elif provider == "openai":
+        try:
+            from openai import OpenAI
+        except ImportError as e:
+            raise ImportError(
+                "openai is required for this provider. "
+                "Install it with: pip install openai"
+            ) from e
+
+        api_key = kwargs.get("api_key")
+        if not api_key:
+            raise ValueError("OpenAI API key is required")
+
+        client = OpenAI(api_key=api_key)
+
+        class OpenAIProvider:
+            def __init__(
+                self, client: OpenAI, model: str, dim: int
+            ) -> None:
+                self.client = client
+                self.model = model
+                self.dimension = dim
+
+            def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                response = self.client.embeddings.create(
+                    input=texts, model=self.model
+                )
+                return [item.embedding for item in response.data]
+
+            def embed_query(self, text: str) -> list[float]:
+                response = self.client.embeddings.create(
+                    input=[text], model=self.model
+                )
+                return response.data[0].embedding
+
+            def get_dimension(self) -> int:
+                return self.dimension
+
+        return OpenAIProvider(client, model, dimension)
+
+    elif provider == "llamacpp":
+        from .llamacpp_provider import LlamaCppEmbeddingProvider
+
+        # model is the path to the GGUF file
+        model_path = Path(model).expanduser()
+        return LlamaCppEmbeddingProvider(
+            model_path=model_path,
+            dimension=dimension,
+            **kwargs,
+        )
+
+    else:
+        raise ValueError(
+            f"Unknown embedding provider: {provider}. "
+            "Supported providers: sentence-transformers, openai, llamacpp"
+        )
+
+
+__all__ = ["EmbeddingProvider", "create_embedding_provider"]

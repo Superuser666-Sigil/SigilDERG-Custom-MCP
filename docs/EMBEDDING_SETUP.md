@@ -1,0 +1,270 @@
+<!--
+Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+Commercial licenses are available. Contact: davetmire85@gmail.com
+-->
+
+# Embedding Provider Setup Guide
+
+This guide helps you choose and install the right embedding provider for your hardware.
+
+## Quick Decision Guide
+
+**Choose sentence-transformers if:**
+- ✅ You have an NVIDIA GPU
+- ✅ You want the simplest setup
+- ✅ You're okay with ~500MB-1GB model downloads
+- ✅ You have stable internet for initial model download
+
+**Choose llama.cpp if:**
+- ✅ You have an AMD GPU (ROCm)
+- ✅ You want full control over model selection
+- ✅ You prefer smaller, quantized models
+- ✅ You need maximum CPU performance
+- ✅ You're on Apple Silicon (Metal)
+
+**Choose OpenAI API if:**
+- ✅ You don't want to run models locally
+- ✅ You have an OpenAI API key
+- ✅ You're okay with API costs (~$0.0001 per 1K tokens)
+- ✅ You want the highest quality embeddings
+
+## Installation by Hardware
+
+### NVIDIA GPU Systems
+
+Best option: **sentence-transformers**
+
+```bash
+pip install -e .[embeddings-sentencetransformers]
+```
+
+Configuration in `config.json`:
+```json
+{
+  "embeddings": {
+    "provider": "sentence-transformers",
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "device": "cuda"
+  }
+}
+```
+
+**Why?** PyTorch has excellent CUDA support out of the box. sentence-transformers will automatically use your GPU.
+
+---
+
+### AMD GPU Systems (Radeon RX, PRO)
+
+Best option: **llama.cpp with ROCm**
+
+```bash
+pip install -e .[embeddings-llamacpp-rocm]
+```
+
+Configuration in `config.json`:
+```json
+{
+  "embeddings": {
+    "provider": "llamacpp",
+    "model_path": "/path/to/model.gguf",
+    "n_gpu_layers": 99,
+    "n_ctx": 512
+  }
+}
+```
+
+**Why?** llama.cpp has better ROCm support than PyTorch. See [LLAMACPP_SETUP.md](LLAMACPP_SETUP.md) for model recommendations.
+
+**Alternative:** sentence-transformers can work with ROCm but requires manual PyTorch ROCm installation:
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.0
+pip install -e .[embeddings-sentencetransformers]
+```
+
+---
+
+### Apple Silicon (M1/M2/M3/M4)
+
+Best option: **llama.cpp with Metal**
+
+```bash
+pip install -e .[embeddings-llamacpp-metal]
+```
+
+Configuration in `config.json`:
+```json
+{
+  "embeddings": {
+    "provider": "llamacpp",
+    "model_path": "/path/to/model.gguf",
+    "n_gpu_layers": 99,
+    "n_ctx": 512
+  }
+}
+```
+
+**Why?** Metal provides the best GPU acceleration on Apple Silicon.
+
+---
+
+### CPU-Only Systems
+
+Best option: **llama.cpp CPU**
+
+```bash
+pip install -e .[embeddings-llamacpp-cpu]
+```
+
+Configuration in `config.json`:
+```json
+{
+  "embeddings": {
+    "provider": "llamacpp",
+    "model_path": "/path/to/model.gguf",
+    "n_threads": 8,
+    "n_ctx": 512
+  }
+}
+```
+
+**Why?** llama.cpp is highly optimized for CPU inference with AVX2/AVX512 support.
+
+**Alternative:** sentence-transformers works on CPU but will be slower:
+```bash
+pip install -e .[embeddings-sentencetransformers]
+```
+
+---
+
+### Cloud/Remote Systems
+
+Best option: **OpenAI API**
+
+```bash
+pip install -e .[embeddings-openai]
+```
+
+Configuration in `config.json`:
+```json
+{
+  "embeddings": {
+    "provider": "openai",
+    "model": "text-embedding-3-small",
+    "api_key": "sk-..."
+  }
+}
+```
+
+Or use environment variable:
+```bash
+export OPENAI_API_KEY="sk-..."
+```
+
+**Why?** No local compute needed, highest quality embeddings, automatic scaling.
+
+## Hardware Detection
+
+Check your system:
+
+```bash
+# Check CPU
+lscpu | grep "Model name"
+
+# Check GPU (Linux)
+lspci | grep -i vga
+
+# Check NVIDIA GPU
+nvidia-smi
+
+# Check AMD GPU (if ROCm installed)
+rocm-smi
+
+# Check available compute (PyTorch)
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, ROCm: {torch.version.hip}')"
+```
+
+## Provider Comparison
+
+| Provider | GPU Support | Model Size | Setup Difficulty | Quality | Cost |
+|----------|-------------|------------|------------------|---------|------|
+| sentence-transformers | NVIDIA (CUDA), AMD (ROCm*) | 80MB-1GB | Easy | Good | Free |
+| llama.cpp | NVIDIA (CUDA), AMD (ROCm), Apple (Metal) | 25MB-500MB (quantized) | Medium | Good | Free |
+| OpenAI API | N/A (cloud) | N/A | Easy | Excellent | $0.0001/1K tokens |
+
+*ROCm requires manual PyTorch installation
+
+## Configuration Examples
+
+### Minimal Config (Auto-detect)
+```json
+{
+  "embeddings": {
+    "provider": "sentence-transformers"
+  }
+}
+```
+
+### Performance Tuning
+```json
+{
+  "embeddings": {
+    "provider": "llamacpp",
+    "model_path": "./models/nomic-embed-text-v1.5.Q4_K_M.gguf",
+    "n_gpu_layers": 99,
+    "n_ctx": 512,
+    "n_batch": 512,
+    "n_threads": 8,
+    "use_mlock": true
+  }
+}
+```
+
+### Multiple Repositories
+```json
+{
+  "repositories": {
+    "repo1": "/path/to/repo1",
+    "repo2": "/path/to/repo2"
+  },
+  "embeddings": {
+    "provider": "llamacpp",
+    "model_path": "./models/nomic-embed-text-v1.5.Q4_K_M.gguf"
+  }
+}
+```
+
+## Troubleshooting
+
+### "No module named 'sentence_transformers'"
+You need to install the provider:
+```bash
+pip install -e .[embeddings-sentencetransformers]
+```
+
+### "llama_cpp not found"
+Install the right variant for your hardware:
+```bash
+pip install -e .[embeddings-llamacpp-cuda]    # NVIDIA
+pip install -e .[embeddings-llamacpp-rocm]    # AMD
+pip install -e .[embeddings-llamacpp-metal]   # Apple
+pip install -e .[embeddings-llamacpp-cpu]     # CPU only
+```
+
+### Slow embedding generation
+1. Check if GPU is being used (add logging to see device)
+2. Reduce `n_ctx` for llama.cpp (try 256 or 512)
+3. Use smaller/quantized models
+4. Increase `n_batch` for llama.cpp (try 512 or 1024)
+
+### Out of memory errors
+1. Use smaller model (Q4 or Q5 quantization for llama.cpp)
+2. Reduce `n_ctx` and `n_batch`
+3. Process fewer files at once
+4. Use CPU mode if GPU memory is limited
+
+## Next Steps
+
+- For llama.cpp setup and model recommendations: [LLAMACPP_SETUP.md](LLAMACPP_SETUP.md)
+- For vector index usage: [VECTOR_EMBEDDINGS.md](VECTOR_EMBEDDINGS.md)
+- For general configuration: [../README.md](../README.md)

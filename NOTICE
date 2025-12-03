@@ -1,0 +1,109 @@
+Sigil MCP Server
+Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+
+This product is licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+See LICENSE file for the full license text.
+
+================================================================================
+
+THIRD-PARTY COMPONENTS
+
+This project incorporates and depends on the following open-source components:
+
+--------------------------------------------------------------------------------
+Model Context Protocol (MCP)
+Copyright (c) Anthropic
+License: MIT License
+https://github.com/anthropic-ai/mcp
+
+--------------------------------------------------------------------------------
+FastMCP
+Copyright (c) 2024 jlowin
+License: MIT License
+https://github.com/jlowin/fastmcp
+
+--------------------------------------------------------------------------------
+NumPy
+Copyright (c) 2005-2024, NumPy Developers
+License: BSD 3-Clause License
+https://numpy.org/
+
+--------------------------------------------------------------------------------
+Universal Ctags (Optional)
+Copyright (c) Universal Ctags Team
+License: GPL v2+
+https://github.com/universal-ctags/ctags
+Note: When used as an external tool, does not affect licensing of this project
+
+--------------------------------------------------------------------------------
+Sentence Transformers (Optional)
+Copyright (c) UKP Lab, Technische Universität Darmstadt
+License: Apache License 2.0
+https://github.com/UKPLab/sentence-transformers
+
+--------------------------------------------------------------------------------
+llama-cpp-python (Optional)
+Copyright (c) 2023 Andrei Betlen
+License: MIT License
+https://github.com/abetlen/llama-cpp-python
+
+--------------------------------------------------------------------------------
+Watchdog (Optional)
+Copyright (c) 2010 Yesudeep Mangalapilly
+License: Apache License 2.0
+https://github.com/gorakhargosh/watchdog
+
+--------------------------------------------------------------------------------
+
+ADDITIONAL ATTRIBUTIONS
+
+Trigram Indexing Concept:
+The trigram-based text search implementation in this project is inspired by
+GitHub's Blackbird search engine and the academic research on trigram indexing
+for code search. While the implementation is original, the concept and approach
+are based on these public resources.
+
+Symbol Extraction:
+Symbol extraction functionality leverages Universal Ctags, a mature open-source
+tool for generating tag files from source code. When used, ctags runs as a
+separate external process and does not link with this codebase.
+
+================================================================================
+
+COMMERCIAL LICENSING
+
+For organizations requiring commercial licenses (proprietary use without
+open-source requirements), please contact:
+
+Dave Tofflemire
+Email: davetmire85@gmail.com
+
+Commercial licenses provide:
+- Right to use without AGPLv3 source disclosure requirements
+- Indemnification and legal protections
+- Priority support options
+- Custom integration assistance
+
+================================================================================
+
+NETWORK USE NOTICE (AGPLv3 Section 13)
+
+This program is licensed under AGPLv3, which requires that users who interact
+with the software over a network must have access to the complete source code.
+
+If you modify this software and allow users to interact with it remotely
+(including but not limited to: web applications, API services, cloud deployments,
+SaaS offerings), you MUST make the complete corresponding source code available
+to those users under the AGPLv3 license.
+
+See LICENSE file for complete terms and conditions.
+
+================================================================================
+
+CONTRIBUTION NOTICE
+
+By contributing to this project, you agree that your contributions will be
+licensed under the AGPLv3 license. All contributors must sign off on commits
+using the Developer Certificate of Origin (DCO).
+
+See CONTRIBUTING.md for full contribution guidelines.

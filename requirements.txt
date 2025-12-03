@@ -1,0 +1,24 @@
+# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+# Commercial licenses are available. Contact: davetmire85@gmail.com
+
+# Sigil MCP Server Dependencies
+# This file is maintained for backward compatibility.
+# For modern installation, use: pip install -e .
+# Or with extras: pip install -e ".[embeddings,dev]"
+
+mcp>=1.22.0
+numpy>=1.24.0,<3.0
+
+# Optional dependencies for embeddings (install with: pip install -e ".[embeddings]")
+# sentence-transformers>=2.2.0
+# openai>=1.0.0
+# transformers>=4.30.0
+# torch>=2.0.0
+
+# Development dependencies (install with: pip install -e ".[dev]")
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+# black>=23.0.0
+# ruff>=0.1.0
+# mypy>=1.5.0
