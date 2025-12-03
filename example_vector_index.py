@@ -11,19 +11,20 @@ This demonstrates how to build and use semantic embeddings for code search.
 
 from pathlib import Path
 from sigil_mcp.indexer import SigilIndex
+from sigil_mcp.embeddings import create_embedding_provider
 import numpy as np
 
 
 # Example: Simple dummy embedding function for demonstration
-# In production, replace with OpenAI, sentence-transformers, or similar
+# In production, use create_embedding_provider() from sigil_mcp.embeddings
 def dummy_embed_fn(texts):
     """
     Dummy embedding function that returns random vectors.
     
-    In production, replace with:
-    - OpenAI embeddings API
+    In production, use create_embedding_provider() which supports:
     - sentence-transformers (e.g., all-MiniLM-L6-v2)
-    - Code-specific models (e.g., CodeBERT, GraphCodeBERT)
+    - OpenAI embeddings API (text-embedding-3-small, etc.)
+    - llamacpp (local GGUF models)
     """
     # Fixed dimensionality for consistency
     dim = 384
@@ -82,15 +83,17 @@ def example_with_sentence_transformers():
     Install: pip install sentence-transformers
     """
     try:
-        from sentence_transformers import SentenceTransformer
-        
-        # Load model (first run downloads ~80MB)
-        model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Use the built-in provider factory
+        provider = create_embedding_provider(
+            provider='sentence-transformers',
+            model='all-MiniLM-L6-v2',
+            dimension=384
+        )
         
         def embed_fn(texts):
-            # Generate embeddings
-            embeddings = model.encode(texts, show_progress_bar=False)
-            return embeddings
+            # Returns list[list[float]], convert to numpy array
+            embeddings = provider.embed_documents(texts)
+            return np.array(embeddings, dtype='float32')
         
         # Create index with real embeddings
         index = SigilIndex(
@@ -102,8 +105,8 @@ def example_with_sentence_transformers():
         print("Using sentence-transformers for embeddings")
         return index
     
-    except ImportError:
-        print("sentence-transformers not installed")
+    except ImportError as e:
+        print(f"Error: {e}")
         print("Install with: pip install sentence-transformers")
         return None
 
@@ -117,21 +120,25 @@ def example_with_openai():
     Set OPENAI_API_KEY environment variable
     """
     try:
-        import openai
         import os
         
-        client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            print("Error: OPENAI_API_KEY environment variable not set")
+            return None
+        
+        # Use the built-in provider factory
+        provider = create_embedding_provider(
+            provider='openai',
+            model='text-embedding-3-small',
+            dimension=1536,  # text-embedding-3-small dimension
+            api_key=api_key
+        )
         
         def embed_fn(texts):
-            # Batch embed with OpenAI
-            response = client.embeddings.create(
-                model="text-embedding-3-small",
-                input=texts
-            )
-            embeddings = np.array([
-                item.embedding for item in response.data
-            ], dtype='float32')
-            return embeddings
+            # Returns list[list[float]], convert to numpy array
+            embeddings = provider.embed_documents(texts)
+            return np.array(embeddings, dtype='float32')
         
         # Create index with OpenAI embeddings
         index = SigilIndex(
@@ -143,12 +150,61 @@ def example_with_openai():
         print("Using OpenAI embeddings")
         return index
     
-    except ImportError:
-        print("openai package not installed")
+    except ImportError as e:
+        print(f"Error: {e}")
         print("Install with: pip install openai")
         return None
     except Exception as e:
         print(f"Error setting up OpenAI: {e}")
+        return None
+
+
+# Example: Using llamacpp (local GGUF models)
+def example_with_llamacpp():
+    """
+    Example using llamacpp for local GGUF embedding models.
+    
+    Install: pip install llama-cpp-python
+    Download a GGUF model (e.g., nomic-embed-text)
+    """
+    try:
+        model_path = Path.home() / "models" / "nomic-embed-text-v1.5.Q4_K_M.gguf"
+        
+        if not model_path.exists():
+            print(f"Error: Model not found at {model_path}")
+            print("Download from: https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF")
+            return None
+        
+        # Use the built-in provider factory
+        provider = create_embedding_provider(
+            provider='llamacpp',
+            model=str(model_path),
+            dimension=768,  # nomic-embed dimension
+            n_ctx=8192,
+            n_batch=512
+        )
+        
+        def embed_fn(texts):
+            # Returns list[list[float]], convert to numpy array
+            embeddings = provider.embed_documents(texts)
+            return np.array(embeddings, dtype='float32')
+        
+        # Create index with llamacpp embeddings
+        index = SigilIndex(
+            index_path=Path.home() / ".sigil-index",
+            embed_fn=embed_fn,
+            embed_model="nomic-embed-text-v1.5"
+        )
+        
+        print("Using llamacpp for local embeddings")
+        return index
+    
+    except ImportError as e:
+        print(f"Error: {e}")
+        print("Install with: pip install llama-cpp-python")
+        return None
+    except Exception as e:
+        print(f"Error setting up llamacpp: {e}")
         return None
 
 
@@ -159,4 +215,5 @@ if __name__ == "__main__":
     print("For production use, consider:")
     print("1. sentence-transformers: example_with_sentence_transformers()")
     print("2. OpenAI embeddings: example_with_openai()")
+    print("3. Local GGUF models: example_with_llamacpp()")
     print("="*60)

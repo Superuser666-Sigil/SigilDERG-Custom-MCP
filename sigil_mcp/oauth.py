@@ -65,7 +65,7 @@ class OAuthManager:
     def __init__(self):
         self.tokens: Dict[str, OAuthToken] = {}
         self.states: Dict[str, OAuthState] = {}
-        # authorization_code -> {client_id, redirect_uri, code_challenge}
+        # authorization_code -> {client_id, redirect_uri, code_challenge, used}
         self.codes: Dict[str, Dict] = {}
         self._load_tokens()
     

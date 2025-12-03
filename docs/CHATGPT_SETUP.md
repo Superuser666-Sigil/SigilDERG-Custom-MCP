@@ -33,12 +33,38 @@ Developer Mode in ChatGPT Plus allows you to connect to remote MCP servers direc
 ### Step 1: Start Your Server and ngrok
 
 ```bash
-# Terminal 1: Start Sigil server (this will display your API key)
+# Terminal 1: Start Sigil server
 cd /home/dave/dev/sigil-mcp-server
-python server.py
-
-# Copy the displayed API key (looks like: SIGIL_abc123def456...)
+python -m sigil_mcp.server
 ```
+
+**Important:** ChatGPT's MCP connector has compatibility issues with standard MCP security:
+
+1. **Content-Type Issue**: ChatGPT sends `application/octet-stream` instead of `application/json`
+2. **Host Header Issue**: ngrok domains trigger DNS rebinding protection
+
+**Solution**: The server **disables DNS rebinding protection** for ChatGPT compatibility:
+
+```python
+# In server.py
+transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=False
+)
+
+mcp = FastMCP(
+    name=config.server_name,
+    json_response=True,
+    streamable_http_path="/",  # Mount at root for ChatGPT
+    transport_security=transport_security
+)
+```
+
+**Security Note**: This disables Host header and Content-Type validation. Your other security layers remain active:
+- ✅ OAuth 2.0 authentication with PKCE
+- ✅ Bearer token validation
+- ✅ Token expiration and refresh
+- ❌ DNS rebinding protection (disabled)
+- ❌ Content-Type validation (disabled)
 
 ```bash
 # Terminal 2: Start ngrok tunnel
@@ -58,10 +84,15 @@ Copy the ngrok HTTPS URL (e.g., `https://abc123.ngrok-free.app`).
 {
   "name": "Sigil Code Server",
   "server_url": "https://YOUR-NGROK-URL.ngrok-free.app",
-  "authorization": "Bearer YOUR_API_KEY_HERE",
+  "authorization_url": "https://YOUR-NGROK-URL.ngrok-free.app/oauth/authorize",
+  "token_url": "https://YOUR-NGROK-URL.ngrok-free.app/oauth/token",
+  "client_id": "YOUR_CLIENT_ID",
+  "client_secret": "YOUR_CLIENT_SECRET",
   "description": "Local code repository indexer with IDE-like features"
 }
 ```
+
+**Note**: The MCP endpoint is at the **root path** (`/`), not `/mcp`. This is required for ChatGPT compatibility.
 
 Replace:
 - `YOUR-NGROK-URL.ngrok-free.app` with your actual ngrok URL
@@ -239,14 +270,37 @@ After regenerating, you must update the key in ChatGPT Developer Mode or your Cu
 
 ## Troubleshooting
 
+### "Invalid Host header" error
+
+**Problem:** Server returns HTTP 421 with "Invalid Host header: abc123.ngrok-free.app" in logs.
+
+**Cause:** FastMCP's DNS rebinding protection validates the `Host` header. By default, it blocks all non-localhost hostnames including ngrok.
+
+**Solution:**
+Add `allowed_hosts` configuration in `config.json`:
+```json
+{
+  "server": {
+    "allowed_hosts": ["*"]
+  }
+}
+```
+
+Restart the server:
+```bash
+python -m sigil_mcp.server
+```
+
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#symptom-invalid-host-header-with-ngrok-or-chatgpt) for more details.
+
 ### "Authentication failed" error
 
 **Problem:** ChatGPT can't authenticate with your server.
 
 **Solutions:**
-1. Verify API key matches what server displayed on startup
-2. Check that `X-API-Key` header is configured correctly
-3. Ensure authentication is enabled: `echo $SIGIL_MCP_AUTH_ENABLED` (should be `true`)
+1. Check OAuth credentials are correctly configured
+2. Verify ngrok URL is correct (changes on restart)
+3. Ensure server is running with authentication enabled
 4. View server logs for authentication errors
 
 ### "Connection refused" or "Server unreachable"
@@ -255,7 +309,7 @@ After regenerating, you must update the key in ChatGPT Developer Mode or your Cu
 
 **Solutions:**
 1. Verify ngrok is running: `ngrok http 8000`
-2. Check that server is running: `ps aux | grep server.py`
+2. Check that server is running: `ps aux | grep sigil_mcp`
 3. Test connection manually: `curl https://YOUR-NGROK-URL.ngrok-free.app/health`
 4. Ensure ngrok URL in ChatGPT matches current tunnel URL (changes on restart)
 

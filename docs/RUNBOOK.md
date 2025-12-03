@@ -22,11 +22,12 @@ This runbook provides operational procedures for running, troubleshooting, and m
 5. [Index Management](#index-management)
 6. [Authentication & Security](#authentication--security)
 7. [File Watching](#file-watching)
-8. [Troubleshooting](#troubleshooting)
-9. [Monitoring & Health Checks](#monitoring--health-checks)
-10. [Backup & Recovery](#backup--recovery)
-11. [Performance Tuning](#performance-tuning)
-12. [Common Tasks](#common-tasks)
+8. [Direct Python Testing](#direct-python-testing)
+9. [Troubleshooting](#troubleshooting)
+10. [Monitoring & Health Checks](#monitoring--health-checks)
+11. [Backup & Recovery](#backup--recovery)
+12. [Performance Tuning](#performance-tuning)
+13. [Common Tasks](#common-tasks)
 
 ---
 
@@ -312,6 +313,16 @@ tail -f sigil.log
 ngrok http 8000
 # Note the https URL (e.g., https://abc123.ngrok.io)
 ```
+
+**ChatGPT Compatibility**: The server is configured with:
+- `streamable_http_path="/"` - MCP endpoint at root path
+- `enable_dns_rebinding_protection=False` - Accepts ngrok Host headers
+- `json_response=True` - Returns JSON instead of SSE streams
+
+These settings are required for ChatGPT's MCP connector which:
+- Sends non-standard `Content-Type: application/octet-stream`
+- Sends ngrok domains in Host headers
+- Expects MCP endpoint at `/` not `/mcp`
 
 #### Using Reverse Proxy (Production)
 
@@ -943,6 +954,344 @@ See [EMBEDDING_SETUP.md](EMBEDDING_SETUP.md) for hardware-specific provider reco
 - Index fewer files
 - Disable vector embeddings
 - Restart server periodically
+
+---
+
+## Direct Python Testing
+
+For testing the indexer directly without HTTP/MCP overhead, you can create a simple Python test script. This is useful for:
+- Debugging indexing issues
+- Performance testing
+- CI/CD validation
+- Development workflows
+
+### Creating a Test Client
+
+Create a file `test_client.py` in your project root:
+
+```python
+#!/usr/bin/env python3
+"""
+Direct test client for Sigil MCP Server indexer.
+Tests indexing, search, and embeddings without HTTP layer.
+"""
+
+import sys
+from pathlib import Path
+
+# Add project to path
+sys.path.insert(0, str(Path(__file__).parent))
+
+from sigil_mcp.indexer import SigilIndex
+from sigil_mcp.config import get_config
+
+
+def main():
+    """Test main functionality."""
+    config = get_config()
+    
+    print("=" * 60)
+    print("SIGIL MCP SERVER TEST CLIENT")
+    print("=" * 60)
+    print()
+    
+    # Initialize index (without embeddings for basic testing)
+    print("📊 Initializing index...")
+    index = SigilIndex(
+        config.index_path,
+        embed_fn=None,
+        embed_model="none"
+    )
+    print(f"   Index path: {config.index_path}")
+    print()
+    
+    # List configured repositories
+    print("📁 Configured Repositories:")
+    for name, path in config.repositories.items():
+        print(f"   - {name}: {path}")
+    print()
+    
+    # Test indexing
+    repo_name = list(config.repositories.keys())[0]  # First repo
+    repo_path = Path(config.repositories[repo_name])
+    
+    print(f"🔍 Indexing repository: {repo_name}")
+    print(f"   Path: {repo_path}")
+    
+    try:
+        stats = index.index_repository(repo_name, repo_path, force=False)
+        print(f"   ✅ Indexed: {stats.get('files_indexed', 0)} files")
+        print(f"   📝 Symbols: {stats.get('symbols_extracted', 0)}")
+        print(f"   ⏱️  Time: {stats.get('duration_seconds', 0):.2f}s")
+    except Exception as e:
+        print(f"   ❌ Error: {e}")
+        return 1
+    print()
+    
+    # Test code search
+    print("🔎 Testing code search for 'config'...")
+    try:
+        results = index.search_code(repo_name, "config", max_results=5)
+        print(f"   Found {len(results)} results:")
+        for i, result in enumerate(results[:3], 1):
+            print(f"   {i}. {result.path}:{result.line}")
+            snippet = result.text[:70].replace('\n', ' ')
+            print(f"      {snippet}...")
+    except Exception as e:
+        print(f"   ❌ Error: {e}")
+    print()
+
+    # Test symbol search
+    print("🎯 Testing symbol search for 'Config'...")
+    try:
+        symbols = index.list_symbols(repo_name, "Config")
+        print(f"   Found {len(symbols)} symbols:")
+        for i, sym in enumerate(symbols[:5], 1):
+            print(f"   {i}. {sym.name} ({sym.kind}) in {sym.file_path}:{sym.line}")
+    except Exception as e:
+        print(f"   ❌ Error: {e}")
+    print()
+    
+    print("=" * 60)
+    print("TEST COMPLETE")
+    print("=" * 60)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+### Testing with Embeddings
+
+To test vector embeddings and semantic search:
+
+```python
+#!/usr/bin/env python3
+"""Test embeddings functionality."""
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+
+from sigil_mcp.indexer import SigilIndex
+from sigil_mcp.config import get_config
+from sigil_mcp.embeddings import create_embedding_provider
+import numpy as np
+
+
+def main():
+    config = get_config()
+    
+    if not config.embeddings_enabled:
+        print("❌ Embeddings not enabled in config.json")
+        return 1
+    
+    print(f"🧠 Testing Embeddings")
+    print(f"   Provider: {config.embeddings_provider}")
+    print(f"   Model: {config.embeddings_model}")
+    print()
+    
+    # Create embedding provider
+    try:
+        provider = create_embedding_provider(
+            provider=config.embeddings_provider,
+            model=config.embeddings_model,
+            dimension=config.embeddings_dimension,
+            cache_dir=config.embeddings_cache_dir
+        )
+        
+        def embed_fn(texts):
+            embeddings = provider.embed_documents(texts)
+            return np.array(embeddings, dtype="float32")
+        
+    except Exception as e:
+        print(f"❌ Failed to initialize provider: {e}")
+        return 1
+    
+    # Create index with embeddings
+    index = SigilIndex(
+        config.index_path,
+        embed_fn=embed_fn,
+        embed_model=str(config.embeddings_model)
+    )
+    
+    # Build vector index
+    repo_name = list(config.repositories.keys())[0]
+    print(f"📊 Building vector index for {repo_name}...")
+    
+    try:
+        vector_stats = index.build_vector_index(repo_name)
+        print(f"   ✅ Chunks indexed: {vector_stats.get('chunks_indexed', 0)}")
+        print(f"   📄 Documents: {vector_stats.get('documents_processed', 0)}")
+    except Exception as e:
+        print(f"   ❌ Error: {e}")
+        return 1
+    print()
+    
+    # Test semantic search
+    query = "configuration and settings"
+    print(f"🔍 Semantic search: '{query}'")
+    
+    try:
+        results = index.semantic_search(
+            query=query,
+            repo=repo_name,
+            k=3
+        )
+        print(f"   Found {len(results)} results:")
+        for i, result in enumerate(results, 1):
+            path = result.get('path', 'unknown')
+            start = result.get('start_line', 0)
+            end = result.get('end_line', 0)
+            score = result.get('score', 0.0)
+            print(f"   {i}. {path}:{start}-{end}")
+            print(f"      Score: {score:.3f}")
+    except Exception as e:
+        print(f"   ❌ Error: {e}")
+        return 1
+    
+    print()
+    print("✅ Embeddings test complete")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+### Running Tests
+
+```bash
+# Basic test (no embeddings)
+python test_client.py
+
+# Test with embeddings
+python test_embeddings.py
+
+# Run with specific config
+SIGIL_CONFIG=/path/to/config.json python test_client.py
+```
+
+### Expected Output
+
+**Successful run:**
+```
+============================================================
+SIGIL MCP SERVER TEST CLIENT
+============================================================
+
+📊 Initializing index...
+   Index path: /home/user/.sigil_index
+
+📁 Configured Repositories:
+   - my_project: /path/to/my_project
+
+🔍 Indexing repository: my_project
+   Path: /path/to/my_project
+   ✅ Indexed: 342 files
+   📝 Symbols: 1847
+   ⏱️  Time: 2.34s
+
+🔎 Testing code search for 'config'...
+   Found 12 results:
+   1. config.py:45
+      def load_config(path: Path) -> Dict[str, Any]:...
+   2. server.py:12
+      from sigil_mcp.config import get_config...
+
+🎯 Testing symbol search for 'Config'...
+   Found 5 symbols:
+   1. Config (class) in config.py:34
+   2. ConfigError (class) in config.py:89
+
+============================================================
+TEST COMPLETE
+============================================================
+```
+
+### Troubleshooting Test Failures
+
+**Import errors:**
+```bash
+# Ensure package is installed
+pip install -e .
+
+# Or add to PYTHONPATH
+export PYTHONPATH=/path/to/sigil-mcp-server:$PYTHONPATH
+```
+
+**No symbols found:**
+```bash
+# Check ctags installation
+ctags --version | grep "Universal Ctags"
+
+# If wrong version, reinstall
+brew uninstall ctags && brew install universal-ctags
+```
+
+**Embedding errors:**
+```bash
+# Install embedding dependencies
+pip install sentence-transformers
+
+# Or use different provider
+pip install openai  # For OpenAI embeddings
+```
+
+### Using Tests in CI/CD
+
+**GitHub Actions example:**
+```yaml
+name: Test Indexer
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          sudo apt install universal-ctags
+      
+      - name: Create test config
+        run: |
+          cat > config.json <<EOF
+          {
+            "repositories": {
+              "test_repo": "${{ github.workspace }}"
+            }
+          }
+          EOF
+      
+      - name: Run tests
+        run: python test_client.py
+```
+
+### Performance Benchmarking
+
+Add timing to your test client:
+
+```python
+import time
+
+# Time indexing
+start = time.time()
+stats = index.index_repository(repo_name, repo_path)
+duration = time.time() - start
+
+files_per_sec = stats.get('files_indexed', 0) / duration
+print(f"   Performance: {files_per_sec:.1f} files/sec")
+```
 
 ---
 

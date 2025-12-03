@@ -676,6 +676,66 @@ ngrok http 8000
 curl -v https://your-url.ngrok.io/health
 ```
 
+#### Symptom: "Invalid Host header" or "Invalid Content-Type" with ChatGPT
+
+```
+INFO: Created new transport with session ID: abc123...
+Invalid Content-Type header: application/octet-stream
+INFO: "POST / HTTP/1.1" 400 Bad Request
+```
+
+**Cause:**
+ChatGPT's MCP connector is **not fully compliant** with the MCP streamable-http specification:
+1. Sends `Content-Type: application/octet-stream` instead of `application/json`
+2. Sends ngrok Host headers that trigger DNS rebinding protection
+
+**Solution (Already Applied):**
+
+The server **disables DNS rebinding protection** for ChatGPT compatibility:
+
+```python
+# In sigil_mcp/server.py
+transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=False
+)
+
+mcp = FastMCP(
+    name=config.server_name,
+    json_response=True,
+    streamable_http_path="/",
+    transport_security=transport_security
+)
+```
+
+**Security Tradeoff:**
+- ❌ DNS rebinding protection: Disabled (Host header not validated)
+- ❌ Content-Type validation: Disabled (accepts application/octet-stream)
+- ✅ OAuth 2.0 authentication: Still active and required
+- ✅ Bearer token validation: Still active
+- ✅ Token expiration: Still enforced
+
+**Why This Was Necessary:**
+
+ChatGPT's MCP implementation doesn't follow the standard:
+- **MCP Spec requires**: `Content-Type: application/json`
+- **ChatGPT sends**: `Content-Type: application/octet-stream`
+- **MCP Spec requires**: Valid Host header matching server
+- **ChatGPT sends**: ngrok domain triggering rebinding protection
+
+Disabling these validations allows ChatGPT to connect while maintaining OAuth authentication.
+
+**Verification:**
+```bash
+# Server should accept ChatGPT requests
+tail -f /tmp/sigil_server.log | grep -E "POST|OAuth"
+
+# Should see successful OAuth and POST requests
+```
+
+**References:**
+- [MCP Streamable HTTP Spec](https://modelcontextprotocol.io/specification/2025-06-18/transport/streamable-http)
+- [FastMCP TransportSecuritySettings](https://github.com/modelcontextprotocol/python-sdk/blob/main/src/mcp/server/transport_security.py)
+
 ---
 
 ## Performance Issues

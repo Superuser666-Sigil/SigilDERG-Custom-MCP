@@ -10,6 +10,7 @@ import numpy as np
 import os
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 from .indexer import SigilIndex
@@ -53,7 +54,21 @@ ALLOWED_IPS = config.allowed_ips
 # MCP server
 # --------------------------------------------------------------------
 
-mcp = FastMCP(name=config.server_name, json_response=True)
+# Disable ALL transport security for ChatGPT compatibility
+# ChatGPT's MCP connector sends:
+# 1. Content-Type: application/octet-stream (invalid, should be application/json)
+# 2. Host headers that don't match localhost (ngrok domains)
+# We must explicitly disable DNS rebinding protection to accept these requests
+transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=False
+)
+
+mcp = FastMCP(
+    name=config.server_name, 
+    json_response=True,
+    streamable_http_path="/",
+    transport_security=transport_security
+)
 
 
 # --------------------------------------------------------------------

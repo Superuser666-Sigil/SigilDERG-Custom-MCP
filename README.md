@@ -111,6 +111,11 @@ On first run, OAuth credentials will be generated. Save the Client ID and Client
 3. Use the OAuth credentials from server startup
 4. Start using: "Search my code for async functions"
 
+**Important**: The server is configured for ChatGPT compatibility:
+- DNS rebinding protection is disabled (ChatGPT sends ngrok Host headers)
+- MCP endpoint mounted at root `/` (not `/mcp`)
+- OAuth authentication remains active and required
+
 See [docs/CHATGPT_SETUP.md](docs/CHATGPT_SETUP.md) for detailed instructions.
 
 ## Configuration
@@ -271,6 +276,15 @@ ChatGPT: Found 5 relevant code sections (semantic search):
 
 **Protection:** Source code requires authentication for remote access, OAuth credentials stored with 0600 permissions, tokens expire after 1 hour with refresh support, PKCE prevents authorization code interception
 
+**ChatGPT Compatibility**: For ChatGPT MCP connector compatibility, DNS rebinding protection is disabled. This means:
+- ❌ Host header validation: Disabled (accepts ngrok domains)
+- ❌ Content-Type validation: Disabled (accepts application/octet-stream)
+- ✅ OAuth 2.0 authentication: Active and required
+- ✅ Bearer token validation: Active
+- ✅ Token expiration: Enforced
+
+See [docs/SECURITY.md](docs/SECURITY.md) for detailed security documentation.
+
 ## Troubleshooting
 
 For detailed troubleshooting, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) and [docs/RUNBOOK.md](docs/RUNBOOK.md).
@@ -306,6 +320,7 @@ For detailed troubleshooting, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING
 - [ADR-006: Vector Embeddings for Semantic Search](docs/adr-006-vector-embeddings.md)
 - [ADR-007: File Watching](docs/adr-007-file-watching.md)
 - [ADR-008: Granular Re-indexing and Configurable Patterns](docs/adr-008-granular-indexing.md)
+- [ADR-009: ChatGPT MCP Connector Compatibility](docs/adr-009-chatgpt-compatibility.md)
 
 **Feature Documentation**
 - [Vector Embeddings Usage Guide](docs/VECTOR_EMBEDDINGS.md)

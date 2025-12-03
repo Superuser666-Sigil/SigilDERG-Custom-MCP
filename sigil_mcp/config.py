@@ -152,6 +152,11 @@ class Config:
         return self.get("server.log_level", "INFO")
     
     @property
+    def allowed_hosts(self) -> list[str]:
+        """Get allowed Host header values for DNS rebinding protection."""
+        return self.get("server.allowed_hosts", ["*"])
+    
+    @property
     def auth_enabled(self) -> bool:
         return self.get("authentication.enabled", True)
     
