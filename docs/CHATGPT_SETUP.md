@@ -13,7 +13,8 @@ This guide shows you how to configure your Sigil MCP server with ChatGPT using D
 - ChatGPT Plus subscription
 - Developer Mode enabled in ChatGPT
 - ngrok installed and configured
-- Sigil MCP server running with authentication enabled
+- Sigil MCP server v0.3.1 or later (includes critical path handling fixes)
+- Authentication enabled on server
 
 ## Overview
 

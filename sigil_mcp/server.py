@@ -193,7 +193,11 @@ else:
 def _get_repo_root(name: str) -> Path:
     """Lookup a repo root by name."""
     try:
-        return REPOS[name]
+        root = REPOS[name]
+        # Ensure we return a Path object
+        if isinstance(root, str):
+            return Path(root)
+        return root
     except KeyError:
         raise ValueError(f"Unknown repo {name!r}. Known repos: {sorted(REPOS.keys())}")
 
@@ -1002,6 +1006,12 @@ def list_repo_files(
 
     entries: List[Dict[str, str]] = []
 
+    # Ensure root is a Path object
+    if not isinstance(root, Path):
+        root = Path(root)
+    if not isinstance(base_root, Path):
+        base_root = Path(base_root)
+
     for dirpath, dirnames, filenames in os.walk(root):
         current = Path(dirpath)
         rel_parts = len(current.relative_to(base_root).parts)
@@ -1121,14 +1131,18 @@ def search_repo(
         # Raises ValueError if repo unknown
         targets = {repo: _get_repo_root(repo)}
 
-    for repo_name, root in targets.items():
+    for repo_name, repo_root in targets.items():
+        # Ensure repo_root is a Path object
+        if not isinstance(repo_root, Path):
+            repo_root = Path(repo_root)
+        
         # rglob relative to root
-        for path in root.rglob(file_glob):
+        for path in repo_root.rglob(file_glob):
             if not path.is_file():
                 continue
 
             # Skip hidden files/dirs unless explicitly using "*"
-            parts = path.relative_to(root).parts
+            parts = path.relative_to(repo_root).parts
             if file_glob != "*" and any(part.startswith(".") for part in parts):
                 continue
 
@@ -1143,7 +1157,7 @@ def search_repo(
                     matches.append(
                         {
                             "repo": repo_name,
-                            "path": path.relative_to(root).as_posix(),
+                            "path": path.relative_to(repo_root).as_posix(),
                             "line": idx,
                             "text": line.strip(),
                         }

@@ -676,6 +676,55 @@ ngrok http 8000
 curl -v https://your-url.ngrok.io/health
 ```
 
+#### Symptom: Path Handling Errors
+
+```
+TypeError: unsupported operand type(s) for /: 'str' and 'str'
+AttributeError: 'str' object has no attribute 'rglob'
+```
+
+**Cause:**
+Repository paths stored as strings in configuration aren't being converted to Path objects before file operations.
+
+**Version Affected:** v0.3.0 and earlier
+
+**Solution (Fixed in v0.3.1):**
+
+Upgrade to v0.3.1 or later:
+```bash
+git pull origin main
+pip install -e .
+```
+
+**Manual Fix (if needed):**
+
+The issue occurs when repository paths from `config.json` or environment variables are strings but Path operations are expected. The fix ensures `_get_repo_root()` always returns a Path object:
+
+```python
+# sigil_mcp/server.py
+def _get_repo_root(name: str) -> Path:
+    try:
+        root = REPOS[name]
+        # Ensure we return a Path object
+        if isinstance(root, str):
+            return Path(root)
+        return root
+    except KeyError:
+        raise ValueError(f"Unknown repo {name!r}")
+```
+
+**After upgrading, rebuild index:**
+```bash
+# Remove old index
+rm -rf ~/.sigil_index
+
+# Start server (will create fresh index)
+python -m sigil_mcp.server
+
+# Re-index all repositories
+# From ChatGPT: "Index all repositories"
+```
+
 #### Symptom: "Invalid Host header" or "Invalid Content-Type" with ChatGPT
 
 ```

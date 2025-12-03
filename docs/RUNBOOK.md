@@ -6,8 +6,9 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 # Sigil MCP Server Operations Runbook
 
-**Version:** 1.0  
-**Last Updated:** 2025-12-03
+**Version:** 1.1  
+**Last Updated:** 2025-12-03  
+**Recommended Server Version:** v0.3.1 or later
 
 This runbook provides operational procedures for running, troubleshooting, and maintaining the Sigil MCP Server in production and development environments.
 
@@ -1356,7 +1357,19 @@ systemctl restart sigil-mcp
 
 # 5. Verify functionality
 curl http://localhost:8000/health
+
+# 6. If upgrading from v0.3.0, rebuild index (path handling fixes)
+rm -rf ~/.sigil_index
+# Re-index via ChatGPT: "Index all repositories"
 ```
+
+**Important: v0.3.0 → v0.3.1 Upgrade**
+
+Version 0.3.1 includes critical path handling fixes. After upgrading from v0.3.0:
+
+1. **Rebuild index completely** - Path handling changes require fresh index
+2. **Test all tools** - Verify `list_repo_files`, `read_repo_file`, `search_repo` all work
+3. **Check logs** - Ensure no "unsupported operand" or "no attribute 'rglob'" errors
 
 ### Debugging Search Issues
 
