@@ -186,7 +186,7 @@ class TestSymbolSearch:
             symbol_name = result[0]
             results = index.find_symbol(symbol_name, repo="test_repo")
             assert len(results) > 0
-            assert results[0].symbol.name == symbol_name
+            assert results[0].name == symbol_name
     
     def test_find_symbol_nonexistent(self, indexed_repo):
         """Test finding nonexistent symbol."""
@@ -208,7 +208,7 @@ class TestSymbolSearch:
             kind = result[0]
             results = index.list_symbols(kind=kind, repo="test_repo")
             assert len(results) > 0
-            assert all(r.symbol.kind == kind for r in results)
+            assert all(r.kind == kind for r in results)
     
     def test_list_symbols_in_file(self, indexed_repo):
         """Test listing symbols in specific file."""

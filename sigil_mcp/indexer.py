@@ -20,6 +20,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 import numpy as np
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -62,15 +63,27 @@ class SigilIndex:
         self.index_path.mkdir(parents=True, exist_ok=True)
         self.embed_fn = embed_fn
         self.embed_model = embed_model
+
+        # Global lock to serialize DB access across threads
+        # (HTTP handlers + file watcher + vector indexing)
+        self._lock = threading.RLock()
         
         self.repos_db = sqlite3.connect(
             self.index_path / "repos.db",
             check_same_thread=False
         )
+        # Enable WAL + sane defaults for concurrent readers / writers
+        self.repos_db.execute("PRAGMA journal_mode=WAL;")
+        self.repos_db.execute("PRAGMA synchronous=NORMAL;")
+        self.repos_db.execute("PRAGMA busy_timeout=5000;")
+
         self.trigrams_db = sqlite3.connect(
             self.index_path / "trigrams.db",
             check_same_thread=False
         )
+        self.trigrams_db.execute("PRAGMA journal_mode=WAL;")
+        self.trigrams_db.execute("PRAGMA synchronous=NORMAL;")
+        self.trigrams_db.execute("PRAGMA busy_timeout=5000;")
         
         self._init_schema()
     
@@ -182,45 +195,46 @@ class SigilIndex:
         Returns:
             True if file was indexed, False if skipped or error
         """
-        try:
-            # Get or create repo entry
-            cursor = self.repos_db.cursor()
-            cursor.execute(
-                "INSERT OR IGNORE INTO repos (name, path, indexed_at) VALUES (?, ?, ?)",
-                (repo_name, str(repo_path), datetime.now().isoformat())
-            )
-            cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
-            repo_id = cursor.fetchone()[0]
-            
-            # Determine language
-            file_extensions = {
-                '.py': 'python', '.rs': 'rust', '.js': 'javascript',
-                '.ts': 'typescript', '.java': 'java', '.go': 'go',
-                '.cpp': 'cpp', '.c': 'c', '.h': 'c', '.hpp': 'cpp',
-                '.rb': 'ruby', '.php': 'php', '.cs': 'csharp',
-                '.sh': 'shell', '.toml': 'toml', '.yaml': 'yaml',
-                '.yml': 'yaml', '.json': 'json', '.md': 'markdown',
-            }
-            ext = file_path.suffix.lower()
-            language = file_extensions.get(ext, 'unknown')
-            
-            # Index the specific file
-            result = self._index_file(
-                repo_id, repo_name, repo_path, file_path, language
-            )
-            
-            if result:
-                # Rebuild trigrams for this file
-                self._update_trigrams_for_file(repo_id, repo_path, file_path)
-                self.repos_db.commit()
-                logger.info(f"Re-indexed {file_path.name} in {repo_name}")
-                return True
-            
-            return False
-            
-        except Exception as e:
-            logger.error(f"Error re-indexing {file_path}: {e}")
-            return False
+        with self._lock:
+            try:
+                # Get or create repo entry
+                cursor = self.repos_db.cursor()
+                cursor.execute(
+                    "INSERT OR IGNORE INTO repos (name, path, indexed_at) VALUES (?, ?, ?)",
+                    (repo_name, str(repo_path), datetime.now().isoformat())
+                )
+                cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
+                repo_id = cursor.fetchone()[0]
+                
+                # Determine language
+                file_extensions = {
+                    '.py': 'python', '.rs': 'rust', '.js': 'javascript',
+                    '.ts': 'typescript', '.java': 'java', '.go': 'go',
+                    '.cpp': 'cpp', '.c': 'c', '.h': 'c', '.hpp': 'cpp',
+                    '.rb': 'ruby', '.php': 'php', '.cs': 'csharp',
+                    '.sh': 'shell', '.toml': 'toml', '.yaml': 'yaml',
+                    '.yml': 'yaml', '.json': 'json', '.md': 'markdown',
+                }
+                ext = file_path.suffix.lower()
+                language = file_extensions.get(ext, 'unknown')
+                
+                # Index the specific file
+                result = self._index_file(
+                    repo_id, repo_name, repo_path, file_path, language
+                )
+                
+                if result:
+                    # Rebuild trigrams for this file
+                    self._update_trigrams_for_file(repo_id, repo_path, file_path)
+                    self.repos_db.commit()
+                    logger.info(f"Re-indexed {file_path.name} in {repo_name}")
+                    return True
+                
+                return False
+                
+            except Exception as e:
+                logger.error(f"Error re-indexing {file_path}: {e}")
+                return False
     
     def _update_trigrams_for_file(self, repo_id: int, repo_path: Path, file_path: Path):
         """Update trigrams for a specific file."""
@@ -293,77 +307,78 @@ class SigilIndex:
         Returns:
             Statistics about indexing operation
         """
-        logger.info(f"Indexing repository: {repo_name} at {repo_path}")
-        
-        start_time = datetime.now()
-        stats: dict[str, int] = {
-            "files_indexed": 0,
-            "symbols_extracted": 0,
-            "trigrams_built": 0,
-            "bytes_indexed": 0
-        }
-        
-        # Register or update repo
-        cursor = self.repos_db.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO repos (name, path, indexed_at) VALUES (?, ?, ?)",
-            (repo_name, str(repo_path), datetime.now().isoformat())
-        )
-        repo_id = cursor.lastrowid
-        if not repo_id:
-            # Repo already exists, get its ID
-            cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
-            repo_id = cursor.fetchone()[0]
-        
-        # Clear old trigram data if forcing rebuild
-        if force:
-            logger.info(f"Force rebuild: clearing old index data for {repo_name}")
+        with self._lock:
+            logger.info(f"Indexing repository: {repo_name} at {repo_path}")
+            
+            start_time = datetime.now()
+            stats: dict[str, int] = {
+                "files_indexed": 0,
+                "symbols_extracted": 0,
+                "trigrams_built": 0,
+                "bytes_indexed": 0
+            }
+            
+            # Register or update repo
+            cursor = self.repos_db.cursor()
             cursor.execute(
-                "DELETE FROM documents WHERE repo_id = ?", (repo_id,)
+                "INSERT OR REPLACE INTO repos (name, path, indexed_at) VALUES (?, ?, ?)",
+                (repo_name, str(repo_path), datetime.now().isoformat())
             )
-            # Trigrams will be rebuilt entirely
-            self.trigrams_db.execute("DELETE FROM trigrams")
-        
-        # Index all files
-        file_extensions = {
-            '.py': 'python', '.rs': 'rust', '.js': 'javascript',
-            '.ts': 'typescript', '.java': 'java', '.go': 'go',
-            '.cpp': 'cpp', '.c': 'c', '.h': 'c', '.hpp': 'cpp',
-            '.rb': 'ruby', '.php': 'php', '.cs': 'csharp',
-            '.sh': 'shell', '.toml': 'toml', '.yaml': 'yaml',
-            '.yml': 'yaml', '.json': 'json', '.md': 'markdown',
-        }
-        
-        for file_path in repo_path.rglob("*"):
-            if file_path.is_file() and not self._should_skip(file_path):
-                ext = file_path.suffix.lower()
-                language = file_extensions.get(ext, 'unknown')
-                
-                file_stats = self._index_file(
-                    repo_id, repo_name, repo_path, file_path, language
+            repo_id = cursor.lastrowid
+            if not repo_id:
+                # Repo already exists, get its ID
+                cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
+                repo_id = cursor.fetchone()[0]
+            
+            # Clear old trigram data if forcing rebuild
+            if force:
+                logger.info(f"Force rebuild: clearing old index data for {repo_name}")
+                cursor.execute(
+                    "DELETE FROM documents WHERE repo_id = ?", (repo_id,)
                 )
-                if file_stats:
-                    stats["files_indexed"] += 1
-                    stats["symbols_extracted"] += file_stats.get("symbols", 0)
-                    stats["bytes_indexed"] += file_stats.get("bytes", 0)
-        
-        self.repos_db.commit()
-        
-        # Build trigram index
-        logger.info(f"Building trigram index for {repo_name}")
-        trigram_count = self._build_trigram_index(repo_id)
-        stats["trigrams_built"] = trigram_count
-        
-        elapsed = (datetime.now() - start_time).total_seconds()
-        stats["duration_seconds"] = int(elapsed)
-        
-        logger.info(
-            f"Indexed {repo_name}: {stats['files_indexed']} files, "
-            f"{stats['symbols_extracted']} symbols, "
-            f"{stats['trigrams_built']} trigrams in {elapsed:.1f}s"
-        )
-        
-        return stats
+                # Trigrams will be rebuilt entirely
+                self.trigrams_db.execute("DELETE FROM trigrams")
+            
+            # Index all files
+            file_extensions = {
+                '.py': 'python', '.rs': 'rust', '.js': 'javascript',
+                '.ts': 'typescript', '.java': 'java', '.go': 'go',
+                '.cpp': 'cpp', '.c': 'c', '.h': 'c', '.hpp': 'cpp',
+                '.rb': 'ruby', '.php': 'php', '.cs': 'csharp',
+                '.sh': 'shell', '.toml': 'toml', '.yaml': 'yaml',
+                '.yml': 'yaml', '.json': 'json', '.md': 'markdown',
+            }
+            
+            for file_path in repo_path.rglob("*"):
+                if file_path.is_file() and not self._should_skip(file_path):
+                    ext = file_path.suffix.lower()
+                    language = file_extensions.get(ext, 'unknown')
+                    
+                    file_stats = self._index_file(
+                        repo_id, repo_name, repo_path, file_path, language
+                    )
+                    if file_stats:
+                        stats["files_indexed"] += 1
+                        stats["symbols_extracted"] += file_stats.get("symbols", 0)
+                        stats["bytes_indexed"] += file_stats.get("bytes", 0)
+            
+            self.repos_db.commit()
+            
+            # Build trigram index
+            logger.info(f"Building trigram index for {repo_name}")
+            trigram_count = self._build_trigram_index(repo_id)
+            stats["trigrams_built"] = trigram_count
+            
+            elapsed = (datetime.now() - start_time).total_seconds()
+            stats["duration_seconds"] = int(elapsed)
+            
+            logger.info(
+                f"Indexed {repo_name}: {stats['files_indexed']} files, "
+                f"{stats['symbols_extracted']} symbols, "
+                f"{stats['trigrams_built']} trigrams in {elapsed:.1f}s"
+            )
+            
+            return stats
     
     def _index_file(
         self,
@@ -606,72 +621,73 @@ class SigilIndex:
         Returns:
             List of search results with context
         """
-        query_lower = query.lower()
-        query_trigrams = self._extract_trigrams(query_lower)
-        
-        if not query_trigrams:
-            return []
-        
-        # Fetch document IDs for each trigram
-        doc_id_sets = []
-        for gram in query_trigrams:
-            cursor = self.trigrams_db.execute(
-                "SELECT doc_ids FROM trigrams WHERE gram = ?", (gram,)
-            )
-            row = cursor.fetchone()
-            if row:
-                doc_ids = {
-                    int(x) for x in zlib.decompress(row[0]).decode().split(',') if x
-                }
-                doc_id_sets.append(doc_ids)
-            else:
-                # Trigram not found, no results
-                return []
-        
-        # Intersection of all doc_id sets
-        candidate_doc_ids = set.intersection(*doc_id_sets)
-        
-        # Filter by repo if specified
-        if repo:
-            cursor = self.repos_db.execute(
-                "SELECT id FROM repos WHERE name = ?", (repo,)
-            )
-            row = cursor.fetchone()
-            if row:
-                repo_id = row[0]
-                cursor = self.repos_db.execute(
-                    "SELECT id FROM documents WHERE repo_id = ? AND id IN ({})".format(
-                        ','.join('?' * len(candidate_doc_ids))
-                    ),
-                    (repo_id, *candidate_doc_ids)
-                )
-                candidate_doc_ids = {row[0] for row in cursor.fetchall()}
-        
-        # Verify matches and extract context
-        results = []
-        for doc_id in candidate_doc_ids:
-            if len(results) >= max_results:
-                break
+        with self._lock:
+            query_lower = query.lower()
+            query_trigrams = self._extract_trigrams(query_lower)
             
-            doc = self._get_document(doc_id)
-            if doc:
-                content = self._read_blob(doc['blob_sha'])
-                if content:
-                    text = content.decode('utf-8', errors='replace')
-                    # Find matching lines
-                    for line_num, line in enumerate(text.splitlines(), start=1):
-                        if query.lower() in line.lower():
-                            results.append(SearchResult(
-                                repo=doc['repo_name'],
-                                path=doc['path'],
-                                line=line_num,
-                                text=line.strip(),
-                                doc_id=f"{doc['repo_name']}::{doc['path']}"
-                            ))
-                            if len(results) >= max_results:
-                                break
-        
-        return results
+            if not query_trigrams:
+                return []
+            
+            # Fetch document IDs for each trigram
+            doc_id_sets = []
+            for gram in query_trigrams:
+                cursor = self.trigrams_db.execute(
+                    "SELECT doc_ids FROM trigrams WHERE gram = ?", (gram,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    doc_ids = {
+                        int(x) for x in zlib.decompress(row[0]).decode().split(',') if x
+                    }
+                    doc_id_sets.append(doc_ids)
+                else:
+                    # Trigram not found, no results
+                    return []
+            
+            # Intersection of all doc_id sets
+            candidate_doc_ids = set.intersection(*doc_id_sets)
+            
+            # Filter by repo if specified
+            if repo:
+                cursor = self.repos_db.execute(
+                    "SELECT id FROM repos WHERE name = ?", (repo,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    repo_id = row[0]
+                    cursor = self.repos_db.execute(
+                        "SELECT id FROM documents WHERE repo_id = ? AND id IN ({})".format(
+                            ','.join('?' * len(candidate_doc_ids))
+                        ),
+                        (repo_id, *candidate_doc_ids)
+                    )
+                    candidate_doc_ids = {row[0] for row in cursor.fetchall()}
+            
+            # Verify matches and extract context
+            results = []
+            for doc_id in candidate_doc_ids:
+                if len(results) >= max_results:
+                    break
+                
+                doc = self._get_document(doc_id)
+                if doc:
+                    content = self._read_blob(doc['blob_sha'])
+                    if content:
+                        text = content.decode('utf-8', errors='replace')
+                        # Find matching lines
+                        for line_num, line in enumerate(text.splitlines(), start=1):
+                            if query.lower() in line.lower():
+                                results.append(SearchResult(
+                                    repo=doc['repo_name'],
+                                    path=doc['path'],
+                                    line=line_num,
+                                    text=line.strip(),
+                                    doc_id=f"{doc['repo_name']}::{doc['path']}"
+                                ))
+                                if len(results) >= max_results:
+                                    break
+            
+            return results
     
     def find_symbol(
         self,
@@ -690,36 +706,40 @@ class SigilIndex:
         Returns:
             List of symbol definitions
         """
-        query = "SELECT s.name, s.kind, s.line, s.signature, s.scope, d.path, r.name as repo_name "
-        query += "FROM symbols s "
-        query += "JOIN documents d ON s.doc_id = d.id "
-        query += "JOIN repos r ON d.repo_id = r.id "
-        query += "WHERE s.name = ?"
-        
-        params = [symbol_name]
-        
-        if kind:
-            query += " AND s.kind = ?"
-            params.append(kind)
-        
-        if repo:
-            query += " AND r.name = ?"
-            params.append(repo)
-        
-        cursor = self.repos_db.execute(query, params)
-        
-        symbols = []
-        for row in cursor.fetchall():
-            symbols.append(Symbol(
-                name=row[0],
-                kind=row[1],
-                line=row[2],
-                signature=row[3],
-                scope=row[4],
-                file_path=f"{row[6]}::{row[5]}"  # repo::path
-            ))
-        
-        return symbols
+        with self._lock:
+            query = (
+                "SELECT s.name, s.kind, s.line, s.signature, s.scope, "
+                "d.path, r.name as repo_name "
+                "FROM symbols s "
+                "JOIN documents d ON s.doc_id = d.id "
+                "JOIN repos r ON d.repo_id = r.id "
+                "WHERE s.name = ?"
+            )
+            
+            params = [symbol_name]
+            
+            if kind:
+                query += " AND s.kind = ?"
+                params.append(kind)
+            
+            if repo:
+                query += " AND r.name = ?"
+                params.append(repo)
+            
+            cursor = self.repos_db.execute(query, params)
+            
+            symbols = []
+            for row in cursor.fetchall():
+                symbols.append(Symbol(
+                    name=row[0],
+                    kind=row[1],
+                    line=row[2],
+                    signature=row[3],
+                    scope=row[4],
+                    file_path=f"{row[6]}::{row[5]}"  # repo::path
+                ))
+            
+            return symbols
     
     def list_symbols(
         self,
@@ -738,38 +758,41 @@ class SigilIndex:
         Returns:
             List of symbols
         """
-        query = "SELECT s.name, s.kind, s.line, s.signature, s.scope, d.path "
-        query += "FROM symbols s "
-        query += "JOIN documents d ON s.doc_id = d.id "
-        query += "JOIN repos r ON d.repo_id = r.id "
-        query += "WHERE r.name = ?"
-        
-        params = [repo]
-        
-        if file_path:
-            query += " AND d.path = ?"
-            params.append(file_path)
-        
-        if kind:
-            query += " AND s.kind = ?"
-            params.append(kind)
-        
-        query += " ORDER BY d.path, s.line"
-        
-        cursor = self.repos_db.execute(query, params)
-        
-        symbols = []
-        for row in cursor.fetchall():
-            symbols.append(Symbol(
-                name=row[0],
-                kind=row[1],
-                line=row[2],
-                signature=row[3],
-                scope=row[4],
-                file_path=row[5]
-            ))
-        
-        return symbols
+        with self._lock:
+            query = (
+                "SELECT s.name, s.kind, s.line, s.signature, s.scope, d.path "
+                "FROM symbols s "
+                "JOIN documents d ON s.doc_id = d.id "
+                "JOIN repos r ON d.repo_id = r.id "
+                "WHERE r.name = ?"
+            )
+            
+            params = [repo]
+            
+            if file_path:
+                query += " AND d.path = ?"
+                params.append(file_path)
+            
+            if kind:
+                query += " AND s.kind = ?"
+                params.append(kind)
+            
+            query += " ORDER BY d.path, s.line"
+            
+            cursor = self.repos_db.execute(query, params)
+            
+            symbols = []
+            for row in cursor.fetchall():
+                symbols.append(Symbol(
+                    name=row[0],
+                    kind=row[1],
+                    line=row[2],
+                    signature=row[3],
+                    scope=row[4],
+                    file_path=row[5]
+                ))
+            
+            return symbols
     
     def _get_document(self, doc_id: int) -> Optional[dict[str, str]]:
         """Get document metadata."""
@@ -844,87 +867,88 @@ class SigilIndex:
         Returns:
             Statistics about indexing operation
         """
-        if embed_fn is None:
-            embed_fn = self.embed_fn
-        if embed_fn is None:
-            raise RuntimeError("No embedding function configured for SigilIndex")
-        
-        model = model or self.embed_model
-        
-        stats = {
-            "chunks_indexed": 0,
-            "documents_processed": 0,
-        }
-        
-        cur = self.repos_db.cursor()
-        cur.execute("SELECT id FROM repos WHERE name = ?", (repo,))
-        row = cur.fetchone()
-        if not row:
-            raise ValueError(f"Repository {repo!r} not indexed yet")
-        
-        repo_id = row[0]
-        
-        # Optionally wipe old embeddings for this repo + model
-        if force:
-            cur.execute("""
-                DELETE FROM embeddings
-                WHERE doc_id IN (SELECT id FROM documents WHERE repo_id = ?) AND model = ?
-            """, (repo_id, model))
-            self.repos_db.commit()
-        
-        cur.execute(
-            "SELECT id, blob_sha FROM documents WHERE repo_id = ?",
-            (repo_id,)
-        )
-        docs = cur.fetchall()
-        
-        for doc_id, blob_sha in docs:
-            # Skip if already embedded (unless force)
-            if not force:
-                cur2 = self.repos_db.execute(
-                    "SELECT COUNT(*) FROM embeddings WHERE doc_id = ? AND model = ?",
-                    (doc_id, model),
-                )
-                if cur2.fetchone()[0] > 0:
+        with self._lock:
+            if embed_fn is None:
+                embed_fn = self.embed_fn
+            if embed_fn is None:
+                raise RuntimeError("No embedding function configured for SigilIndex")
+            
+            model = model or self.embed_model
+            
+            stats = {
+                "chunks_indexed": 0,
+                "documents_processed": 0,
+            }
+            
+            cur = self.repos_db.cursor()
+            cur.execute("SELECT id FROM repos WHERE name = ?", (repo,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"Repository {repo!r} not indexed yet")
+            
+            repo_id = row[0]
+            
+            # Optionally wipe old embeddings for this repo + model
+            if force:
+                cur.execute("""
+                    DELETE FROM embeddings
+                    WHERE doc_id IN (SELECT id FROM documents WHERE repo_id = ?) AND model = ?
+                """, (repo_id, model))
+                self.repos_db.commit()
+            
+            cur.execute(
+                "SELECT id, blob_sha FROM documents WHERE repo_id = ?",
+                (repo_id,)
+            )
+            docs = cur.fetchall()
+            
+            for doc_id, blob_sha in docs:
+                # Skip if already embedded (unless force)
+                if not force:
+                    cur2 = self.repos_db.execute(
+                        "SELECT COUNT(*) FROM embeddings WHERE doc_id = ? AND model = ?",
+                        (doc_id, model),
+                    )
+                    if cur2.fetchone()[0] > 0:
+                        continue
+                
+                content = self._read_blob(blob_sha)
+                if not content:
                     continue
+                
+                text = content.decode("utf-8", errors="replace")
+                chunks = self._chunk_text(text)
+                if not chunks:
+                    continue
+                
+                texts = [c[3] for c in chunks]
+                vectors = embed_fn(texts)  # np.ndarray (N, dim)
+                dim = int(vectors.shape[1])
+                
+                for (chunk_idx, start_line, end_line, _), vec in zip(chunks, vectors):
+                    self.repos_db.execute("""
+                        INSERT OR REPLACE INTO embeddings
+                        (doc_id, chunk_index, start_line, end_line, model, dim, vector)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        doc_id,
+                        chunk_idx,
+                        start_line,
+                        end_line,
+                        model,
+                        dim,
+                        vec.astype("float32").tobytes(),
+                    ))
+                
+                stats["documents_processed"] += 1
+                stats["chunks_indexed"] += len(chunks)
             
-            content = self._read_blob(blob_sha)
-            if not content:
-                continue
-            
-            text = content.decode("utf-8", errors="replace")
-            chunks = self._chunk_text(text)
-            if not chunks:
-                continue
-            
-            texts = [c[3] for c in chunks]
-            vectors = embed_fn(texts)  # np.ndarray (N, dim)
-            dim = int(vectors.shape[1])
-            
-            for (chunk_idx, start_line, end_line, _), vec in zip(chunks, vectors):
-                self.repos_db.execute("""
-                    INSERT OR REPLACE INTO embeddings
-                    (doc_id, chunk_index, start_line, end_line, model, dim, vector)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    doc_id,
-                    chunk_idx,
-                    start_line,
-                    end_line,
-                    model,
-                    dim,
-                    vec.astype("float32").tobytes(),
-                ))
-            
-            stats["documents_processed"] += 1
-            stats["chunks_indexed"] += len(chunks)
-        
-        self.repos_db.commit()
-        logger.info(
-            f"Built vector index for {repo}: {stats['documents_processed']} documents, "
-            f"{stats['chunks_indexed']} chunks"
-        )
-        return stats
+            self.repos_db.commit()
+            logger.info(
+                f"Built vector index for {repo}: {stats['documents_processed']} documents, "
+                f"{stats['chunks_indexed']} chunks"
+            )
+            return stats
     
     def semantic_search(
         self,
@@ -947,130 +971,132 @@ class SigilIndex:
         Returns:
             List of search results with scores, sorted by relevance
         """
-        if embed_fn is None:
-            embed_fn = self.embed_fn
-        if embed_fn is None:
-            raise RuntimeError("No embedding function configured")
-        
-        model = model or self.embed_model
-        
-        # 1) embed query
-        q_vec = embed_fn([query])[0].astype("float32")
-        q_norm = np.linalg.norm(q_vec) or 1.0
-        q_vec = q_vec / q_norm
-        
-        cur = self.repos_db.cursor()
-        cur.execute("SELECT id FROM repos WHERE name = ?", (repo,))
-        row = cur.fetchone()
-        if not row:
-            raise ValueError(f"Repository {repo!r} not indexed yet")
-        repo_id = row[0]
-        
-        # 2) fetch all embeddings for this repo + model
-        cur.execute("""
-            SELECT e.doc_id, e.chunk_index, e.start_line, e.end_line,
-                   e.dim, e.vector, d.path
-            FROM embeddings e
-            JOIN documents d ON d.id = e.doc_id
-            WHERE d.repo_id = ? AND e.model = ?
-        """, (repo_id, model))
-        
-        rows = cur.fetchall()
-        if not rows:
-            return []
-        
-        # 3) compute cosine similarity in-memory
-        vecs = []
-        meta = []
-        for doc_id, chunk_idx, start_line, end_line, dim, blob, path in rows:
-            v = np.frombuffer(blob, dtype="float32")
-            if v.shape[0] != dim:
-                continue
-            vecs.append(v)
-            meta.append((doc_id, chunk_idx, start_line, end_line, path))
-        
-        if not vecs:
-            return []
-        
-        mat = np.stack(vecs, axis=0)
-        norms = np.linalg.norm(mat, axis=1)
-        norms[norms == 0] = 1.0
-        mat = mat / norms[:, None]
-        
-        scores = mat @ q_vec
-        top_idx = np.argsort(scores)[::-1][:k]
-        
-        # 4) map back to repo/path/lines
-        results = []
-        for idx in top_idx:
-            score = float(scores[idx])
-            doc_id, chunk_idx, start_line, end_line, path = meta[idx]
-            doc = self._get_document(doc_id)
-            results.append({
-                "repo": doc["repo_name"],
-                "path": path,
-                "start_line": start_line,
-                "end_line": end_line,
-                "score": score,
-                "doc_id": f"{doc['repo_name']}::{path}",
-            })
-        
-        return results
+        with self._lock:
+            if embed_fn is None:
+                embed_fn = self.embed_fn
+            if embed_fn is None:
+                raise RuntimeError("No embedding function configured")
+            
+            model = model or self.embed_model
+            
+            # 1) embed query
+            q_vec = embed_fn([query])[0].astype("float32")
+            q_norm = np.linalg.norm(q_vec) or 1.0
+            q_vec = q_vec / q_norm
+            
+            cur = self.repos_db.cursor()
+            cur.execute("SELECT id FROM repos WHERE name = ?", (repo,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"Repository {repo!r} not indexed yet")
+            repo_id = row[0]
+            
+            # 2) fetch all embeddings for this repo + model
+            cur.execute("""
+                SELECT e.doc_id, e.chunk_index, e.start_line, e.end_line,
+                       e.dim, e.vector, d.path
+                FROM embeddings e
+                JOIN documents d ON d.id = e.doc_id
+                WHERE d.repo_id = ? AND e.model = ?
+            """, (repo_id, model))
+            
+            rows = cur.fetchall()
+            if not rows:
+                return []
+            
+            # 3) compute cosine similarity in-memory
+            vecs = []
+            meta = []
+            for doc_id, chunk_idx, start_line, end_line, dim, blob, path in rows:
+                v = np.frombuffer(blob, dtype="float32")
+                if v.shape[0] != dim:
+                    continue
+                vecs.append(v)
+                meta.append((doc_id, chunk_idx, start_line, end_line, path))
+            
+            if not vecs:
+                return []
+            
+            mat = np.stack(vecs, axis=0)
+            norms = np.linalg.norm(mat, axis=1)
+            norms[norms == 0] = 1.0
+            mat = mat / norms[:, None]
+            
+            scores = mat @ q_vec
+            top_idx = np.argsort(scores)[::-1][:k]
+            
+            # 4) map back to repo/path/lines
+            results = []
+            for idx in top_idx:
+                score = float(scores[idx])
+                doc_id, chunk_idx, start_line, end_line, path = meta[idx]
+                doc = self._get_document(doc_id)
+                results.append({
+                    "repo": doc["repo_name"],
+                    "path": path,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "score": score,
+                    "doc_id": f"{doc['repo_name']}::{path}",
+                })
+            
+            return results
     
     def get_index_stats(self, repo: Optional[str] = None) -> dict[str, int | str]:
         """Get statistics about the index."""
-        cursor = self.repos_db.cursor()
-        
-        if repo:
-            cursor.execute("SELECT id FROM repos WHERE name = ?", (repo,))
-            row = cursor.fetchone()
-            if not row:
-                return {"error": "Repository not found"}
-            repo_id = row[0]
+        with self._lock:
+            cursor = self.repos_db.cursor()
             
-            cursor.execute(
-                "SELECT COUNT(*) FROM documents WHERE repo_id = ?",
-                (repo_id,)
-            )
-            doc_count = cursor.fetchone()[0]
-            
-            cursor.execute(
-                "SELECT COUNT(*) FROM symbols WHERE doc_id IN "
-                "(SELECT id FROM documents WHERE repo_id = ?)",
-                (repo_id,)
-            )
-            symbol_count = cursor.fetchone()[0]
-            
-            cursor.execute(
-                "SELECT indexed_at FROM repos WHERE id = ?",
-                (repo_id,)
-            )
-            indexed_at = cursor.fetchone()[0]
-            
-            return {
-                "repo": repo,
-                "documents": doc_count,
-                "symbols": symbol_count,
-                "indexed_at": indexed_at
-            }
-        else:
-            cursor.execute("SELECT COUNT(*) FROM repos")
-            repo_count = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT COUNT(*) FROM documents")
-            doc_count = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT COUNT(*) FROM symbols")
-            symbol_count = cursor.fetchone()[0]
-            
-            # Query trigrams from the trigrams database
-            tri_cursor = self.trigrams_db.cursor()
-            tri_cursor.execute("SELECT COUNT(*) FROM trigrams")
-            trigram_count = tri_cursor.fetchone()[0]
-            
-            return {
-                "repositories": repo_count,
-                "documents": doc_count,
-                "symbols": symbol_count,
-                "trigrams": trigram_count
-            }
+            if repo:
+                cursor.execute("SELECT id FROM repos WHERE name = ?", (repo,))
+                row = cursor.fetchone()
+                if not row:
+                    return {"error": "Repository not found"}
+                repo_id = row[0]
+                
+                cursor.execute(
+                    "SELECT COUNT(*) FROM documents WHERE repo_id = ?",
+                    (repo_id,)
+                )
+                doc_count = cursor.fetchone()[0]
+                
+                cursor.execute(
+                    "SELECT COUNT(*) FROM symbols WHERE doc_id IN "
+                    "(SELECT id FROM documents WHERE repo_id = ?)",
+                    (repo_id,)
+                )
+                symbol_count = cursor.fetchone()[0]
+                
+                cursor.execute(
+                    "SELECT indexed_at FROM repos WHERE id = ?",
+                    (repo_id,)
+                )
+                indexed_at = cursor.fetchone()[0]
+                
+                return {
+                    "repo": repo,
+                    "documents": doc_count,
+                    "symbols": symbol_count,
+                    "indexed_at": indexed_at
+                }
+            else:
+                cursor.execute("SELECT COUNT(*) FROM repos")
+                repo_count = cursor.fetchone()[0]
+                
+                cursor.execute("SELECT COUNT(*) FROM documents")
+                doc_count = cursor.fetchone()[0]
+                
+                cursor.execute("SELECT COUNT(*) FROM symbols")
+                symbol_count = cursor.fetchone()[0]
+                
+                # Query trigrams from the trigrams database
+                tri_cursor = self.trigrams_db.cursor()
+                tri_cursor.execute("SELECT COUNT(*) FROM trigrams")
+                trigram_count = tri_cursor.fetchone()[0]
+                
+                return {
+                    "repositories": repo_count,
+                    "documents": doc_count,
+                    "symbols": symbol_count,
+                    "trigrams": trigram_count
+                }
