@@ -68,7 +68,7 @@ The function takes a list of text strings and returns a numpy array of shape `(N
 
 ```python
 from pathlib import Path
-from indexer import SigilIndex
+from sigil_mcp.indexer import SigilIndex
 import numpy as np
 
 # Option A: Dummy function for testing
