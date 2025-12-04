@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - File watcher now fully respects `watch.ignore_dirs` and `watch.ignore_extensions` from configuration when deciding which files to index, replacing previous hardcoded ignore sets and improving alignment with ADR-007/ADR-008.
 - Added `SigilIndex.remove_file` API and wired it into the file watcher so that deleted files are proactively removed from documents, symbols, embeddings, trigrams, and blob storage without requiring a full index rebuild.
+- `semantic_search` MCP tool now returns a structured error when embeddings are not configured instead of crashing the server process.
 
 ## [0.3.1] - 2025-01-03
 

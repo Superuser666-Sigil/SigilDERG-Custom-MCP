@@ -1879,15 +1879,47 @@ def semantic_search(
     _ensure_repos_configured()
     
     index = _get_index()
-    matches = index.semantic_search(
-        query=query,
-        repo=repo,
-        k=k,
-        embed_fn=index.embed_fn,
-        model=model,
-    )
+
+    # If embeddings are not configured, fail gracefully instead of crashing
+    if index.embed_fn is None:
+        logger.warning(
+            "semantic_search called but embeddings are not configured "
+            "(embeddings_enabled=%r, embed_model=%r)",
+            getattr(config, "embeddings_enabled", None),
+            getattr(index, "embed_model", None),
+        )
+        return {
+            "status": "error",
+            "error": (
+                "Semantic search is not available because embeddings are not "
+                "configured on the server. See docs/EMBEDDING_SETUP.md."
+            ),
+        }
+
+    # Map the default sentinel to the index's configured model, if any
+    effective_model = None if model == "default" else model
+
+    try:
+        matches = index.semantic_search(
+            query=query,
+            repo=repo,
+            k=k,
+            embed_fn=index.embed_fn,
+            model=effective_model,
+        )
+    except Exception as exc:  # pragma: no cover - defensive catch for MCP stability
+        logger.exception("semantic_search failed: %s", exc)
+        return {
+            "status": "error",
+            "error": f"semantic_search failed: {exc}",
+        }
     
-    return {"matches": matches}
+    return {
+        "status": "completed",
+        "repo": repo,
+        "model": effective_model or index.embed_model,
+        "matches": matches,
+    }
 
 
 def main():
