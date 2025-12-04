@@ -48,8 +48,8 @@ self.trigrams_db.execute("PRAGMA synchronous=NORMAL;")
 self.trigrams_db.execute("PRAGMA busy_timeout=5000;")
 ```
 
-**WAL Mode Benefits:**
-- Multiple readers can operate concurrently without blocking
+**WAL Mode Benefits (at SQLite level):**
+- Multiple readers can operate concurrently without blocking (if they could access connection)
 - Writers don't block readers (readers see last committed state)
 - Better concurrency than default rollback journal
 - Creates separate `-wal` and `-shm` files alongside database
@@ -57,6 +57,9 @@ self.trigrams_db.execute("PRAGMA busy_timeout=5000;")
 **PRAGMA Configuration:**
 - `synchronous=NORMAL`: Balance between durability and performance (acceptable for local index)
 - `busy_timeout=5000`: Wait up to 5 seconds for locks before failing (handles transient contention)
+
+**Important Reality Check:**
+WAL mode provides concurrent read capability *at the database level*, but our RLock serialization (below) means all operations are serialized *at the Python layer*. This means in practice, reads will block on long writes even though SQLite could handle them concurrently. This is a deliberate simplicity tradeoff - see "Concurrency Reality" section below.
 
 ### 2. Global RLock for Connection Serialization
 
@@ -103,6 +106,42 @@ def search_code(self, query, repo=None, max_results=50):
 - **No Connection Pool**: Serialization via RLock makes pooling unnecessary
 - **check_same_thread=False**: Required for cross-thread usage (safe with locking)
 
+### 5. Concurrency Reality
+
+**What WAL Mode Provides:**
+SQLite with WAL mode can handle multiple concurrent readers and one writer simultaneously. A long write operation won't block read queries.
+
+**What RLock Serialization Does:**
+Our implementation wraps all public methods with a single `RLock`, which serializes all database access at the Python layer *before* it reaches SQLite.
+
+**Practical Impact:**
+```python
+# Thread 1: Long write operation
+with self._lock:
+    index.index_repository(...)  # Takes 10 seconds
+
+# Thread 2: Quick read query (waits for Thread 1)
+with self._lock:  # Blocks here until Thread 1 releases lock
+    index.search_code(...)  # Can't proceed even though WAL could handle it
+```
+
+**Why This Tradeoff?**
+- **Simplicity**: Single lock is trivial to reason about, no deadlock risk
+- **Correctness**: Impossible to have race conditions with full serialization
+- **Performance**: Most operations complete in milliseconds; lock contention is rare
+- **Current Scale**: Adequate for typical usage (few concurrent requests)
+- **SQLite Limitation**: Only one writer at a time anyway (serialization unavoidable)
+
+**When You'd Need True Concurrent Reads:**
+- High-traffic server with many simultaneous search requests
+- Long-running write operations blocking latency-sensitive reads
+- Multiple readers querying different databases simultaneously
+
+**How to Achieve True Concurrency (Future):**
+- Connection-per-thread pattern (thread-local storage)
+- Read-write lock separation (shared lock for reads, exclusive for writes)
+- Separate locks for `repos_db` vs `trigrams_db`
+
 ## Alternatives Considered
 
 ### 1. Connection-Per-Thread Pattern
@@ -110,11 +149,12 @@ def search_code(self, query, repo=None, max_results=50):
 Create separate SQLite connections for each thread using thread-local storage.
 
 **Rejected because:**
-- WAL mode already enables concurrent reads without separate connections
+- Current approach already serializes all access; connection-per-thread wouldn't improve concurrency without also changing locking strategy
 - Connection proliferation wastes memory (each connection has its own page cache)
 - More complex lifecycle management (thread creation/destruction)
 - Doesn't solve writer contention (only one writer at a time regardless)
-- Lock-based serialization simpler and proven effective
+- Would need read-write lock separation to actually benefit from multiple connections
+- Lock-based serialization simpler and proven effective for current scale
 
 ### 2. Connection Pooling
 
@@ -122,21 +162,24 @@ Use a connection pool (e.g., SQLAlchemy) to manage multiple connections.
 
 **Rejected because:**
 - Adds heavy dependency for minimal benefit
-- Pool complexity unnecessary when RLock provides adequate serialization
+- Pool complexity unnecessary when RLock already provides full serialization
 - SQLite write operations are serialized at OS level anyway (file locking)
+- Wouldn't improve concurrency without changing locking strategy (same RLock bottleneck)
+- Single connection with lock has lower overhead
 - WAL mode's concurrent read support doesn't require pool
 - Single connection with lock has lower overhead
 
 ### 3. Read-Write Lock Separation
 
-Use separate read lock and write lock (threading.RWLock pattern).
+Use separate read lock and write lock (threading.RWLock pattern) to allow concurrent reads.
 
-**Rejected because:**
-- WAL mode already provides reader-writer separation at database level
-- Complex to implement correctly (prevent writer starvation)
-- Marginal performance gain vs implementation complexity
-- RLock simpler and sufficient for our access patterns
-- Most operations complete in milliseconds, lock contention rare
+**Rejected for v1 because:**
+- Adds significant implementation complexity (multiple lock types, careful ordering)
+- Risk of writer starvation or reader starvation if not balanced correctly
+- Debugging difficulty (deadlock potential with complex lock interactions)
+- Current serialized approach is adequate for typical load
+- Most operations complete in milliseconds; lock contention is rare
+- **May revisit**: If profiling shows read lock contention is a bottleneck, this would be the next evolution
 
 ### 4. Lock-Free Concurrent Data Structures
 
@@ -154,20 +197,22 @@ Use lock-free queues and atomic operations for coordination.
 ### Positive
 
 1. **Eliminates Database Locked Errors**: RLock serialization prevents concurrent connection access
-2. **Concurrent Reads**: WAL mode allows multiple search operations simultaneously
-3. **File Watcher Safety**: Background indexing doesn't block searches (readers see old state)
+2. **Simple Mental Model**: All operations are serialized - easy to reason about correctness
+3. **File Watcher Safety**: Background indexing doesn't corrupt data or cause conflicts
 4. **Simple Implementation**: Single RLock, wrap public methods, done
 5. **Zero Breaking Changes**: API remains identical, thread safety is transparent
 6. **Minimal Performance Impact**: Lock operations are nanoseconds, database I/O dominates
-7. **Production Ready**: WAL mode is well-tested and widely used in SQLite applications
+7. **Production Ready**: Proven pattern, no race conditions possible
+8. **WAL Mode Foundation**: Enables future concurrent read optimization without changing SQLite setup
 
 ### Negative
 
-1. **Extra Files**: WAL mode creates `-wal` and `-shm` files (cleaned up on checkpoint)
-2. **Disk Space**: WAL file can grow between checkpoints (auto-checkpoint at 1000 pages by default)
-3. **Serialized Writes**: Only one write operation at a time (inherent SQLite limitation)
-4. **Network Filesystems**: WAL mode requires proper file locking (not all network FS support it)
-5. **Slightly More Disk I/O**: WAL mode does more writes than rollback journal
+1. **Serialized Operations**: All operations queue behind a single lock (no concurrent reads in practice)
+2. **Long Write Blocking**: Repository indexing (10s) blocks quick searches (10ms)
+3. **Extra Files**: WAL mode creates `-wal` and `-shm` files (cleaned up on checkpoint)
+4. **Disk Space**: WAL file can grow between checkpoints (auto-checkpoint at 1000 pages by default)
+5. **Network Filesystems**: WAL mode requires proper file locking (not all network FS support it)
+6. **Underutilized WAL**: WAL's concurrent read capability not exploited with current locking
 
 ### Neutral
 
@@ -179,10 +224,11 @@ Use lock-free queues and atomic operations for coordination.
 
 ### WAL Mode Characteristics
 
-**Concurrent Read Performance:**
+**Concurrent Read Performance (Potential):**
 ```
 Without WAL: Readers block on writers (SHARED lock conflict)
-With WAL:    Readers see last committed state, never block on writers
+With WAL:    Readers *could* see last committed state without blocking
+             (but current RLock serializes access before reaching SQLite)
 ```
 
 **Write Performance:**
@@ -198,16 +244,23 @@ With WAL:    Writes append to WAL file, periodically checkpoint to main DB
 
 ### Lock Contention Analysis
 
-**Typical Hold Times:**
+**Typical Hold Times (with RLock serialization):**
 - `search_code()`: 10-50ms (trigram intersection + file reads)
 - `find_symbol()`: 1-5ms (simple indexed lookup)
 - `index_file()`: 50-200ms (single file: read + parse + symbol extraction + trigrams)
 - `build_vector_index()`: 1-10s (embedding generation, but batched)
 
-**Contention Risk:**
-- Low: Most operations complete in milliseconds
-- Medium: Vector indexing holds lock for seconds (but rare operation)
-- Mitigation: WAL mode allows reads during writes, search operations never block
+**Actual Contention Behavior:**
+- **Low Load**: Single operations complete quickly, no contention
+- **Concurrent Searches**: Queue behind RLock, execute sequentially (each 10-50ms)
+- **Search During Indexing**: Searches wait for full indexing operation to complete
+- **Practical Impact**: Acceptable for typical usage (few concurrent users, infrequent indexing)
+
+**Why This Is Adequate:**
+- Most workloads are read-heavy with infrequent writes
+- Individual operations are fast (milliseconds)
+- Background indexing happens infrequently
+- Correctness and simplicity outweigh marginal throughput gains
 
 ### Thread Safety Testing
 
@@ -219,11 +272,36 @@ Tests verify:
 
 ## Future Improvements
 
-1. **Finer-Grained Locking**: Separate locks for repos_db vs trigrams_db (if contention observed)
-2. **WAL Checkpoint Tuning**: Adjust checkpoint thresholds based on index size
-3. **Lock Monitoring**: Expose lock hold times and contention metrics
-4. **Async I/O Integration**: Use async SQLite driver (e.g., aiosqlite) for better concurrency in async contexts
-5. **Optimistic Locking**: Try reads without lock, retry if write detected (for extremely read-heavy workloads)
+1. **Read-Write Lock Pattern**: Implement shared/exclusive locking to enable true concurrent reads
+   - Shared lock for read operations (multiple readers allowed)
+   - Exclusive lock for write operations (blocks all others)
+   - Would fully utilize WAL mode's concurrent read capability
+   - Requires careful implementation to avoid deadlocks and starvation
+
+2. **Connection-Per-Thread**: Thread-local connections for parallel read access
+   - Each thread gets its own connection
+   - Coordinate writes through separate queue or exclusive lock
+   - Better utilization of multi-core systems
+   - Higher memory usage (page cache per connection)
+
+3. **Separate Database Locks**: Split `repos_db` and `trigrams_db` locks
+   - Allow symbol search while trigram search runs
+   - Reduces contention when operations touch different databases
+   - Simple incremental improvement
+
+4. **Lock Monitoring**: Expose lock hold times and contention metrics
+   - Track wait times, hold times, contention frequency
+   - Help identify performance bottlenecks
+   - Guide future optimization decisions
+
+5. **Async I/O Integration**: Use async SQLite driver (e.g., aiosqlite)
+   - Better concurrency in async contexts
+   - Non-blocking I/O for embedding operations
+   - Requires async/await refactoring
+
+6. **WAL Checkpoint Tuning**: Adjust checkpoint thresholds based on index size
+   - Larger indexes may benefit from less frequent checkpoints
+   - Balance between WAL size and checkpoint overhead
 
 ## References
 
