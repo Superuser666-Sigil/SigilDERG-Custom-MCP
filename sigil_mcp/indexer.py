@@ -1143,13 +1143,16 @@ class SigilIndex:
 
                 doc_id, blob_sha = row
 
-                # Load content for trigram cleanup (optional but ideal)
+                # Load content for trigram cleanup (optional but ideal).
+                # If the blob is missing or unreadable, we still must ensure that
+                # trigram postings do not retain this doc_id, even if it requires
+                # a slower full-table scan as a fallback.
                 content = self._read_blob(blob_sha)
                 if content is not None:
                     text = content.decode("utf-8", errors="replace").lower()
                     trigrams = self._extract_trigrams(text)
                 else:
-                    trigrams = set()
+                    trigrams = None
 
                 # Delete symbols and embeddings for this doc
                 self.repos_db.execute(
@@ -1162,19 +1165,54 @@ class SigilIndex:
                 )
 
                 # Update trigram index to drop this doc_id
-                if trigrams:
-                    for gram in trigrams:
-                        tri_cursor = self.trigrams_db.execute(
-                            "SELECT doc_ids FROM trigrams WHERE gram = ?",
-                            (gram,),
-                        )
-                        tri_row = tri_cursor.fetchone()
-                        if not tri_row:
-                            continue
+                if trigrams is not None:
+                    # Fast path: we know exactly which trigrams belonged to this document.
+                    if trigrams:
+                        for gram in trigrams:
+                            tri_cursor = self.trigrams_db.execute(
+                                "SELECT doc_ids FROM trigrams WHERE gram = ?",
+                                (gram,),
+                            )
+                            tri_row = tri_cursor.fetchone()
+                            if not tri_row:
+                                continue
 
+                            existing_ids = {
+                                int(x)
+                                for x in zlib.decompress(tri_row[0]).decode().split(",")
+                                if x
+                            }
+                            if doc_id not in existing_ids:
+                                continue
+
+                            existing_ids.remove(doc_id)
+                            if not existing_ids:
+                                # No docs left for this trigram – drop it
+                                self.trigrams_db.execute(
+                                    "DELETE FROM trigrams WHERE gram = ?",
+                                    (gram,),
+                                )
+                            else:
+                                compressed = zlib.compress(
+                                    ",".join(str(x) for x in sorted(existing_ids)).encode()
+                                )
+                                self.trigrams_db.execute(
+                                    "INSERT OR REPLACE INTO trigrams (gram, doc_ids) "
+                                    "VALUES (?, ?)",
+                                    (gram, compressed),
+                                )
+                else:
+                    # Slow fallback: blob was missing/unreadable, so we don't know which
+                    # trigrams were associated with this document. Scan all postings and
+                    # strip this doc_id anywhere it appears to avoid orphaned references.
+                    tri_cursor = self.trigrams_db.execute(
+                        "SELECT gram, doc_ids FROM trigrams"
+                    )
+                    rows = tri_cursor.fetchall()
+                    for gram, blob in rows:
                         existing_ids = {
                             int(x)
-                            for x in zlib.decompress(tri_row[0]).decode().split(",")
+                            for x in zlib.decompress(blob).decode().split(",")
                             if x
                         }
                         if doc_id not in existing_ids:
@@ -1182,7 +1220,6 @@ class SigilIndex:
 
                         existing_ids.remove(doc_id)
                         if not existing_ids:
-                            # No docs left for this trigram – drop it
                             self.trigrams_db.execute(
                                 "DELETE FROM trigrams WHERE gram = ?",
                                 (gram,),

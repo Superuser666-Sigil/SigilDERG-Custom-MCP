@@ -299,6 +299,51 @@ class TestRemoveFile:
                 }
                 assert doc_id not in ids
 
+    def test_remove_file_with_missing_blob_still_cleans_trigrams(
+        self,
+        indexed_repo,
+        test_repo_path,
+    ):
+        """If the blob is missing, remove_file should still strip trigram postings."""
+        import zlib
+
+        index = indexed_repo["index"]
+        repo_name = indexed_repo["repo_name"]
+
+        target_file = test_repo_path / "main.py"
+        rel_path = target_file.relative_to(test_repo_path).as_posix()
+
+        cursor = index.repos_db.cursor()
+        cursor.execute("SELECT id, blob_sha FROM documents WHERE path = ?", (rel_path,))
+        row = cursor.fetchone()
+        assert row is not None
+        doc_id, blob_sha = row
+
+        # Simulate a missing/corrupted blob on disk
+        blob_file = (
+            index.index_path
+            / "blobs"
+            / blob_sha[:2]
+            / blob_sha[2:]
+        )
+        if blob_file.exists():
+            blob_file.unlink()
+
+        # Removing the file should still succeed
+        removed = index.remove_file(repo_name, test_repo_path, target_file)
+        assert removed is True
+
+        # And no trigram postings should reference this doc_id anymore
+        tri_cursor = index.trigrams_db.cursor()
+        tri_cursor.execute("SELECT doc_ids FROM trigrams")
+        for (blob,) in tri_cursor.fetchall():
+            ids = {
+                int(x)
+                for x in zlib.decompress(blob).decode().split(",")
+                if x
+            }
+            assert doc_id not in ids
+
 
 class TestEmbeddingDimensions:
     """Test handling of different embedding dimensions."""
