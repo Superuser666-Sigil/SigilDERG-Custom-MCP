@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added `test_client.py` script for end-to-end testing of indexing, search, and embeddings from the command line.
+- Added `rebuild_indexes.py` maintenance script to completely wipe and rebuild all indexes (documents, symbols, trigrams, and embeddings) across all configured repositories.
+
 ### Changed
 - Improved CONTRIBUTING.md with clearer dual-licensing strategy
   - Added upfront "who this is for" statement
@@ -16,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added "For Companies" section
 - Enhanced CODE_OF_CONDUCT.md with explicit scope clarification
 - Added comprehensive Licensing FAQ to README.md covering company use, AGPL policies, CLA rationale, and commercial licensing
+
+### Fixed
+- File watcher now fully respects `watch.ignore_dirs` and `watch.ignore_extensions` from configuration when deciding which files to index, replacing previous hardcoded ignore sets and improving alignment with ADR-007/ADR-008.
+- Added `SigilIndex.remove_file` API and wired it into the file watcher so that deleted files are proactively removed from documents, symbols, embeddings, trigrams, and blob storage without requiring a full index rebuild.
 
 ## [0.3.1] - 2025-01-03
 

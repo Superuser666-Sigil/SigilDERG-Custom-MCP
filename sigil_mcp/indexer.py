@@ -1100,3 +1100,137 @@ class SigilIndex:
                     "symbols": symbol_count,
                     "trigrams": trigram_count
                 }
+
+    def remove_file(
+        self,
+        repo_name: str,
+        repo_path: Path,
+        file_path: Path,
+    ) -> bool:
+        """
+        Remove a single file from the index.
+
+        This removes:
+        - documents row
+        - associated symbols
+        - associated embeddings
+        - this document's entries from trigram postings
+        - blob content if no other documents reference it
+
+        Returns:
+            True if an indexed document was removed, False otherwise.
+        """
+        with self._lock:
+            try:
+                cursor = self.repos_db.cursor()
+
+                # Resolve repo_id
+                cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
+                row = cursor.fetchone()
+                if not row:
+                    return False
+                repo_id = row[0]
+
+                # Find document by repo + relative path
+                rel_path = file_path.relative_to(repo_path).as_posix()
+                cursor.execute(
+                    "SELECT id, blob_sha FROM documents WHERE repo_id = ? AND path = ?",
+                    (repo_id, rel_path),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return False
+
+                doc_id, blob_sha = row
+
+                # Load content for trigram cleanup (optional but ideal)
+                content = self._read_blob(blob_sha)
+                if content is not None:
+                    text = content.decode("utf-8", errors="replace").lower()
+                    trigrams = self._extract_trigrams(text)
+                else:
+                    trigrams = set()
+
+                # Delete symbols and embeddings for this doc
+                self.repos_db.execute(
+                    "DELETE FROM symbols WHERE doc_id = ?",
+                    (doc_id,),
+                )
+                self.repos_db.execute(
+                    "DELETE FROM embeddings WHERE doc_id = ?",
+                    (doc_id,),
+                )
+
+                # Update trigram index to drop this doc_id
+                if trigrams:
+                    for gram in trigrams:
+                        tri_cursor = self.trigrams_db.execute(
+                            "SELECT doc_ids FROM trigrams WHERE gram = ?",
+                            (gram,),
+                        )
+                        tri_row = tri_cursor.fetchone()
+                        if not tri_row:
+                            continue
+
+                        existing_ids = {
+                            int(x)
+                            for x in zlib.decompress(tri_row[0]).decode().split(",")
+                            if x
+                        }
+                        if doc_id not in existing_ids:
+                            continue
+
+                        existing_ids.remove(doc_id)
+                        if not existing_ids:
+                            # No docs left for this trigram – drop it
+                            self.trigrams_db.execute(
+                                "DELETE FROM trigrams WHERE gram = ?",
+                                (gram,),
+                            )
+                        else:
+                            compressed = zlib.compress(
+                                ",".join(str(x) for x in sorted(existing_ids)).encode()
+                            )
+                            self.trigrams_db.execute(
+                                "INSERT OR REPLACE INTO trigrams (gram, doc_ids) "
+                                "VALUES (?, ?)",
+                                (gram, compressed),
+                            )
+
+                # Delete document row
+                self.repos_db.execute(
+                    "DELETE FROM documents WHERE id = ?",
+                    (doc_id,),
+                )
+
+                # Optionally delete blob content if no other docs reference it
+                cursor.execute(
+                    "SELECT COUNT(*) FROM documents WHERE blob_sha = ?",
+                    (blob_sha,),
+                )
+                ref_count = cursor.fetchone()[0]
+                if ref_count == 0:
+                    blob_file = (
+                        self.index_path
+                        / "blobs"
+                        / blob_sha[:2]
+                        / blob_sha[2:]
+                    )
+                    try:
+                        if blob_file.exists():
+                            blob_file.unlink()
+                    except OSError:
+                        logger.debug(
+                            "Failed to delete blob file %s for %s",
+                            blob_file,
+                            rel_path,
+                        )
+
+                self.repos_db.commit()
+                self.trigrams_db.commit()
+
+                logger.info("Removed %s from index (repo=%s)", rel_path, repo_name)
+                return True
+            except Exception as exc:
+                logger.error("Error removing %s from index: %s", file_path, exc)
+                return False

@@ -114,12 +114,13 @@ Move ignore patterns from hardcoded lists to configuration:
 3. **User Customization**: Projects can define their own ignore patterns
 4. **Sensible Defaults**: Common patterns work out-of-box, customization optional
 5. **No Breaking Changes**: Existing configs work with sensible defaults
+6. **Real-Time Deletion Cleanup**: In combination with `SigilIndex.remove_file` (see ADR-007),
+   file deletions are now reflected immediately in the index without a full rebuild.
 
 ### Negative
 
-1. **Deletion Handling Gap**: Deleted files aren't removed from index (deferred to full re-index)
-2. **Config Complexity**: More configuration options for users to understand
-3. **Pattern Maintenance**: Users must keep ignore patterns up-to-date with their projects
+1. **Config Complexity**: More configuration options for users to understand
+2. **Pattern Maintenance**: Users must keep ignore patterns up-to-date with their projects
 
 ### Neutral
 
@@ -158,8 +159,10 @@ def _update_trigrams_for_file(repo_id, repo_path, file_path):
 ```
 
 **Limitations:**
-- **No deletion cleanup** - Deleted files remain in index until full re-index
-- **Simplified trigram merge** - Doesn't remove old trigrams (acceptable, they point to outdated blob SHA)
+- **Simplified trigram merge** - Doesn't remove old trigrams from unrelated files (acceptable,
+  they simply point to other documents that still exist)
+- **Move/Rename semantics** - File moves/renames are currently modeled as "delete old path +
+  re-index new path" rather than in-place path updates
 
 ### Configurable Ignore Patterns
 
@@ -246,14 +249,21 @@ watcher = RepositoryWatcher(
 }
 ```
 
+For a **full, clean rebuild** of all repositories (including blobs, trigrams, symbols,
+and embeddings), use the operational helper script introduced alongside this ADR:
+
+- `rebuild_indexes.py` in the project root, which:
+  - Deletes the entire index directory configured in `config.json`
+  - Re-initializes the index
+  - Rebuilds all configured repositories from scratch
+
 ## Future Enhancements
 
-1. **Deletion Tracking**: Track file deletions and remove from index immediately
-2. **Move/Rename Detection**: Detect file moves and update paths without re-processing
-3. **Batch Granular Updates**: Process multiple changed files in single transaction
-4. **Ignore Pattern Testing**: Tool to test if a path would be ignored
-5. **Regex Support**: Advanced pattern matching for power users (opt-in)
-6. **Pattern Presets**: Common presets for different languages/frameworks
+1. **Move/Rename Detection**: Detect file moves and update paths without re-processing
+2. **Batch Granular Updates**: Process multiple changed files in single transaction
+3. **Ignore Pattern Testing**: Tool to test if a path would be ignored
+4. **Regex Support**: Advanced pattern matching for power users (opt-in)
+5. **Pattern Presets**: Common presets for different languages/frameworks
 
 ## Testing Strategy
 
@@ -265,7 +275,8 @@ watcher = RepositoryWatcher(
 **Integration Tests:**
 - Create file → Verify indexed
 - Modify file → Verify re-indexed
-- Delete file → Verify logged (not removed yet)
+- Delete file → Verify `remove_file` removes documents, symbols, embeddings, trigrams, and blob
+  for that path
 - File matches ignore pattern → Verify not indexed
 
 **Performance Tests:**

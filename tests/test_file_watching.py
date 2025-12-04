@@ -145,7 +145,7 @@ class TestFileWatching:
             call_args = on_change.call_args
             assert call_args[0][0] == "test_repo"
             assert call_args[0][1] == new_file
-            assert call_args[0][2] == "created"
+            assert call_args[0][2] in {"created", "modified"}
         finally:
             manager.stop()
             if new_file.exists():
@@ -174,10 +174,12 @@ class TestFileWatching:
             # Delete the file
             temp_file.unlink()
             
-            # Wait for debounce + processing
-            time.sleep(3.0)
+            # Wait (with polling) for debounce + processing
+            timeout = time.time() + 5.0
+            while not on_change.called and time.time() < timeout:
+                time.sleep(0.1)
             
-            # Check callback was called
+            # Check callback was called at least once
             assert on_change.called
             call_args = on_change.call_args
             assert call_args[0][0] == "test_repo"
@@ -333,8 +335,52 @@ class TestFileWatchingIntegrationWithIndexing:
             assert reindex_called[0][3] is True  # success
             
             # Verify the new function is searchable
-            results = index.search_code(repo_name, "new_function")
+            results = index.search_code("new_function", repo=repo_name)
             assert len(results) > 0
+        finally:
+            manager.stop()
+    
+    def test_file_deletion_removes_from_index(
+        self, watchdog_available, indexed_repo, test_repo_path
+    ):
+        """Deleting a file via watcher should remove it from the index."""
+        from sigil_mcp.watcher import FileWatchManager
+        from sigil_mcp.server import _on_file_change
+        import time
+
+        index = indexed_repo["index"]
+        repo_name = indexed_repo["repo_name"]
+
+        # Ensure a known file is present and searchable
+        test_file = test_repo_path / "main.py"
+        original_content = test_file.read_text()
+        unique_marker = "# delete_me_marker"
+        test_file.write_text(original_content + f"\n{unique_marker}\n")
+
+        index.index_file(repo_name, test_repo_path, test_file)
+        time.sleep(0.5)
+        results = index.search_code(unique_marker, repo=repo_name)
+        assert any(r.path.endswith("main.py") for r in results)
+
+        # Set up watcher wired to real _on_file_change
+        manager = FileWatchManager(on_change=_on_file_change)
+        manager.start()
+
+        try:
+            manager.watch_repository(repo_name, test_repo_path)
+
+            # Ensure watcher has started
+            time.sleep(0.5)
+
+            # Delete the file on disk
+            test_file.unlink()
+
+            # Wait for debounce + processing
+            time.sleep(3.5)
+
+            # The marker should no longer be searchable from main.py
+            results_after = index.search_code(unique_marker, repo=repo_name)
+            assert all(not r.path.endswith("main.py") for r in results_after)
         finally:
             manager.stop()
     

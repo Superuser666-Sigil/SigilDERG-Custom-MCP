@@ -437,12 +437,33 @@ No special configuration needed - thread safety is automatic.
 ### Index Cleanup
 
 ```bash
-# Remove index directory (requires rebuild)
+# Remove index directory (requires rebuild). This is destructive.
 rm -rf ~/.sigil_index
 
-# Or specify in config
+# Or specify a custom index path
 rm -rf /path/to/custom/index
 ```
+
+### Full Index Rebuild (Fresh Start)
+
+For a **100% fresh setup** (all repositories, all blobs, trigrams, symbols, and embeddings):
+
+```bash
+# From the project root, use the helper script
+python rebuild_indexes.py
+```
+
+This script:
+
+- Deletes the entire index directory (default `~/.sigil_index`, or `index.path` from `config.json`)
+- Recreates the index
+- Rebuilds all repositories defined in your current configuration
+
+Use this when:
+
+- You suspect index corruption and want a clean slate
+- You have changed low-level indexing behavior and want all data regenerated
+- You want to ensure no stale documents, trigrams, or vectors remain
 
 ### Index Backup
 
@@ -609,6 +630,10 @@ echo "# test" >> /path/to/project/test.py
 # Expected:
 # File modified: test.py in my_project
 # Re-indexed test.py after modified
+#
+# If you delete a file:
+#   File deleted: test.py in my_project
+#   Removed deleted file /path/to/project/test.py from index for repo my_project
 ```
 
 ### Disabling File Watching

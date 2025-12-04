@@ -360,9 +360,19 @@ def _on_file_change(repo_name: str, file_path: Path, event_type: str):
         repo_path = _get_repo_root(repo_name)
         
         if event_type == "deleted":
-            # For deletions, we'd need to remove from index
-            # For now, just log it (full re-index will handle cleanup)
-            logger.info(f"File deleted: {file_path.name} (index cleanup deferred)")
+            removed = index.remove_file(repo_name, repo_path, file_path)
+            if removed:
+                logger.info(
+                    "Removed deleted file %s from index for repo %s",
+                    file_path,
+                    repo_name,
+                )
+            else:
+                logger.debug(
+                    "Delete event for %s, but no index entry found (repo=%s)",
+                    file_path,
+                    repo_name,
+                )
         else:
             # Granular re-indexing for modified/created files
             success = index.index_file(repo_name, repo_path, file_path)

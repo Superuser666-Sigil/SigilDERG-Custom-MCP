@@ -236,6 +236,70 @@ class TestDatabaseIntegrity:
         assert orphaned_symbols == 0
 
 
+class TestRemoveFile:
+    """Tests for SigilIndex.remove_file single-file cleanup."""
+
+    def test_remove_file_cleans_index_entries(self, indexed_repo, test_repo_path):
+        """Removing a file should purge documents, symbols, embeddings, and trigrams."""
+        import zlib
+
+        index = indexed_repo["index"]
+        repo_name = indexed_repo["repo_name"]
+
+        # Ensure vector index exists so we can test embedding cleanup
+        try:
+            index.build_vector_index(repo=repo_name, force=True)
+        except Exception:
+            # Embeddings may be disabled in this environment; ignore errors.
+            pass
+
+        # Pick a known file in the test repo
+        target_file = test_repo_path / "main.py"
+        rel_path = target_file.relative_to(test_repo_path).as_posix()
+
+        # Sanity: document exists
+        cursor = index.repos_db.cursor()
+        cursor.execute("SELECT id, blob_sha FROM documents WHERE path = ?", (rel_path,))
+        row = cursor.fetchone()
+        assert row is not None
+        doc_id, blob_sha = row
+
+        # Record whether we had symbols/embeddings to decide how deep to assert
+        cursor.execute("SELECT COUNT(*) FROM symbols WHERE doc_id = ?", (doc_id,))
+        symbol_count_before = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM embeddings WHERE doc_id = ?", (doc_id,))
+        embedding_count_before = cursor.fetchone()[0]
+
+        # Removing the file should return True
+        removed = index.remove_file(repo_name, test_repo_path, target_file)
+        assert removed is True
+
+        # Document row should be gone
+        cursor.execute("SELECT COUNT(*) FROM documents WHERE id = ?", (doc_id,))
+        assert cursor.fetchone()[0] == 0
+
+        # Symbols for this document should be gone
+        cursor.execute("SELECT COUNT(*) FROM symbols WHERE doc_id = ?", (doc_id,))
+        assert cursor.fetchone()[0] == 0
+
+        # Embeddings for this document should be gone (if any existed)
+        cursor.execute("SELECT COUNT(*) FROM embeddings WHERE doc_id = ?", (doc_id,))
+        assert cursor.fetchone()[0] == 0
+
+        # Trigram postings should not reference this doc_id anymore
+        if symbol_count_before > 0 or embedding_count_before > 0:
+            tri_cursor = index.trigrams_db.cursor()
+            tri_cursor.execute("SELECT doc_ids FROM trigrams")
+            for (blob,) in tri_cursor.fetchall():
+                ids = {
+                    int(x)
+                    for x in zlib.decompress(blob).decode().split(",")
+                    if x
+                }
+                assert doc_id not in ids
+
+
 class TestEmbeddingDimensions:
     """Test handling of different embedding dimensions."""
     

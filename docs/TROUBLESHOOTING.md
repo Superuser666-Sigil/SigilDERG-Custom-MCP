@@ -297,15 +297,18 @@ database is locked
 sqlite3 ~/.sigil_index/repos.db "PRAGMA journal_mode"
 # Should return: wal
 
-# 2. If corruption detected, backup and rebuild
+# 2. If corruption is detected or you want a completely fresh index,
+#    move the old directory out of the way
 mv ~/.sigil_index ~/.sigil_index.corrupt
 
-# 3. Rebuild from scratch
-mkdir ~/.sigil_index
-python -m sigil_mcp.server
+# 3. From the project root, run the rebuild script
+cd /path/to/sigil-mcp-server
+python rebuild_indexes.py
 
-# 4. Re-index all repositories
-# From ChatGPT: "Index all repositories"
+# This will:
+#   - Delete any existing index at the configured path
+#   - Recreate the index
+#   - Rebuild all configured repositories from scratch
 ```
 
 **Note:** Since v0.3.3, the indexer uses WAL mode and threading locks to prevent concurrent access issues. If you still see "database is locked" errors, check:
@@ -386,13 +389,14 @@ rm ~/.sigil_index/trigrams.db
 #### Symptom: Results don't match expected files
 
 **Common causes:**
-- Stale index (files changed)
+- Stale index (file changes while file watching disabled)
 - Wrong repository selected
 - Case sensitivity
 
 **Solution:**
 ```bash
-# Enable file watching to keep index current
+# Enable file watching to keep index current; deletions and modifications will then
+# be applied incrementally via granular indexing + remove_file.
 pip install sigil-mcp-server[watch]
 {
   "watch": {
@@ -400,10 +404,15 @@ pip install sigil-mcp-server[watch]
   }
 }
 
-# Force re-index
+# If file watching was disabled for a while and you suspect drift,
+# perform a force re-index for the affected repo:
 "Force re-index repo_name"
 
-# Be specific with repository name
+# For extreme cases (e.g., index corruption or major indexing changes),
+# run the full rebuild script from the project root:
+python rebuild_indexes.py
+
+# Be specific with repository name when searching
 "Search for 'function' in exact_repo_name"
 ```
 

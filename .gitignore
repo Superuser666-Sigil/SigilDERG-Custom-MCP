@@ -42,6 +42,8 @@ htmlcov/
 .tox/
 .mypy_cache/
 .ruff_cache/
+plan.md
+test_client.py
 
 # Sigil MCP Server - Runtime Data
 .sigil_index/
@@ -65,4 +67,3 @@ ngrok
 *.temp
 .cache/
 .venv/
-test_client.pyplan.md

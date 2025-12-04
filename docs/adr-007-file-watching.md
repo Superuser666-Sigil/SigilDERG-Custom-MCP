@@ -106,11 +106,18 @@ Background thread waits for debounce period
   ↓
 on_change callback triggered
   ↓
-index.index_file(repo_name, repo_path, file_path)
+_on_file_change(repo_name, file_path, event_type)
   ↓
-Single file re-indexed (trigrams + symbols updated)
+┌──────────────────────────────┬─────────────────────────────────────────────┐
+│ event_type in {"created",    │ event_type == "deleted"                    │
+│ "modified"}                  │                                           │
+├──────────────────────────────┼─────────────────────────────────────────────┤
+│ index.index_file(...)        │ index.remove_file(...)                     │
+│ - Re-index single file       │ - Remove documents, symbols, embeddings,   │
+│ - Update trigrams/symbols    │   trigrams, and blob for that file        │
+└──────────────────────────────┴─────────────────────────────────────────────┘
   ↓
-Index updated incrementally
+Index updated incrementally and kept consistent with on-disk state
 ```
 
 ### Ignored Patterns
@@ -128,19 +135,21 @@ These can be customized in `config.json` to match project-specific needs.
 - **Debouncing**: 2-second default prevents excessive re-indexing during saves
 - **Recursive Watching**: Full directory trees are monitored efficiently by the OS
 - **Batch Processing**: Multiple changes in quick succession are batched together
-- **Background Execution**: Re-indexing doesn't block MCP requests
-- **Deletion Handling**: File deletions are logged but index cleanup is deferred to full re-index
+- **Background Execution**: Re-indexing and deletion cleanup don't block MCP requests
+- **Deletion Handling**: File deletions trigger `SigilIndex.remove_file`, which removes all
+  index data for that file (documents, symbols, embeddings, trigrams, and blob content)
 
 ## Future Improvements
 
-1. **File Deletion Handling**: Properly remove deleted files from index (currently deferred to full re-index)
-2. **Smart Re-indexing**: Detect file moves/renames and update paths without re-processing content
-3. **Vector Index Updates**: Efficiently update embeddings for only changed chunks
-4. **Watch Statistics**: Expose metrics about file changes and re-indexing operations via MCP tool
-5. **Rate Limiting**: Protect against excessive events from mass file operations
+1. **Smart Re-indexing for Moves/Renames**: Detect file moves/renames and update paths without
+   re-processing content (build on top of existing granular indexing and deletion)
+2. **Vector Index Updates**: Efficiently update embeddings for only changed chunks
+3. **Watch Statistics**: Expose metrics about file changes and re-indexing operations via MCP tool
+4. **Rate Limiting**: Protect against excessive events from mass file operations
 
 ## References
 
 - [watchdog documentation](https://python-watchdog.readthedocs.io/)
 - [ADR 002: Trigram Indexing](adr-002-trigram-indexing.md)
 - [ADR 006: Vector Embeddings](adr-006-vector-embeddings.md)
+- `rebuild_indexes.py` helper script for full index wipe-and-rebuild in operational workflows

@@ -186,19 +186,49 @@ class Config:
     def watch_ignore_dirs(self) -> list[str]:
         """Get directories to ignore when watching."""
         return self.get("watch.ignore_dirs", [
-            ".git", "__pycache__", "node_modules", "target",
-            "build", "dist", ".venv", "venv", ".tox",
-            ".mypy_cache", ".pytest_cache", "coverage", ".coverage"
+            # Version control
+            ".git",
+            # Python
+            "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
+            "build", "dist", "downloads", "eggs", ".eggs", "lib", "lib64",
+            "parts", "sdist", "var", "wheels", ".installed.cfg",
+            "develop-eggs", "htmlcov",
+            # Virtual environments
+            "venv", ".venv", "ENV", "env",
+            # IDE
+            ".vscode", ".idea",
+            # Node.js
+            "node_modules",
+            # Other build systems
+            "target",
+            # Sigil runtime
+            ".sigil_index", ".sigil_mcp_server",
+            # Coverage/testing
+            "coverage", ".coverage", ".cache",
         ])
     
     @property
     def watch_ignore_extensions(self) -> list[str]:
         """Get file extensions to ignore when watching."""
         return self.get("watch.ignore_extensions", [
-            ".pyc", ".so", ".o", ".a", ".dylib", ".dll",
-            ".exe", ".bin", ".pdf", ".png", ".jpg", ".gif",
-            ".svg", ".ico", ".woff", ".woff2", ".ttf",
-            ".zip", ".tar", ".gz", ".bz2", ".xz"
+            # Python compiled
+            ".pyc", ".pyo", ".pyd",
+            # Native/compiled
+            ".so", ".o", ".a", ".dylib", ".dll", ".exe", ".bin",
+            # Archives
+            ".zip", ".tar", ".gz", ".bz2", ".xz", ".egg",
+            # Images
+            ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+            # Fonts
+            ".woff", ".woff2", ".ttf", ".eot",
+            # Documents
+            ".pdf",
+            # Logs
+            ".log",
+            # Temp files
+            ".tmp", ".temp", ".swp", ".swo",
+            # OS files
+            ".DS_Store",
         ])
     
     @property
