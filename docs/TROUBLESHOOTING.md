@@ -397,6 +397,11 @@ pip install sigil-mcp-server[watch]
 
 ### OAuth Authentication Failing
 
+> [!IMPORTANT]
+> **ChatGPT OAuth Failing with Cloudflare Tunnel?**  
+> This is a known issue caused by Cloudflare Bot Fight Mode blocking ChatGPT's backend.  
+> 📖 See [**Cloudflare OAuth Issue & Solution**](CLOUDFLARE_OAUTH_ISSUE.md) for the fix.
+
 #### Symptom: "Invalid client credentials"
 
 **Diagnosis:**

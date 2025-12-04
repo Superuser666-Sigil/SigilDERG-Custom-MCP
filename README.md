@@ -106,7 +106,11 @@ On first run, OAuth credentials will be generated. Save the Client ID and Client
 
 ### Connecting to ChatGPT
 
-1. Expose via ngrok: `ngrok http 8000`
+> [!IMPORTANT]
+> **Using Cloudflare Tunnel?** You must disable Bot Fight Mode or ChatGPT's OAuth will fail.  
+> 📖 See [**Cloudflare OAuth Issue & Solution**](docs/CLOUDFLARE_OAUTH_ISSUE.md) for details.
+
+1. Expose via ngrok: `ngrok http 8000` (or use Cloudflare Tunnel)
 2. In ChatGPT, add MCP connector with OAuth authentication
 3. Use the OAuth credentials from server startup
 4. Start using: "Search my code for async functions"

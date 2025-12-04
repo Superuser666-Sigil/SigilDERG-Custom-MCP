@@ -315,6 +315,11 @@ ngrok http 8000
 # Note the https URL (e.g., https://abc123.ngrok.io)
 ```
 
+> [!IMPORTANT]
+> **Using Cloudflare Tunnel Instead of ngrok?**  
+> You must disable Cloudflare Bot Fight Mode or ChatGPT's OAuth authentication will fail.  
+> 📖 See [**Cloudflare OAuth Issue & Solution**](CLOUDFLARE_OAUTH_ISSUE.md) for complete details.
+
 **ChatGPT Compatibility**: The server is configured with:
 - `streamable_http_path="/"` - MCP endpoint at root path
 - `enable_dns_rebinding_protection=False` - Accepts ngrok Host headers

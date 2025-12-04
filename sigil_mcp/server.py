@@ -4,7 +4,7 @@
 
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union, Sequence
 from urllib.parse import urlencode
 import numpy as np
 import os
@@ -12,12 +12,37 @@ import os
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
+from starlette.datastructures import UploadFile
 from .indexer import SigilIndex
 from .auth import initialize_api_key, verify_api_key, get_api_key_from_env
 from .oauth import get_oauth_manager
 from .config import get_config
 from .watcher import FileWatchManager
+
+
+# --------------------------------------------------------------------
+# Helper Functions
+# --------------------------------------------------------------------
+
+def get_form_value(value: Union[str, UploadFile, None]) -> Optional[str]:
+    """
+    Extract string value from form data.
+    Starlette form() can return str | UploadFile, but OAuth params are always strings.
+    
+    Args:
+        value: Form value which might be str, UploadFile, or None
+        
+    Returns:
+        String value or None
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, UploadFile):
+        # This shouldn't happen for OAuth params, but handle gracefully
+        return None
+    return None
+
 
 # --------------------------------------------------------------------
 # Configuration
@@ -75,7 +100,7 @@ mcp = FastMCP(
 # Authentication Middleware
 # --------------------------------------------------------------------
 
-def is_local_connection(client_ip: str = None) -> bool:
+def is_local_connection(client_ip: Optional[str] = None) -> bool:
     """
     Check if connection is from localhost.
     
@@ -93,8 +118,8 @@ def is_local_connection(client_ip: str = None) -> bool:
 
 
 def check_authentication(
-    request_headers: Dict[str, str] = None,
-    client_ip: str = None
+    request_headers: Optional[Dict[str, str]] = None,
+    client_ip: Optional[str] = None
 ) -> bool:
     """
     Check if request is authenticated.
@@ -147,7 +172,7 @@ def check_authentication(
     return False
 
 
-def check_ip_whitelist(client_ip: str = None) -> bool:
+def check_ip_whitelist(client_ip: Optional[str] = None) -> bool:
     """
     Check if client IP is whitelisted.
     
@@ -176,7 +201,7 @@ def check_ip_whitelist(client_ip: str = None) -> bool:
 # --------------------------------------------------------------------
 
 # Load repositories from config
-REPOS: Dict[str, Path] = config.repositories
+REPOS: Dict[str, Path] = {k: Path(v) for k, v in config.repositories.items()}
 
 if not REPOS:
     logger.warning(
@@ -287,8 +312,8 @@ def _create_embedding_function():
         )
         
         # Create wrapper function that matches SigilIndex expectations
-        def embed_fn(texts: List[str]) -> np.ndarray:
-            embeddings_list = embedding_provider.embed_documents(texts)
+        def embed_fn(texts: Sequence[str]) -> np.ndarray:
+            embeddings_list = embedding_provider.embed_documents(list(texts))
             return np.array(embeddings_list, dtype="float32")
         
         model_name = f"{provider}:{model}"
@@ -316,7 +341,12 @@ def _get_index() -> SigilIndex:
     if _INDEX is None:
         index_path = config.index_path
         embed_fn, embed_model = _create_embedding_function()
-        _INDEX = SigilIndex(index_path, embed_fn=embed_fn, embed_model=embed_model)
+        # Provide default embed_model if None
+        _INDEX = SigilIndex(
+            index_path,
+            embed_fn=embed_fn,
+            embed_model=embed_model if embed_model else "none"
+        )
         logger.info(f"Initialized index at {index_path}")
     return _INDEX
 
@@ -402,10 +432,41 @@ async def oauth_metadata(request: Request) -> JSONResponse:
     return response
 
 
+@mcp.custom_route("/.well-known/openid-configuration", methods=["GET"])
+async def openid_configuration(request: Request) -> JSONResponse:
+    """OpenID Connect Discovery (for ChatGPT compatibility)."""
+    if not OAUTH_ENABLED:
+        return JSONResponse({"error": "OAuth not enabled"}, status_code=501)
+    
+    base_url = str(request.base_url).rstrip('/')
+    
+    response = JSONResponse({
+        "issuer": base_url,
+        "authorization_endpoint": f"{base_url}/oauth/authorize",
+        "token_endpoint": f"{base_url}/oauth/token",
+        "revocation_endpoint": f"{base_url}/oauth/revoke",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "token_endpoint_auth_methods_supported": [
+            "client_secret_post", "client_secret_basic", "none"
+        ],
+        "code_challenge_methods_supported": ["S256", "plain"]
+    })
+    
+    # Add ngrok bypass header
+    response.headers["ngrok-skip-browser-warning"] = "true"
+    return response
+
+
 @mcp.custom_route("/oauth/authorize", methods=["GET", "POST"])
-async def oauth_authorize_http(request: Request) -> JSONResponse | RedirectResponse:
+async def oauth_authorize_http(
+    request: Request
+) -> JSONResponse | RedirectResponse | HTMLResponse:
     """OAuth 2.0 Authorization Endpoint."""
-    logger.info("OAuth authorization request received")
+    logger.info("="*80)
+    logger.info(f"OAuth authorization request received - Method: {request.method}")
+    logger.info(f"Request URL: {request.url}")
+    logger.info(f"Request headers: {dict(request.headers)}")
     
     if not OAUTH_ENABLED:
         return JSONResponse({"error": "oauth_not_enabled"}, status_code=501)
@@ -415,7 +476,8 @@ async def oauth_authorize_http(request: Request) -> JSONResponse | RedirectRespo
         params = dict(request.query_params)
     else:
         form = await request.form()
-        params = dict(form)
+        # Convert form values to strings (form() returns str | UploadFile)
+        params = {k: get_form_value(v) for k, v in form.items()}
     
     client_id = params.get("client_id")
     redirect_uri = params.get("redirect_uri")
@@ -448,6 +510,12 @@ async def oauth_authorize_http(request: Request) -> JSONResponse | RedirectRespo
     
     # Verify redirect_uri
     client = oauth_manager.get_client()
+    if not client:
+        return JSONResponse({
+            "error": "server_error",
+            "error_description": "OAuth client not configured"
+        }, status_code=500)
+    
     # Allow any HTTPS redirect URI or registered URIs for flexibility with ChatGPT
     if not (redirect_uri in client.redirect_uris or redirect_uri.startswith("https://")):
         return JSONResponse({
@@ -455,42 +523,180 @@ async def oauth_authorize_http(request: Request) -> JSONResponse | RedirectRespo
             "error_description": "Redirect URI must be HTTPS or registered"
         }, status_code=400)
     
-    # Auto-approve (for trusted clients)
-    code = oauth_manager.create_authorization_code(
-        client_id=client_id,
-        redirect_uri=redirect_uri,
-        scope=scope,
-        code_challenge=code_challenge,
-        code_challenge_method=code_challenge_method
-    )
+    # Check if this is a consent approval (POST with approve=true)
+    logger.info(f"All params: {params}")
+    if request.method == "POST" and params.get("approve") == "true":
+        logger.info("User approved consent - generating authorization code")
+        # User approved - generate code and redirect
+        code = oauth_manager.create_authorization_code(
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            scope=scope,
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method
+        )
+        
+        # Build redirect URL
+        redirect_params = {"code": code}
+        if state:
+            redirect_params["state"] = state
+        
+        redirect_url = f"{redirect_uri}?{urlencode(redirect_params)}"
+        
+        logger.info(f"Redirecting to: {redirect_url}")
+        logger.info(f"Authorization code: {code[:20]}...")
+        logger.info("="*80)
+        return RedirectResponse(redirect_url, status_code=302)
     
-    # Build redirect URL
-    redirect_params = {"code": code}
-    if state:
-        redirect_params["state"] = state
+    # Show consent screen (GET request or initial POST)
     
-    redirect_url = f"{redirect_uri}?{urlencode(redirect_params)}"
+    # Build approval form
+    consent_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Authorize Sigil MCP Server</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+                margin: 0;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            }}
+            .container {{
+                background: white;
+                padding: 2rem;
+                border-radius: 12px;
+                box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+                max-width: 500px;
+                width: 90%;
+            }}
+            h1 {{
+                color: #333;
+                margin: 0 0 1rem 0;
+                font-size: 1.5rem;
+            }}
+            .info {{
+                background: #f8f9fa;
+                padding: 1rem;
+                border-radius: 8px;
+                margin: 1rem 0;
+                border-left: 4px solid #667eea;
+            }}
+            .info p {{
+                margin: 0.5rem 0;
+                color: #666;
+                font-size: 0.9rem;
+            }}
+            .info strong {{
+                color: #333;
+            }}
+            .buttons {{
+                display: flex;
+                gap: 1rem;
+                margin-top: 1.5rem;
+            }}
+            button {{
+                flex: 1;
+                padding: 0.75rem 1.5rem;
+                border: none;
+                border-radius: 6px;
+                font-size: 1rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s;
+            }}
+            .approve {{
+                background: #667eea;
+                color: white;
+            }}
+            .approve:hover {{
+                background: #5568d3;
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+            }}
+            .deny {{
+                background: #e0e0e0;
+                color: #666;
+            }}
+            .deny:hover {{
+                background: #d0d0d0;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🔐 Authorize Access</h1>
+            <p><strong>ChatGPT</strong> is requesting access to your Sigil MCP Server.</p>
+            
+            <div class="info">
+                <p><strong>Client:</strong> {client_id[:20]}...</p>
+                <p><strong>Scope:</strong> {scope or "Default access"}</p>
+                <p><strong>This will allow:</strong></p>
+                <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+                    <li>Reading repository information</li>
+                    <li>Searching code and files</li>
+                    <li>Accessing configured tools</li>
+                </ul>
+            </div>
+            
+            <form method="POST" action="/oauth/authorize">
+                <input type="hidden" name="client_id" value="{client_id}">
+                <input type="hidden" name="redirect_uri" value="{redirect_uri}">
+                <input type="hidden" name="response_type" value="{response_type}">
+                <input type="hidden" name="state" value="{state or ''}">
+                <input type="hidden" name="scope" value="{scope or ''}">
+                <input type="hidden" name="code_challenge" value="{code_challenge or ''}">
+                <input type="hidden" name="code_challenge_method" 
+                       value="{code_challenge_method or ''}">
+                <input type="hidden" name="approve" value="true">
+                
+                <div class="buttons">
+                    <button type="submit" class="approve">Authorize</button>
+                    <button type="button" class="deny" onclick="window.close()">Deny</button>
+                </div>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
     
-    return RedirectResponse(redirect_url, status_code=302)
+    return HTMLResponse(content=consent_html, status_code=200)
 
 
 @mcp.custom_route("/oauth/token", methods=["POST"])
 async def oauth_token_http(request: Request) -> JSONResponse:
     """OAuth 2.0 Token Endpoint."""
+    logger.info("="*80)
     logger.info("OAuth token request received")
+    logger.info(f"Request method: {request.method}")
+    logger.info(f"Request headers: {dict(request.headers)}")
+    logger.info(f"Request URL: {request.url}")
     
     if not OAUTH_ENABLED:
         return JSONResponse({"error": "oauth_not_enabled"}, status_code=501)
     
     # Parse form data
     form = await request.form()
-    grant_type = form.get("grant_type")
-    code = form.get("code")
-    redirect_uri = form.get("redirect_uri")
-    client_id = form.get("client_id")
-    client_secret = form.get("client_secret")
-    code_verifier = form.get("code_verifier")
-    refresh_token = form.get("refresh_token")
+    grant_type = get_form_value(form.get("grant_type"))
+    code = get_form_value(form.get("code"))
+    redirect_uri = get_form_value(form.get("redirect_uri"))
+    client_id = get_form_value(form.get("client_id"))
+    client_secret = get_form_value(form.get("client_secret"))
+    code_verifier = get_form_value(form.get("code_verifier"))
+    refresh_token = get_form_value(form.get("refresh_token"))
+    
+    logger.info(
+        f"Form data: grant_type={grant_type}, code={code[:20] if code else None}..., "
+        f"redirect_uri={redirect_uri}, client_id={client_id}, "
+        f"client_secret={'***' if client_secret else None}, "
+        f"code_verifier={code_verifier[:20] if code_verifier else None}..., "
+        f"refresh_token={refresh_token[:20] if refresh_token else None}..."
+    )
     
     # Check for client credentials in Authorization header
     auth_header = request.headers.get("Authorization")
@@ -586,9 +792,9 @@ async def oauth_revoke_http(request: Request) -> JSONResponse:
         return JSONResponse({"error": "oauth_not_enabled"}, status_code=501)
     
     form = await request.form()
-    token = form.get("token")
-    client_id = form.get("client_id")
-    client_secret = form.get("client_secret")
+    token = get_form_value(form.get("token"))
+    client_id = get_form_value(form.get("client_id"))
+    client_secret = get_form_value(form.get("client_secret"))
     
     if not token or not client_id:
         return JSONResponse({
@@ -686,7 +892,7 @@ def oauth_authorize(
     
     # Verify redirect_uri
     client = oauth_manager.get_client()
-    if redirect_uri not in client.redirect_uris:
+    if not client or redirect_uri not in client.redirect_uris:
         return {
             "error": "invalid_request",
             "error_description": "Redirect URI not registered for this client"
@@ -709,11 +915,14 @@ def oauth_authorize(
     
     redirect_url = f"{redirect_uri}?{urlencode(params)}"
     
-    return {
+    result: Dict[str, str] = {
         "redirect_url": redirect_url,
-        "code": code,
-        "state": state
+        "code": code
     }
+    if state:
+        result["state"] = state
+    
+    return result
 
 
 @mcp.tool()
@@ -770,6 +979,13 @@ def oauth_token(
         }
     
     oauth_manager = get_oauth_manager()
+    
+    # Validate client_id
+    if not client_id:
+        return {
+            "error": "invalid_request",
+            "error_description": "client_id is required"
+        }
     
     # Verify client (public clients only need client_id)
     if not oauth_manager.verify_client(client_id, client_secret):
@@ -1496,7 +1712,7 @@ def list_symbols(
 
 
 @mcp.tool()
-def get_index_stats(repo: Optional[str] = None) -> Dict[str, object]:
+def get_index_stats(repo: Optional[str] = None) -> Dict[str, Union[int, str]]:
     """
     Get statistics about the code index.
     
