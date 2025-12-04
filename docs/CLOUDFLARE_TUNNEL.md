@@ -159,6 +159,7 @@ sudo cloudflared --config /home/username/.cloudflared/config.yml service install
 # Enable service to start on boot
 sudo systemctl enable cloudflared
 
+
 # Start the service
 sudo systemctl start cloudflared
 

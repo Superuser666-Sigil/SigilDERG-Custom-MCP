@@ -76,6 +76,9 @@ def create_embedding_provider(  # noqa: C901
 
         cache_dir = kwargs.get("cache_dir")
         logger.info(f"Loading sentence-transformers model: {model}")
+        # Pylance/static analysis can't infer that SentenceTransformer is non-None
+        # after the ImportError guard. Explicitly assert to help type-checkers.
+        assert SentenceTransformer is not None, "sentence-transformers not installed"
         model_obj = SentenceTransformer(model, cache_folder=cache_dir)
 
         class STProvider:
@@ -107,6 +110,8 @@ def create_embedding_provider(  # noqa: C901
         if not api_key:
             raise ValueError("OpenAI API key is required")
 
+        # Pylance/static analysis can't infer OpenAI is non-None after the guard.
+        assert OpenAI is not None, "openai package not installed"
         client = OpenAI(api_key=api_key)
 
         class OpenAIProvider:

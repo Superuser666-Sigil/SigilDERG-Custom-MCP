@@ -1,0 +1,12 @@
+[Unit]
+Description=Cloudflared health check for Sigil MCP tunnel (one-shot)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash /opt/sigil/scripts/cloudflared-healthcheck.sh
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

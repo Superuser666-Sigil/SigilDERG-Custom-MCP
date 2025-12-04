@@ -468,6 +468,16 @@ async def openid_configuration(request: Request) -> JSONResponse:
     return response
 
 
+@mcp.custom_route("/healthz", methods=["GET"])  # lightweight HTTP healthcheck
+async def healthz(request: Request) -> JSONResponse:
+    """Lightweight health endpoint used by service monitors and cloudflared healthchecks.
+
+    Returns 200 with a simple JSON payload so that external monitoring can verify the
+    tunnel and backend availability.
+    """
+    return JSONResponse({"status": "ok"}, status_code=200)
+
+
 @mcp.custom_route("/oauth/authorize", methods=["GET", "POST"])
 async def oauth_authorize_http(
     request: Request
