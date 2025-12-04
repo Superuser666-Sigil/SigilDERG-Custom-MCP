@@ -32,6 +32,7 @@ classifiers = [
 dependencies = [
     "mcp>=1.22.0",
     "numpy>=1.24.0,<3.0",
+    "uvicorn>=0.30.0",
 ]
 
 [project.optional-dependencies]
@@ -82,6 +83,7 @@ Issues = "https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP/issues"
 [project.scripts]
 sigil-mcp = "sigil_mcp.server:main"
 sigil-manage-auth = "sigil_mcp.manage_auth:main"
+sigil-admin-api = "sigil_mcp.admin_api_main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sigil_mcp"]

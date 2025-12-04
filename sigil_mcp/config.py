@@ -105,6 +105,15 @@ class Config:
             "repositories": self._parse_repo_map(os.getenv("SIGIL_REPO_MAP", "")),
             "index": {
                 "path": os.getenv("SIGIL_INDEX_PATH", "~/.sigil_index")
+            },
+            "admin": {
+                "enabled": os.getenv("SIGIL_MCP_ADMIN_ENABLED", "true").lower() == "true",
+                "host": os.getenv("SIGIL_MCP_ADMIN_HOST", "127.0.0.1"),
+                "port": int(os.getenv("SIGIL_MCP_ADMIN_PORT", "8765")),
+                "api_key": os.getenv("SIGIL_MCP_ADMIN_API_KEY") or None,
+                "allowed_ips": (
+                    os.getenv("SIGIL_MCP_ADMIN_ALLOWED_IPS", "127.0.0.1,::1").split(",")
+                )
             }
         }
     
@@ -288,6 +297,31 @@ class Config:
     def index_path(self) -> Path:
         path_str = self.get("index.path", "~/.sigil_index")
         return Path(path_str).expanduser().resolve()
+
+    # --- Admin API configuration ---
+
+    @property
+    def admin_enabled(self) -> bool:
+        return self.get("admin.enabled", True)
+
+    @property
+    def admin_host(self) -> str:
+        return self.get("admin.host", "127.0.0.1")
+
+    @property
+    def admin_port(self) -> int:
+        return int(self.get("admin.port", 8765))
+
+    @property
+    def admin_api_key(self) -> Optional[str]:
+        return self.get("admin.api_key")
+
+    @property
+    def admin_allowed_ips(self) -> list[str]:
+        value = self.get("admin.allowed_ips")
+        if not value:
+            return ["127.0.0.1", "::1"]
+        return value
 
 
 # Global config instance

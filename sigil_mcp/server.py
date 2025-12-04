@@ -264,6 +264,102 @@ _INDEX: Optional[SigilIndex] = None
 _WATCHER: Optional[FileWatchManager] = None
 
 
+# --------------------------------------------------------------------
+# Shared operational helpers (index and vector index)
+# --------------------------------------------------------------------
+
+def rebuild_index_op(
+    repo: Optional[str] = None,
+    force_rebuild: bool = False,
+) -> Dict[str, object]:
+    """
+    Rebuild the trigram/symbol index for one or all repositories.
+    Used by both MCP tools and the admin API.
+    """
+    _ensure_repos_configured()
+    index = _get_index()
+
+    if repo is not None:
+        repo_path = _get_repo_root(repo)
+        stats = index.index_repository(repo, repo_path, force=force_rebuild)
+        return {
+            "status": "completed",
+            "repo": repo,
+            **stats,
+        }
+
+    all_stats: Dict[str, object] = {}
+    for name, path in REPOS.items():
+        repo_path = _get_repo_root(name)
+        stats = index.index_repository(name, repo_path, force=force_rebuild)
+        all_stats[name] = stats
+
+    return {
+        "status": "completed",
+        "repos": all_stats,
+    }
+
+
+def build_vector_index_op(
+    repo: Optional[str] = None,
+    force_rebuild: bool = False,
+    model: str = "default",
+) -> Dict[str, object]:
+    """
+    Build or refresh the vector index for one or all repositories.
+    """
+    _ensure_repos_configured()
+    index = _get_index()
+
+    def _ensure_repo_indexed(repo_name: str) -> None:
+        repo_path = _get_repo_root(repo_name)
+        index.index_repository(repo_name, repo_path, force=False)
+
+    if repo is not None:
+        _ensure_repo_indexed(repo)
+        stats = index.build_vector_index(
+            repo=repo,
+            embed_fn=index.embed_fn,
+            model=model,
+            force=force_rebuild,
+        )
+        return {
+            "status": "completed",
+            "repo": repo,
+            "model": model,
+            **stats,
+        }
+
+    all_stats: Dict[str, object] = {}
+    for name in REPOS.keys():
+        _ensure_repo_indexed(name)
+        stats = index.build_vector_index(
+            repo=name,
+            embed_fn=index.embed_fn,
+            model=model,
+            force=force_rebuild,
+        )
+        all_stats[name] = stats
+
+    return {
+        "status": "completed",
+        "model": model,
+        "repos": all_stats,
+    }
+
+
+def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
+    """
+    Thin wrapper around SigilIndex.get_index_stats.
+    """
+    _ensure_repos_configured()
+    index = _get_index()
+    stats = index.get_index_stats(repo=repo)
+    if not isinstance(stats, dict):
+        return {"stats": stats}
+    return stats
+
+
 def _create_embedding_function():
     """
     Create embedding function based on configuration.
@@ -1537,18 +1633,7 @@ def index_repository(
         repo,
         force_rebuild
     )
-    _ensure_repos_configured()
-    
-    repo_path = _get_repo_root(repo)
-    index = _get_index()
-    
-    stats = index.index_repository(repo, repo_path, force=force_rebuild)
-    
-    return {
-        "status": "completed",
-        "repo": repo,
-        **stats
-    }
+    return rebuild_index_op(repo=repo, force_rebuild=force_rebuild)
 
 
 @mcp.tool()
@@ -1764,10 +1849,7 @@ def get_index_stats(repo: Optional[str] = None) -> Dict[str, Union[int, str]]:
       get_index_stats(repo="runtime")
     """
     logger.info("get_index_stats tool called (repo=%r)", repo)
-    _ensure_repos_configured()
-    
-    index = _get_index()
-    return index.get_index_stats(repo=repo)
+    return get_index_stats_op(repo=repo)
 
 
 @mcp.tool()
@@ -1808,27 +1890,7 @@ def build_vector_index(
         force_rebuild,
         model,
     )
-    _ensure_repos_configured()
-    
-    index = _get_index()
-    
-    # Ensure the basic index exists first
-    repo_path = _get_repo_root(repo)
-    index.index_repository(repo, repo_path, force=False)
-    
-    stats = index.build_vector_index(
-        repo=repo,
-        embed_fn=index.embed_fn,
-        model=model,
-        force=force_rebuild,
-    )
-    
-    return {
-        "status": "completed",
-        "repo": repo,
-        "model": model,
-        **stats,
-    }
+    return build_vector_index_op(repo=repo, force_rebuild=force_rebuild, model=model)
 
 
 @mcp.tool()
