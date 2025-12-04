@@ -1,6 +1,6 @@
 [project]
 name = "sigil-mcp-server"
-version = "0.3.1"
+version = "0.3.2"
 description = "Model Context Protocol server for IDE-like code navigation and semantic search"
 readme = "README.md"
 requires-python = ">=3.12"
