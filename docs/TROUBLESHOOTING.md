@@ -282,20 +282,36 @@ ctags --version
 
 ```
 sqlite3.DatabaseError: database disk image is malformed
+database is locked
 ```
+
+**Common Causes:**
+- Disk full or I/O errors during write
+- Unclean shutdown (power loss, kill -9)
+- Network filesystem issues (if index on NFS)
+- ~~Concurrent access without thread safety~~ (fixed in v0.3.3+)
 
 **Solution:**
 ```bash
-# Backup corrupted index
+# 1. Check for WAL mode (v0.3.3+)
+sqlite3 ~/.sigil_index/repos.db "PRAGMA journal_mode"
+# Should return: wal
+
+# 2. If corruption detected, backup and rebuild
 mv ~/.sigil_index ~/.sigil_index.corrupt
 
-# Rebuild from scratch
+# 3. Rebuild from scratch
 mkdir ~/.sigil_index
 python -m sigil_mcp.server
 
-# Re-index all repositories
+# 4. Re-index all repositories
 # From ChatGPT: "Index all repositories"
 ```
+
+**Note:** Since v0.3.3, the indexer uses WAL mode and threading locks to prevent concurrent access issues. If you still see "database is locked" errors, check:
+- Index is not on a network filesystem (NFS, SMB)
+- No other processes accessing the database
+- Sufficient disk space for WAL files
 
 ---
 

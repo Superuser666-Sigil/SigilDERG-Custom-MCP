@@ -413,9 +413,26 @@ Default: `~/.sigil_index/`
 
 Contents:
 - `repos.db` - Repository and document metadata, symbols
+- `repos.db-wal` - Write-Ahead Log for concurrent access (v0.3.3+)
+- `repos.db-shm` - Shared memory file for WAL mode (v0.3.3+)
 - `trigrams.db` - Trigram index for fast text search
+- `trigrams.db-wal` - WAL file for trigrams database (v0.3.3+)
+- `trigrams.db-shm` - Shared memory for trigrams WAL (v0.3.3+)
 - `blobs/` - Compressed file contents
 - `vectors/` - Vector embeddings (if enabled)
+
+**Note:** WAL mode (Write-Ahead Logging) is enabled by default since v0.3.3 to support concurrent access from HTTP handlers, file watcher, and vector indexing operations. The `-wal` and `-shm` files are automatically managed by SQLite.
+
+### Thread Safety
+
+Since v0.3.3, the indexer is fully thread-safe:
+
+- **WAL Mode**: Multiple readers can query concurrently without blocking
+- **RLock Serialization**: Write operations are serialized to prevent conflicts
+- **File Watcher Safe**: Background re-indexing doesn't interfere with searches
+- **Concurrent Searches**: Multiple MCP tool calls can run simultaneously
+
+No special configuration needed - thread safety is automatic.
 
 ### Index Cleanup
 
@@ -430,10 +447,15 @@ rm -rf /path/to/custom/index
 ### Index Backup
 
 ```bash
-# Backup entire index
+# IMPORTANT: Checkpoint WAL before backup (v0.3.3+)
+sqlite3 ~/.sigil_index/repos.db "PRAGMA wal_checkpoint(TRUNCATE)"
+sqlite3 ~/.sigil_index/trigrams.db "PRAGMA wal_checkpoint(TRUNCATE)"
+
+# Then backup entire index
 tar -czf sigil-index-backup-$(date +%Y%m%d).tar.gz ~/.sigil_index
 
-# Backup specific repository
+# Backup specific repository (also checkpoint first)
+sqlite3 ~/.sigil_index/repos.db "PRAGMA wal_checkpoint(TRUNCATE)"
 sqlite3 ~/.sigil_index/repos.db ".backup repos-backup.db"
 ```
 

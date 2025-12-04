@@ -17,6 +17,11 @@ A Model Context Protocol (MCP) server that provides IDE-like code navigation and
 - File structure view showing code outlines
 - Automatic index updates with file watching (optional)
 
+**Production Ready**
+- Thread-safe concurrent access (SQLite WAL mode + RLock serialization)
+- File watcher, HTTP handlers, and vector indexing run safely in parallel
+- No "database is locked" errors from concurrent operations
+
 **Enterprise Security**
 - OAuth 2.0 authentication with PKCE support for remote access
 - Local connection bypass (no auth needed for localhost)

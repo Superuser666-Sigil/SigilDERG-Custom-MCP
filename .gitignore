@@ -65,4 +65,4 @@ ngrok
 *.temp
 .cache/
 .venv/
-test_client.py
+test_client.pyplan.md
