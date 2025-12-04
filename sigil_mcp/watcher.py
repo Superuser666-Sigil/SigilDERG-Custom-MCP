@@ -106,31 +106,32 @@ class RepositoryWatcher(FileSystemEventHandler):
                     )
     
     def _should_ignore(self, path: Path) -> bool:
-        """Check if file should be ignored."""
-        # Skip hidden files/dirs
+        """Check if file should be ignored, honoring configured ignore rules."""
+        # Always skip hidden files/dirs (top-level safety)
         if any(part.startswith('.') for part in path.parts):
             return True
         
-        # Skip common build/cache directories
-        ignore_dirs = {
-            '__pycache__', 'node_modules', 'target', 'build',
-            'dist', '.venv', 'venv', '.tox', '.mypy_cache',
-            '.pytest_cache', 'coverage', '.git'
-        }
+        # Check directories from config
+        if self.ignore_dirs:
+            # Normalize: treat ".git" and "git" sensibly
+            normalized_dirs = set()
+            for name in self.ignore_dirs:
+                normalized_dirs.add(name)
+                # also support matching without leading dot
+                if name.startswith('.'):
+                    normalized_dirs.add(name.lstrip('.'))
+            
+            if any(
+                part in normalized_dirs or f".{part}" in normalized_dirs
+                for part in path.parts
+            ):
+                return True
         
-        if any(part in ignore_dirs for part in path.parts):
-            return True
-        
-        # Skip binary/generated files
-        ignore_extensions = {
-            '.pyc', '.so', '.o', '.a', '.dylib', '.dll',
-            '.exe', '.bin', '.pdf', '.png', '.jpg', '.gif',
-            '.svg', '.ico', '.woff', '.woff2', '.ttf',
-            '.zip', '.tar', '.gz', '.bz2', '.xz'
-        }
-        
-        if path.suffix.lower() in ignore_extensions:
-            return True
+        # Check extensions from config
+        if self.ignore_extensions:
+            ext = path.suffix.lower()
+            if ext in self.ignore_extensions:
+                return True
         
         return False
     
