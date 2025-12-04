@@ -115,7 +115,7 @@ chmod 755 ~/.sigil_index
 
 # Verify repository paths
 for repo in $(jq -r '.repositories[]' config.json); do
-    test -d "$repo" && echo "✓ $repo" || echo "✗ $repo MISSING"
+    test -d "$repo" && echo "[OK] $repo" || echo "[FAIL] $repo MISSING"
 done
 ```
 
@@ -489,7 +489,7 @@ python -m sigil_mcp.manage_auth create-key --name "New Key" --expires 365
 **Diagnosis:**
 ```bash
 # Check if watchdog is installed
-python -c "import watchdog; print('✓ watchdog installed')"
+python -c "import watchdog; print('[OK] watchdog installed')"
 
 # Check config
 cat config.json | jq '.watch.enabled'
@@ -574,7 +574,7 @@ tail -f sigil.log | grep "Re-indexed"
 **Diagnosis:**
 ```bash
 # Check if dependencies installed
-python -c "import sentence_transformers; print('✓')"
+python -c "import sentence_transformers; print('[OK]')"
 ```
 
 **Solution:**
@@ -757,11 +757,11 @@ mcp = FastMCP(
 ```
 
 **Security Tradeoff:**
-- ❌ DNS rebinding protection: Disabled (Host header not validated)
-- ❌ Content-Type validation: Disabled (accepts application/octet-stream)
-- ✅ OAuth 2.0 authentication: Still active and required
-- ✅ Bearer token validation: Still active
-- ✅ Token expiration: Still enforced
+- [NO] DNS rebinding protection: Disabled (Host header not validated)
+- [NO] Content-Type validation: Disabled (accepts application/octet-stream)
+- [YES] OAuth 2.0 authentication: Still active and required
+- [YES] Bearer token validation: Still active
+- [YES] Token expiration: Still enforced
 
 **Why This Was Necessary:**
 

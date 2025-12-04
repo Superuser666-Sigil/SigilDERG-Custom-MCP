@@ -11,23 +11,23 @@ This guide helps you choose and install the right embedding provider for your ha
 ## Quick Decision Guide
 
 **Choose sentence-transformers if:**
-- ✅ You have an NVIDIA GPU
-- ✅ You want the simplest setup
-- ✅ You're okay with ~500MB-1GB model downloads
-- ✅ You have stable internet for initial model download
+- [YES] You have an NVIDIA GPU
+- [YES] You want the simplest setup
+- [YES] You're okay with ~500MB-1GB model downloads
+- [YES] You have stable internet for initial model download
 
 **Choose llama.cpp if:**
-- ✅ You have an AMD GPU (ROCm)
-- ✅ You want full control over model selection
-- ✅ You prefer smaller, quantized models
-- ✅ You need maximum CPU performance
-- ✅ You're on Apple Silicon (Metal)
+- [YES] You have an AMD GPU (ROCm)
+- [YES] You want full control over model selection
+- [YES] You prefer smaller, quantized models
+- [YES] You need maximum CPU performance
+- [YES] You're on Apple Silicon (Metal)
 
 **Choose OpenAI API if:**
-- ✅ You don't want to run models locally
-- ✅ You have an OpenAI API key
-- ✅ You're okay with API costs (~$0.0001 per 1K tokens)
-- ✅ You want the highest quality embeddings
+- [YES] You don't want to run models locally
+- [YES] You have an OpenAI API key
+- [YES] You're okay with API costs (~$0.0001 per 1K tokens)
+- [YES] You want the highest quality embeddings
 
 ## Installation by Hardware
 

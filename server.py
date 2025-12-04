@@ -1608,7 +1608,7 @@ if __name__ == "__main__":
                 logger.info(f"Client ID:     {client_id}")
                 logger.info(f"Client Secret: {client_secret}")
                 logger.info("")
-                logger.info("⚠️  SAVE THESE CREDENTIALS SECURELY!")
+                logger.info("[WARNING]  SAVE THESE CREDENTIALS SECURELY!")
                 logger.info("")
             else:
                 client = oauth_manager.get_client()
@@ -1627,12 +1627,12 @@ if __name__ == "__main__":
         api_key = initialize_api_key()
         
         if api_key:
-            logger.info("🔑 NEW API Key Generated")
+            logger.info(" NEW API Key Generated")
             logger.info("=" * 60)
             logger.info(f"API Key: {api_key}")
             logger.info("=" * 60)
             logger.info("")
-            logger.info("⚠️  This is the ONLY time you'll see this key!")
+            logger.info("[WARNING]  This is the ONLY time you'll see this key!")
             logger.info("   Set it in your environment:")
             logger.info(f"   export SIGIL_MCP_API_KEY={api_key}")
             logger.info("")
@@ -1642,7 +1642,7 @@ if __name__ == "__main__":
             logger.info("")
         
         if ALLOW_LOCAL_BYPASS:
-            logger.info("✅ Local connections (127.0.0.1) bypass authentication")
+            logger.info("[YES] Local connections (127.0.0.1) bypass authentication")
             logger.info("")
         
         if ALLOWED_IPS:
@@ -1650,7 +1650,7 @@ if __name__ == "__main__":
             logger.info("")
     else:
         logger.warning("=" * 60)
-        logger.warning("⚠️  AUTHENTICATION DISABLED")
+        logger.warning("[WARNING]  AUTHENTICATION DISABLED")
         logger.warning("=" * 60)
         logger.warning("To enable authentication, set:")
         logger.warning("  export SIGIL_MCP_AUTH_ENABLED=true")

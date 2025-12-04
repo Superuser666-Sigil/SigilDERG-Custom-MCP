@@ -61,11 +61,11 @@ mcp = FastMCP(
 ```
 
 **Security Note**: This disables Host header and Content-Type validation. Your other security layers remain active:
-- ✅ OAuth 2.0 authentication with PKCE
-- ✅ Bearer token validation
-- ✅ Token expiration and refresh
-- ❌ DNS rebinding protection (disabled)
-- ❌ Content-Type validation (disabled)
+- [YES] OAuth 2.0 authentication with PKCE
+- [YES] Bearer token validation
+- [YES] Token expiration and refresh
+- [NO] DNS rebinding protection (disabled)
+- [NO] Content-Type validation (disabled)
 
 ```bash
 # Terminal 2: Start ngrok tunnel

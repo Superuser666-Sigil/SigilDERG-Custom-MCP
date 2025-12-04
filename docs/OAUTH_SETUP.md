@@ -8,7 +8,7 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 This guide explains how to set up OAuth2 authentication for your Sigil MCP server, allowing secure remote access from ChatGPT and other MCP clients.
 
-## 🔐 Authentication Modes
+## Authentication Modes
 
 Your Sigil MCP server supports three authentication modes:
 
@@ -16,7 +16,7 @@ Your Sigil MCP server supports three authentication modes:
 2. **OAuth2** - Secure token-based authentication for remote connections
 3. **API Key** - Simple key-based authentication (fallback)
 
-## 🏠 Local Development (No Auth Needed)
+##  Local Development (No Auth Needed)
 
 For local development, you don't need to configure anything! The server automatically allows connections from `localhost` and `127.0.0.1` without authentication.
 
@@ -28,7 +28,7 @@ python server.py
 # No credentials needed!
 ```
 
-## 🌐 Remote Access via ngrok (OAuth Required)
+##  Remote Access via ngrok (OAuth Required)
 
 When exposing your server via ngrok or any public URL, use OAuth2 for security.
 
@@ -48,7 +48,7 @@ On first run, you'll see:
 Client ID:     sigil_xxxxxxxxxxxxxxxx
 Client Secret: yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
 
-⚠️  SAVE THESE CREDENTIALS SECURELY!
+[WARNING]  SAVE THESE CREDENTIALS SECURELY!
 ```
 
 **Save these credentials!** You'll need them to configure ChatGPT.
@@ -88,7 +88,7 @@ Search my code for "async def"
 
 ChatGPT will use your MCP server to search your repositories!
 
-## 🔧 Configuration Options
+##  Configuration Options
 
 ### Environment Variables
 
@@ -115,9 +115,9 @@ export SIGIL_MCP_AUTH_ENABLED=false
 python server.py
 ```
 
-⚠️ **Warning**: Only disable auth for completely isolated local development.
+[WARNING] **Warning**: Only disable auth for completely isolated local development.
 
-## 📋 OAuth Flow Details
+## OAuth Flow Details
 
 ### Authorization Code Flow (with PKCE)
 
@@ -188,7 +188,7 @@ token=abc123...&
 client_id=sigil_xxx
 ```
 
-## 🛠️ MCP Tools for OAuth Management
+##  MCP Tools for OAuth Management
 
 ### Get OAuth Client Info
 
@@ -240,7 +240,7 @@ oauth_revoke(
 )
 ```
 
-## 🔒 Security Features
+##  Security Features
 
 ### Local Bypass
 - Connections from `127.0.0.1` or `::1` automatically bypass authentication
@@ -267,7 +267,7 @@ oauth_revoke(
 - Client secrets hashed before storage
 - File permissions restricted to owner only
 
-## 🔄 Token Lifecycle
+## Token Lifecycle
 
 1. **Issue**: New access token valid for 1 hour
 2. **Use**: Include in `Authorization: Bearer <token>` header
@@ -275,7 +275,7 @@ oauth_revoke(
 4. **Refresh**: Use refresh token to get new access token
 5. **Revoke**: Manually revoke if compromised
 
-## 🐛 Troubleshooting
+##  Troubleshooting
 
 ### "OAuth not enabled" error
 
@@ -318,7 +318,7 @@ export SIGIL_MCP_ALLOW_LOCAL_BYPASS=true
 
 And connect from `localhost` or `127.0.0.1`.
 
-## 📖 Additional Resources
+##  Additional Resources
 
 - [OAuth 2.0 RFC](https://tools.ietf.org/html/rfc6749)
 - [PKCE RFC](https://tools.ietf.org/html/rfc7636)
@@ -332,7 +332,7 @@ For issues or questions:
 3. Verify your environment variables
 4. Try resetting OAuth credentials
 
-## 🔐 Best Practices
+## Best Practices
 
 1. **Never commit credentials** - Keep `.sigil_mcp_server/` in `.gitignore`
 2. **Use HTTPS in production** - ngrok provides this automatically

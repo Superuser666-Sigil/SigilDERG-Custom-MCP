@@ -7,7 +7,16 @@
         "name": "sigil_repos",
         "host": "127.0.0.1",
         "port": 8000,
-        "log_level": "INFO"
+        "log_level": "INFO",
+        "allowed_hosts": [
+            "*",
+            "127.0.0.1",
+            "localhost",
+            "*.ngrok-free.app",
+            "*.ngrok.io",
+            "*.ngrok.app",
+            "mcp.yourdomain.com"
+        ]
     },
     "authentication": {
         "enabled": true,
@@ -28,22 +37,43 @@
             "dist",
             ".venv",
             "venv",
-            "coverage"
+            ".tox",
+            ".mypy_cache",
+            ".pytest_cache",
+            "coverage",
+            ".coverage",
+            "htmlcov"
         ],
         "ignore_extensions": [
             ".pyc",
             ".so",
+            ".o",
+            ".a",
+            ".dylib",
+            ".dll",
             ".exe",
+            ".bin",
             ".pdf",
             ".png",
             ".jpg",
-            ".zip"
+            ".gif",
+            ".svg",
+            ".ico",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".zip",
+            ".tar",
+            ".gz",
+            ".bz2",
+            ".xz"
         ]
     },
     "repositories": {
         "_comment": "Map of repo_name: absolute_path",
-        "my_project": "/absolute/path/to/your/project",
-        "another_repo": "/path/to/another/repository"
+        "my-project": "/home/username/projects/my-project",
+        "another-repo": "/home/username/projects/another-repo",
+        "third-project": "/home/username/work/third-project"
     },
     "index": {
         "path": "~/.sigil_index",
@@ -72,13 +102,11 @@
     },
     "embeddings": {
         "_comment": "Vector embeddings for semantic search (optional)",
-        "enabled": false,
-        "provider": "llamacpp",
-        "model": "~/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-        "dimension": 4096,
-        "context_size": 2048,
-        "n_gpu_layers": 0,
-        "use_mlock": false,
+        "enabled": true,
+        "provider": "sentence-transformers",
+        "model": "all-MiniLM-L6-v2",
+        "dimension": 384,
+        "cache_dir": null,
         "_providers": "sentence-transformers, openai, or llamacpp",
         "_sentence_transformers_example": {
             "provider": "sentence-transformers",
@@ -91,6 +119,14 @@
             "model": "text-embedding-3-small",
             "dimension": 1536,
             "api_key": "sk-..."
+        },
+        "_llamacpp_example": {
+            "provider": "llamacpp",
+            "model": "~/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+            "dimension": 4096,
+            "context_size": 2048,
+            "n_gpu_layers": 0,
+            "use_mlock": false
         }
     }
 }

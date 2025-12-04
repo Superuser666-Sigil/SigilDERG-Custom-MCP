@@ -19,18 +19,18 @@ from .auth import initialize_api_key, API_KEY_FILE
 def generate():
     """Generate a new API key."""
     if API_KEY_FILE.exists():
-        print(f"❌ API key already exists at {API_KEY_FILE}")
+        print(f"[NO] API key already exists at {API_KEY_FILE}")
         print("   Use 'reset' to generate a new key")
         return 1
     
     api_key = initialize_api_key()
     if api_key:
-        print("✅ API Key Generated Successfully!")
+        print("[YES] API Key Generated Successfully!")
         print("=" * 60)
         print(f"API Key: {api_key}")
         print("=" * 60)
         print()
-        print("⚠️  SAVE THIS KEY SECURELY - You won't see it again!")
+        print("[WARNING]  SAVE THIS KEY SECURELY - You won't see it again!")
         print()
         print("Set it in your environment:")
         print(f"  export SIGIL_MCP_API_KEY={api_key}")
@@ -45,11 +45,11 @@ def generate():
 def show():
     """Show current API key status."""
     if not API_KEY_FILE.exists():
-        print("❌ No API key configured")
+        print("[NO] No API key configured")
         print("   Run 'python manage_auth.py generate' to create one")
         return 1
     
-    print("✅ API key is configured")
+    print("[YES] API key is configured")
     print(f"   Location: {API_KEY_FILE}")
     print()
     print("   To view or use the key:")
@@ -62,21 +62,21 @@ def show():
 def reset():
     """Reset API key (delete and regenerate)."""
     if not API_KEY_FILE.exists():
-        print("ℹ️  No existing API key found, generating new one...")
+        print("[INFO] No existing API key found, generating new one...")
         return generate()
     
-    print("⚠️  WARNING: This will invalidate your current API key!")
+    print("[WARNING]  WARNING: This will invalidate your current API key!")
     print("   All clients will need to be updated with the new key.")
     print()
     response = input("Are you sure you want to continue? (yes/no): ").strip().lower()
     
     if response != "yes":
-        print("❌ Reset cancelled")
+        print("[NO] Reset cancelled")
         return 1
     
     # Delete existing key
     API_KEY_FILE.unlink()
-    print(f"✅ Deleted old API key from {API_KEY_FILE}")
+    print(f"[YES] Deleted old API key from {API_KEY_FILE}")
     print()
     
     # Generate new key
@@ -98,7 +98,7 @@ def main():
     elif command == "reset":
         return reset()
     else:
-        print(f"❌ Unknown command: {command}")
+        print(f"[NO] Unknown command: {command}")
         print(__doc__)
         return 1
 

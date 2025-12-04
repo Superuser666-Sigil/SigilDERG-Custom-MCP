@@ -11,11 +11,11 @@ This guide explains how to set up and use llama.cpp with Meta Llama 3.1 8B Instr
 ## Why Llama.cpp?
 
 **Advantages:**
-- 🚀 **Fully Local**: No API calls, complete privacy
-- 💰 **Zero Cost**: No API fees
-- 🎯 **Customizable**: Use any GGUF model
-- ⚡ **GPU Acceleration**: Optional GPU support for faster inference
-- 🔒 **Privacy**: Code never leaves your machine
+- **Fully Local**: No API calls, complete privacy
+- **Zero Cost**: No API fees
+- **Customizable**: Use any GGUF model
+- **GPU Acceleration**: Optional GPU support for faster inference
+- **Privacy**: Code never leaves your machine
 
 **Trade-offs:**
 - Slower than cloud APIs (especially CPU-only)

@@ -11,27 +11,27 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 **Yes!** Here's what protects you:
 
 ### 1. HTTPS Encryption (via ngrok)
-- ✅ **ngrok automatically provides TLS/HTTPS** - even on the free tier
-- ✅ All traffic between ChatGPT and your server is encrypted
-- ✅ No one can sniff your code or API requests in transit
+- [YES] **ngrok automatically provides TLS/HTTPS** - even on the free tier
+- [YES] All traffic between ChatGPT and your server is encrypted
+- [YES] No one can sniff your code or API requests in transit
 
 ### 2. API Key Authentication (enabled by default)
-- ✅ Prevents unauthorized access to your repositories
-- ✅ Keys are securely hashed (SHA-256) before storage
-- ✅ Only works with the correct API key
+- [YES] Prevents unauthorized access to your repositories
+- [YES] Keys are securely hashed (SHA-256) before storage
+- [YES] Only works with the correct API key
 
 ### 3. Optional IP Whitelisting
-- ✅ Restrict access to known IP addresses
-- ✅ Additional layer of security
+- [YES] Restrict access to known IP addresses
+- [YES] Additional layer of security
 
 ## What ngrok Free Tier Gives You
 
 | Feature | Free Tier | Notes |
 |---------|-----------|-------|
-| HTTPS/TLS | ✅ Yes | Full encryption |
-| Random URL | ✅ Yes | Changes on restart |
-| Static URL | ❌ No | Requires paid plan |
-| Custom domain | ❌ No | Requires paid plan |
+| HTTPS/TLS | Yes | Full encryption |
+| Random URL | Yes | Changes on restart |
+| Static URL | No | Requires paid plan |
+| Custom domain | No | Requires paid plan |
 | Rate limits | ~40 req/min | Usually sufficient |
 
 ## Security Checklist
@@ -76,18 +76,18 @@ A: Yes, you can set `export SIGIL_MCP_AUTH_ENABLED=false` for local testing, but
 ## Security Limitations (and workarounds)
 
 ### Free Tier Limitations
-- ❌ URL changes on ngrok restart
+- URL changes on ngrok restart
   - **Workaround**: Update ChatGPT config each time
   - **Better solution**: Upgrade to ngrok paid plan for static URLs
 
-- ❌ No custom domain
+- No custom domain
   - **Workaround**: Not needed for security, just convenience
   - **Better solution**: Upgrade to ngrok paid plan
 
 ### What This Setup Does NOT Protect Against
-- ❌ Compromised API keys (keep them secret!)
-- ❌ Malicious code in your repositories (don't index untrusted code)
-- ❌ Server vulnerabilities (keep dependencies updated)
+- Compromised API keys (keep them secret!)
+- Malicious code in your repositories (don't index untrusted code)
+- Server vulnerabilities (keep dependencies updated)
 
 ## Testing Your Security Setup
 

@@ -277,11 +277,11 @@ ChatGPT: Found 5 relevant code sections (semantic search):
 **Protection:** Source code requires authentication for remote access, OAuth credentials stored with 0600 permissions, tokens expire after 1 hour with refresh support, PKCE prevents authorization code interception
 
 **ChatGPT Compatibility**: For ChatGPT MCP connector compatibility, DNS rebinding protection is disabled. This means:
-- ❌ Host header validation: Disabled (accepts ngrok domains)
-- ❌ Content-Type validation: Disabled (accepts application/octet-stream)
-- ✅ OAuth 2.0 authentication: Active and required
-- ✅ Bearer token validation: Active
-- ✅ Token expiration: Enforced
+- [NO] Host header validation: Disabled (accepts ngrok domains)
+- [NO] Content-Type validation: Disabled (accepts application/octet-stream)
+- [YES] OAuth 2.0 authentication: Active and required
+- [YES] Bearer token validation: Active
+- [YES] Token expiration: Enforced
 
 See [docs/SECURITY.md](docs/SECURITY.md) for detailed security documentation.
 
@@ -306,10 +306,11 @@ For detailed troubleshooting, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING
 **Setup Guides**
 - [ChatGPT Setup Guide](docs/CHATGPT_SETUP.md)
 - [OAuth Configuration](docs/OAUTH_SETUP.md)
+- [Cloudflare Tunnel Deployment](docs/CLOUDFLARE_TUNNEL.md) 
 - [Security Best Practices](docs/SECURITY.md)
-- [Operations Runbook](docs/RUNBOOK.md) 📖
-- [Troubleshooting Guide](docs/TROUBLESHOOTING.md) 🔧
-- [Llama.cpp Local Embeddings](docs/LLAMACPP_SETUP.md) 🦙
+- [Operations Runbook](docs/RUNBOOK.md) 
+- [Troubleshooting Guide](docs/TROUBLESHOOTING.md) 
+- [Llama.cpp Local Embeddings](docs/LLAMACPP_SETUP.md) 
 
 **Architecture Decision Records (ADRs)**
 - [ADR-001: OAuth 2.0 Authentication](docs/adr-001-oauth2-authentication.md)

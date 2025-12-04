@@ -164,7 +164,7 @@ python -m sigil_mcp.server
 # Server running on http://127.0.0.1:8000
 ```
 
-**⚠️ Important:** Save OAuth credentials securely!
+**[WARNING] Important:** Save OAuth credentials securely!
 
 ---
 
@@ -456,7 +456,7 @@ python -m sigil_mcp.manage_auth show-oauth
 #### Regenerating Credentials
 
 ```bash
-# ⚠️ This invalidates all existing tokens
+# [WARNING] This invalidates all existing tokens
 python -m sigil_mcp.manage_auth regenerate-oauth
 ```
 
@@ -514,7 +514,7 @@ In `config.json`:
 }
 ```
 
-**⚠️ Never disable auth in production!**
+**[WARNING] Never disable auth in production!**
 
 ---
 
@@ -997,7 +997,7 @@ def main():
     print()
     
     # Initialize index (without embeddings for basic testing)
-    print("📊 Initializing index...")
+    print("[INFO] Initializing index...")
     index = SigilIndex(
         config.index_path,
         embed_fn=None,
@@ -1007,7 +1007,7 @@ def main():
     print()
     
     # List configured repositories
-    print("📁 Configured Repositories:")
+    print("[INFO] Configured Repositories:")
     for name, path in config.repositories.items():
         print(f"   - {name}: {path}")
     print()
@@ -1016,21 +1016,21 @@ def main():
     repo_name = list(config.repositories.keys())[0]  # First repo
     repo_path = Path(config.repositories[repo_name])
     
-    print(f"🔍 Indexing repository: {repo_name}")
+    print(f"[INFO] Indexing repository: {repo_name}")
     print(f"   Path: {repo_path}")
     
     try:
         stats = index.index_repository(repo_name, repo_path, force=False)
-        print(f"   ✅ Indexed: {stats.get('files_indexed', 0)} files")
-        print(f"   📝 Symbols: {stats.get('symbols_extracted', 0)}")
-        print(f"   ⏱️  Time: {stats.get('duration_seconds', 0):.2f}s")
+        print(f"   [YES] Indexed: {stats.get('files_indexed', 0)} files")
+        print(f"   [INFO] Symbols: {stats.get('symbols_extracted', 0)}")
+        print(f"   [INFO] Time: {stats.get('duration_seconds', 0):.2f}s")
     except Exception as e:
-        print(f"   ❌ Error: {e}")
+        print(f"   [NO] Error: {e}")
         return 1
     print()
     
     # Test code search
-    print("🔎 Testing code search for 'config'...")
+    print("[INFO] Testing code search for 'config'...")
     try:
         results = index.search_code(repo_name, "config", max_results=5)
         print(f"   Found {len(results)} results:")
@@ -1039,18 +1039,18 @@ def main():
             snippet = result.text[:70].replace('\n', ' ')
             print(f"      {snippet}...")
     except Exception as e:
-        print(f"   ❌ Error: {e}")
+        print(f"   [NO] Error: {e}")
     print()
 
     # Test symbol search
-    print("🎯 Testing symbol search for 'Config'...")
+    print("[INFO] Testing symbol search for 'Config'...")
     try:
         symbols = index.list_symbols(repo_name, "Config")
         print(f"   Found {len(symbols)} symbols:")
         for i, sym in enumerate(symbols[:5], 1):
             print(f"   {i}. {sym.name} ({sym.kind}) in {sym.file_path}:{sym.line}")
     except Exception as e:
-        print(f"   ❌ Error: {e}")
+        print(f"   [NO] Error: {e}")
     print()
     
     print("=" * 60)
@@ -1085,7 +1085,7 @@ def main():
     config = get_config()
     
     if not config.embeddings_enabled:
-        print("❌ Embeddings not enabled in config.json")
+        print("[NO] Embeddings not enabled in config.json")
         return 1
     
     print(f"🧠 Testing Embeddings")
@@ -1107,7 +1107,7 @@ def main():
             return np.array(embeddings, dtype="float32")
         
     except Exception as e:
-        print(f"❌ Failed to initialize provider: {e}")
+        print(f"[NO] Failed to initialize provider: {e}")
         return 1
     
     # Create index with embeddings
@@ -1119,20 +1119,20 @@ def main():
     
     # Build vector index
     repo_name = list(config.repositories.keys())[0]
-    print(f"📊 Building vector index for {repo_name}...")
+    print(f" Building vector index for {repo_name}...")
     
     try:
         vector_stats = index.build_vector_index(repo_name)
-        print(f"   ✅ Chunks indexed: {vector_stats.get('chunks_indexed', 0)}")
-        print(f"   📄 Documents: {vector_stats.get('documents_processed', 0)}")
+        print(f"   [YES] Chunks indexed: {vector_stats.get('chunks_indexed', 0)}")
+        print(f"    Documents: {vector_stats.get('documents_processed', 0)}")
     except Exception as e:
-        print(f"   ❌ Error: {e}")
+        print(f"   [NO] Error: {e}")
         return 1
     print()
     
     # Test semantic search
     query = "configuration and settings"
-    print(f"🔍 Semantic search: '{query}'")
+    print(f" Semantic search: '{query}'")
     
     try:
         results = index.semantic_search(
@@ -1149,11 +1149,11 @@ def main():
             print(f"   {i}. {path}:{start}-{end}")
             print(f"      Score: {score:.3f}")
     except Exception as e:
-        print(f"   ❌ Error: {e}")
+        print(f"   [NO] Error: {e}")
         return 1
     
     print()
-    print("✅ Embeddings test complete")
+    print("[YES] Embeddings test complete")
     return 0
 
 
@@ -1182,17 +1182,17 @@ SIGIL_CONFIG=/path/to/config.json python test_client.py
 SIGIL MCP SERVER TEST CLIENT
 ============================================================
 
-📊 Initializing index...
+ Initializing index...
    Index path: /home/user/.sigil_index
 
-📁 Configured Repositories:
+[INFO] Configured Repositories:
    - my_project: /path/to/my_project
 
-🔍 Indexing repository: my_project
+ Indexing repository: my_project
    Path: /path/to/my_project
-   ✅ Indexed: 342 files
-   📝 Symbols: 1847
-   ⏱️  Time: 2.34s
+   [YES] Indexed: 342 files
+    Symbols: 1847
+     Time: 2.34s
 
 🔎 Testing code search for 'config'...
    Found 12 results:
@@ -1201,7 +1201,7 @@ SIGIL MCP SERVER TEST CLIENT
    2. server.py:12
       from sigil_mcp.config import get_config...
 
-🎯 Testing symbol search for 'Config'...
+ Testing symbol search for 'Config'...
    Found 5 symbols:
    1. Config (class) in config.py:34
    2. ConfigError (class) in config.py:89
