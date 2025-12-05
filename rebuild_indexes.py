@@ -11,7 +11,7 @@ This script:
 
 import sys
 from pathlib import Path
-import sqlite3
+from typing import Optional, Dict, Any
 import logging
 import shutil
 
@@ -87,62 +87,40 @@ def rebuild_embeddings_for_repo(
     return stats
 
 
-def main():
-    """Main execution."""
-    print("=" * 80)
-    print("SIGIL MCP SERVER - REBUILD INDEXES")
-    print("=" * 80)
-    print()
-    
+def _setup_index_for_rebuild(
+    index: Optional[SigilIndex],
+    wipe_index: bool,
+) -> SigilIndex:
+    """Initialize or prepare index for rebuild."""
     config = get_config()
-
+    
     # Step 0: delete entire index directory for a truly clean rebuild
     index_dir = config.index_path
-    if index_dir.exists():
+    if wipe_index and index_dir.exists():
         logger.info(f"Removing entire index directory at {index_dir}")
         shutil.rmtree(index_dir)
     # Recreate base directory for subsequent operations
     index_dir.mkdir(parents=True, exist_ok=True)
     
-    # Initialize index
-    logger.info("Initializing index...")
-    index = SigilIndex(
-        config.index_path,
-        embed_fn=None,
-        embed_model="none"
-    )
-    logger.info(f"Index path: {config.index_path}")
-    print()
+    # Initialize index if not provided
+    if index is None:
+        logger.info("Initializing index...")
+        index = SigilIndex(
+            config.index_path,
+            embed_fn=None,
+            embed_model="none"
+        )
+        logger.info(f"Index path: {config.index_path}")
     
-    # List repositories
-    repos = config.repositories
-    if not repos:
-        logger.error("No repositories configured!")
-        return 1
-    
-    print(f"Found {len(repos)} configured repositories:")
-    for name, path in repos.items():
-        print(f"  - {name}: {path}")
-    print()
-    
-    # Step 1: Delete all trigrams
-    print("=" * 80)
-    print("STEP 1: DELETING TRIGRAMS")
-    print("=" * 80)
-    trigram_count = delete_all_trigrams(index)
-    print()
-    
-    # Step 2: Delete all embeddings
-    print("=" * 80)
-    print("STEP 2: DELETING EMBEDDINGS")
-    print("=" * 80)
-    embedding_count = delete_all_embeddings(index)
-    print()
-    
-    # Step 3: Rebuild trigrams for all repos
-    print("=" * 80)
-    print("STEP 3: REBUILDING TRIGRAMS")
-    print("=" * 80)
+    return index
+
+
+def _rebuild_trigrams_for_all_repos(
+    index: SigilIndex,
+    repos: Dict[str, str],
+) -> Dict[str, dict]:
+    """Rebuild trigrams for all repositories."""
+    logger.info("Rebuilding trigrams for all repositories...")
     trigram_stats = {}
     for repo_name, repo_path_str in repos.items():
         repo_path = Path(repo_path_str)
@@ -155,93 +133,249 @@ def main():
             trigram_stats[repo_name] = stats
         except Exception as e:
             logger.error(f"Error rebuilding trigrams for {repo_name}: {e}")
-    print()
+            raise
     
-    # Step 4: Rebuild embeddings if enabled
-    if config.embeddings_enabled:
-        print("=" * 80)
-        print("STEP 4: REBUILDING EMBEDDINGS")
-        print("=" * 80)
-        
-        provider = config.embeddings_provider
-        model_name = config.embeddings_model
-        
-        if not provider or not model_name:
-            logger.warning(
-                "Embeddings enabled but provider/model not configured. "
-                "Skipping embedding rebuild."
-            )
-        else:
-            try:
-                logger.info(f"Initializing embedding provider: {provider}")
-                logger.info(f"Model: {model_name}")
-                
-                kwargs = dict(config.embeddings_kwargs)
-                if config.embeddings_cache_dir:
-                    kwargs["cache_dir"] = config.embeddings_cache_dir
-                if provider == "openai" and config.embeddings_api_key:
-                    kwargs["api_key"] = config.embeddings_api_key
-                
-                embedding_provider = create_embedding_provider(
-                    provider=provider,
-                    model=model_name,
-                    dimension=config.embeddings_dimension,
-                    **kwargs
-                )
-                
-                def embed_fn(texts):
-                    embeddings_list = embedding_provider.embed_documents(list(texts))
-                    return np.array(embeddings_list, dtype="float32")
-                
-                # Update index with embedding function
-                index.embed_fn = embed_fn
-                index.embed_model = f"{provider}:{model_name}"
-                
-                embedding_stats = {}
-                for repo_name in repos.keys():
-                    try:
-                        stats = rebuild_embeddings_for_repo(
-                            index,
-                            repo_name,
-                            embed_fn,
-                            index.embed_model
-                        )
-                        embedding_stats[repo_name] = stats
-                    except Exception as e:
-                        logger.error(f"Error rebuilding embeddings for {repo_name}: {e}")
-                
-                print()
-                print("Embedding rebuild summary:")
-                for repo_name, stats in embedding_stats.items():
-                    print(
-                        f"  {repo_name}: {stats.get('documents_processed', 0)} docs, "
-                        f"{stats.get('chunks_indexed', 0)} chunks"
-                    )
-            except Exception as e:
-                logger.error(f"Error initializing embedding provider: {e}")
-                logger.error("Skipping embedding rebuild.")
-    else:
-        logger.info("Embeddings disabled in config - skipping embedding rebuild")
+    return trigram_stats
+
+
+def _setup_embedding_function(config) -> tuple:
+    """Initialize and return embedding function and model name."""
+    provider = config.embeddings_provider
+    model_name = config.embeddings_model
     
-    print()
-    print("=" * 80)
-    print("REBUILD COMPLETE")
-    print("=" * 80)
-    print()
-    print("Summary:")
-    print(f"  Deleted trigrams: {trigram_count}")
-    print(f"  Deleted embeddings: {embedding_count}")
-    print()
-    print("Trigram rebuild summary:")
-    for repo_name, stats in trigram_stats.items():
-        print(
-            f"  {repo_name}: {stats.get('files_indexed', 0)} files, "
-            f"{stats.get('trigrams_built', 0)} trigrams"
+    if not provider or not model_name:
+        raise ValueError(
+            "Embeddings enabled but provider/model not configured."
         )
     
-    return 0
+    logger.info(f"Initializing embedding provider: {provider}")
+    logger.info(f"Model: {model_name}")
+    
+    kwargs = dict(config.embeddings_kwargs)
+    if config.embeddings_cache_dir:
+        kwargs["cache_dir"] = config.embeddings_cache_dir
+    if provider == "openai" and config.embeddings_api_key:
+        kwargs["api_key"] = config.embeddings_api_key
+    
+    embedding_provider = create_embedding_provider(
+        provider=provider,
+        model=model_name,
+        dimension=config.embeddings_dimension,
+        **kwargs
+    )
+    
+    def embed_fn(texts):
+        embeddings_list = embedding_provider.embed_documents(list(texts))
+        return np.array(embeddings_list, dtype="float32")
+    
+    return embed_fn, f"{provider}:{model_name}"
+
+
+def _rebuild_embeddings_for_all_repos(
+    index: SigilIndex,
+    repos: Dict[str, str],
+    embed_fn,
+    model: str,
+) -> Dict[str, dict]:
+    """Rebuild embeddings for all repositories."""
+    logger.info("Rebuilding embeddings...")
+    embedding_stats = {}
+    
+    for repo_name in repos.keys():
+        try:
+            stats = rebuild_embeddings_for_repo(
+                index,
+                repo_name,
+                embed_fn,
+                model
+            )
+            embedding_stats[repo_name] = stats
+        except Exception as e:
+            logger.error(f"Error rebuilding embeddings for {repo_name}: {e}")
+            raise
+    
+    return embedding_stats
+
+
+def rebuild_all_indexes(
+    index: Optional[SigilIndex] = None,
+    wipe_index: bool = True,
+    rebuild_embeddings: bool = True,
+) -> Dict[str, Any]:
+    """
+    Rebuild all indexes using the same logic as the script.
+    
+    Args:
+        index: Optional existing SigilIndex instance. If None, creates a new one.
+        wipe_index: If True, delete entire index directory first (complete wipe).
+        rebuild_embeddings: If True, rebuild embeddings after trigrams.
+    
+    Returns:
+        Dictionary with rebuild statistics.
+    """
+    config = get_config()
+    
+    # Setup index
+    index = _setup_index_for_rebuild(index, wipe_index)
+    
+    # List repositories
+    repos = config.repositories
+    if not repos:
+        raise ValueError("No repositories configured!")
+    
+    logger.info(f"Found {len(repos)} configured repositories")
+    
+    # Step 1: Delete all trigrams
+    logger.info("Deleting all trigrams...")
+    trigram_count = delete_all_trigrams(index)
+    
+    # Step 2: Delete all embeddings
+    logger.info("Deleting all embeddings...")
+    embedding_count = delete_all_embeddings(index)
+    
+    # Step 3: Rebuild trigrams for all repos
+    trigram_stats = _rebuild_trigrams_for_all_repos(index, repos)
+    
+    # Step 4: Rebuild embeddings if enabled
+    embedding_stats = {}
+    if rebuild_embeddings and config.embeddings_enabled:
+        try:
+            embed_fn, model_name = _setup_embedding_function(config)
+            index.embed_fn = embed_fn
+            index.embed_model = model_name
+            embedding_stats = _rebuild_embeddings_for_all_repos(
+                index, repos, embed_fn, model_name
+            )
+        except Exception as e:
+            logger.error(f"Error initializing embedding provider: {e}")
+            raise
+    elif not config.embeddings_enabled:
+        logger.info("Embeddings disabled in config - skipping embedding rebuild")
+    
+    # Calculate totals
+    total_files = sum(s.get("files_indexed", 0) for s in trigram_stats.values())
+    total_symbols = sum(
+        s.get("symbols_extracted", 0) for s in trigram_stats.values()
+    )
+    
+    return {
+        "success": True,
+        "status": "completed",
+        "message": f"Successfully rebuilt indexes for {len(repos)} repositories",
+        "deleted_trigrams": trigram_count,
+        "deleted_embeddings": embedding_count,
+        "stats": {
+            "documents": total_files,
+            "symbols": total_symbols,
+            "files": total_files,
+        },
+        "trigram_stats": trigram_stats,
+        "embedding_stats": embedding_stats,
+        "repos": {
+            name: {
+                "files": stats.get("files_indexed", 0),
+                "symbols": stats.get("symbols_extracted", 0),
+                "trigrams": stats.get("trigrams_built", 0),
+            }
+            for name, stats in trigram_stats.items()
+        },
+    }
+
+
+def rebuild_single_repo_index(
+    index: SigilIndex,
+    repo_name: str,
+    repo_path: Path,
+    rebuild_embeddings: bool = False,
+    embed_fn=None,
+    model: str = "default",
+) -> Dict[str, Any]:
+    """
+    Rebuild index for a single repository using script logic.
+    
+    Args:
+        index: SigilIndex instance
+        repo_name: Repository name
+        repo_path: Path to repository
+        rebuild_embeddings: If True, also rebuild embeddings
+        embed_fn: Embedding function (required if rebuild_embeddings=True)
+        model: Embedding model name
+    
+    Returns:
+        Dictionary with rebuild statistics.
+    """
+    if not repo_path.exists():
+        raise ValueError(f"Repository path does not exist: {repo_path}")
+    
+    # Rebuild trigrams for this repo
+    logger.info(f"Rebuilding trigrams for {repo_name}...")
+    trigram_stats = rebuild_trigrams_for_repo(index, repo_name, repo_path)
+    
+    embedding_stats = None
+    if rebuild_embeddings:
+        if embed_fn is None:
+            raise ValueError("embed_fn required for rebuilding embeddings")
+        logger.info(f"Rebuilding embeddings for {repo_name}...")
+        embedding_stats = rebuild_embeddings_for_repo(
+            index, repo_name, embed_fn, model
+        )
+    
+    return {
+        "success": True,
+        "status": "completed",
+        "repo": repo_name,
+        "message": f"Successfully rebuilt index for {repo_name}",
+        "stats": {
+            "documents": trigram_stats.get("files_indexed", 0),
+            "symbols": trigram_stats.get("symbols_extracted", 0),
+            "files": trigram_stats.get("files_indexed", 0),
+        },
+        "duration_seconds": trigram_stats.get("duration_seconds", 0),
+        **trigram_stats,
+        "embedding_stats": embedding_stats,
+    }
+
+
+def main():
+    """Main execution (CLI entry point)."""
+    print("=" * 80)
+    print("SIGIL MCP SERVER - REBUILD INDEXES")
+    print("=" * 80)
+    print()
+    
+    try:
+        result = rebuild_all_indexes(wipe_index=True, rebuild_embeddings=True)
+        
+        print()
+        print("=" * 80)
+        print("REBUILD COMPLETE")
+        print("=" * 80)
+        print()
+        print("Summary:")
+        print(f"  Deleted trigrams: {result['deleted_trigrams']}")
+        print(f"  Deleted embeddings: {result['deleted_embeddings']}")
+        print()
+        print("Trigram rebuild summary:")
+        for repo_name, stats in result["repos"].items():
+            print(
+                f"  {repo_name}: {stats['files']} files, "
+                f"{stats['trigrams']} trigrams"
+            )
+        
+        if result.get("embedding_stats"):
+            print()
+            print("Embedding rebuild summary:")
+            for repo_name, stats in result["embedding_stats"].items():
+                print(
+                    f"  {repo_name}: {stats.get('documents_processed', 0)} docs, "
+                    f"{stats.get('chunks_indexed', 0)} chunks"
+                )
+        
+        return 0
+    except Exception as e:
+        logger.error(f"Rebuild failed: {e}")
+        return 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
-

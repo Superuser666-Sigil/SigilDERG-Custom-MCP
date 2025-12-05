@@ -3,6 +3,8 @@
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
 import logging
+import time
+import uuid
 from pathlib import Path
 from typing import List, Dict, Optional, Union, Sequence
 from urllib.parse import urlencode
@@ -14,11 +16,171 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
 from starlette.datastructures import UploadFile
+from starlette.applications import Starlette
+from starlette.routing import Mount
 from .indexer import SigilIndex
 from .auth import initialize_api_key, verify_api_key, get_api_key_from_env
 from .oauth import get_oauth_manager
 from .config import get_config
 from .watcher import FileWatchManager
+from .logging_setup import setup_logging, get_log_file_path
+
+# Import Admin API app (conditional to avoid circular imports)
+_admin_app = None
+
+
+def _get_admin_app():
+    """Lazy import of Admin API app to avoid circular dependencies."""
+    global _admin_app
+    if _admin_app is None:
+        from .admin_api import app
+        _admin_app = app
+    return _admin_app
+
+
+# --------------------------------------------------------------------
+# Header Logging Middleware
+# --------------------------------------------------------------------
+
+SENSITIVE_HEADERS = {
+    "authorization",
+    "cookie",
+    "x-api-key",
+    "x-admin-key",
+    "x-openai-session",
+    "x-openai-session-token",
+}
+
+
+def _redact_headers(headers: Dict[str, str]) -> Dict[str, str]:
+    """Redact sensitive headers for logging."""
+    redacted: Dict[str, str] = {}
+    for k, v in headers.items():
+        lk = k.lower()
+        if lk in SENSITIVE_HEADERS:
+            redacted[k] = "<redacted>"
+        else:
+            redacted[k] = v
+    return redacted
+
+
+class HeaderLoggingASGIMiddleware:
+    """
+    ASGI middleware that logs incoming request headers and outgoing status codes.
+
+    This sits underneath FastMCP and sees everything:
+      - MCP streamable-http traffic
+      - /oauth/* endpoints
+      - /healthz
+      - Admin API endpoints (if mounted on FastMCP)
+      - anything else hitting the server.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            # Let non-HTTP traffic pass through (websockets, etc.)
+            await self.app(scope, receive, send)
+            return
+
+        start_time = time.time()
+        request_id = str(uuid.uuid4())
+
+        # Extract headers into a dict[str, str]
+        headers_dict: Dict[str, str] = {}
+        for raw_name, raw_value in scope.get("headers", []):
+            name = raw_name.decode("latin-1")
+            value = raw_value.decode("latin-1")
+            headers_dict[name] = value
+
+        path = scope.get("path", "")
+        method = scope.get("method", "UNKNOWN")
+
+        # Client IP from X-Forwarded-For or client addr
+        client_ip = headers_dict.get("x-forwarded-for")
+        if client_ip:
+            # Use first hop if multiple are present
+            client_ip = client_ip.split(",")[0].strip()
+        else:
+            client = scope.get("client")
+            if client and isinstance(client, (tuple, list)) and len(client) >= 1:
+                client_ip = client[0]
+            else:
+                client_ip = None
+
+        # Extract cf-ray for Cloudflare correlation
+        cf_ray = headers_dict.get("cf-ray")
+
+        safe_headers = _redact_headers(headers_dict)
+
+        logger.info(
+            "Incoming MCP HTTP request",
+            extra={
+                "request_id": request_id,
+                "method": method,
+                "path": path,
+                "client_ip": client_ip,
+                "cf_ray": cf_ray,
+                "headers": safe_headers,
+            },
+        )
+
+        status_code_holder = {"value": None}
+        response_body_parts = []
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                status_code_holder["value"] = message.get("status", None)
+                # Add headers to prevent Cloudflare/Nginx buffering
+                # This is critical for preventing 502 Bad Gateway errors
+                headers = list(message.get("headers", []))
+                headers.append((b"x-accel-buffering", b"no"))
+                headers.append((b"cache-control", b"no-cache, no-store, must-revalidate"))
+                headers.append((b"connection", b"keep-alive"))
+                message["headers"] = headers
+            elif message["type"] == "http.response.body":
+                # Capture response body for logging
+                body = message.get("body", b"")
+                if body:
+                    response_body_parts.append(body)
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except Exception:
+            duration_ms = int((time.time() - start_time) * 1000)
+            logger.exception(
+                "Error handling MCP request",
+                extra={
+                    "request_id": request_id,
+                    "duration_ms": duration_ms,
+                    "path": path,
+                    "method": method,
+                },
+            )
+            raise
+
+        duration_ms = int((time.time() - start_time) * 1000)
+        
+        # Log response body for MCP requests (but limit size to avoid log spam)
+        response_body = b"".join(response_body_parts).decode("utf-8", errors="replace")
+        if response_body and len(response_body) > 500:
+            response_body = response_body[:500] + "... [truncated]"
+        
+        # Only log body for MCP protocol requests (path == "/")
+        log_extra = {
+            "request_id": request_id,
+            "status_code": status_code_holder["value"],
+            "duration_ms": duration_ms,
+            "path": path,
+            "method": method,
+        }
+        if path == "/" and response_body:
+            log_extra["response_body"] = response_body
+        
+        logger.info("Outgoing MCP HTTP response", extra=log_extra)
 
 
 # --------------------------------------------------------------------
@@ -54,16 +216,20 @@ config = get_config()
 # Logging
 # --------------------------------------------------------------------
 
-logger = logging.getLogger("sigil_repos_mcp")
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)s] %(name)s - %(message)s"
-    )
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+# Set up logging with file and console output
+log_file_path = get_log_file_path(config.log_file)
+setup_logging(
+    log_file=str(log_file_path) if log_file_path else None,
+    log_level=config.log_level,
+    console_output=True,  # Always log to console for development
+)
 
-logger.setLevel(config.log_level)
+logger = logging.getLogger("sigil_repos_mcp")
+
+if log_file_path:
+    logger.info(f"Logging to file: {log_file_path}")
+else:
+    logger.info("Logging to console only (no log file configured)")
 
 # --------------------------------------------------------------------
 # Security Configuration
@@ -88,12 +254,116 @@ transport_security = TransportSecuritySettings(
     enable_dns_rebinding_protection=False
 )
 
+# The MCP library enforces a strict Content-Type check for POST requests
+# unconditionally inside TransportSecurityMiddleware.validate_request.
+# For ChatGPT compatibility the connector may send `application/octet-stream`,
+# which would trigger a 400 before our handlers run. We want to keep DNS
+# rebinding protections configurable, but when the setting explicitly
+# disables DNS rebinding protection we also need to avoid the Content-Type
+# enforcement so legitimate ChatGPT connector requests are accepted.
+#
+# We apply a small, scoped monkeypatch: if `is_post` is True but
+# `enable_dns_rebinding_protection` is False, call the original validator
+# with `is_post=False` (skipping content-type validation) while preserving
+# the rest of the validation logic (host/origin) when enabled.
+try:
+    from mcp.server.transport_security import TransportSecurityMiddleware
+
+    _orig_validate_request = TransportSecurityMiddleware.validate_request
+
+    async def _patched_validate_request(self, request, is_post: bool = False):
+        if is_post and (
+            self.settings is None or
+            not getattr(self.settings, "enable_dns_rebinding_protection", False)
+        ):
+            return await _orig_validate_request(self, request, is_post=False)
+        return await _orig_validate_request(self, request, is_post=is_post)
+
+    TransportSecurityMiddleware.validate_request = _patched_validate_request
+    logger.info(
+        "Patched TransportSecurityMiddleware.validate_request to allow non-JSON POSTs"
+    )
+except Exception:
+    # If monkeypatching fails for any reason, proceed without modification
+    logger.exception("Failed to apply TransportSecurityMiddleware monkeypatch")
+
 mcp = FastMCP(
     name=config.server_name, 
     json_response=True,
     streamable_http_path="/",
     transport_security=transport_security
 )
+# Helper: safe decorator wrapper for attaching metadata to MCP tools.
+
+# Helper: safe decorator wrapper for attaching metadata to MCP tools.
+# Helper: safe decorator wrapper for attaching metadata to MCP tools.
+# We try to call `mcp.tool` with the provided kwargs; if the installed
+# FastMCP decorator doesn't accept these kwargs, we fall back to the
+# simple decorator and attach metadata attributes to the wrapped function
+# to help downstream clients that inspect function attributes.
+
+
+def _safe_tool_decorator(**meta_kwargs):
+    def _decorator(func):
+        dec = getattr(mcp, "tool", None)
+        if dec is None:
+            return func
+
+        # Prefer passing metadata to the decorator; fall back if not supported.
+        try:
+            wrapped = dec(**meta_kwargs)(func)
+        except TypeError:
+            wrapped = dec()(func)
+
+        # Attach conservative metadata attributes on the wrapped function
+        # so that clients that inspect function objects can see hints.
+        attr_map = {
+            "annotations": "__mcp_annotations__",
+            "title": "__mcp_title__",
+            "description": "__mcp_description__",
+            "inputSchema": "__mcp_input_schema__",
+        }
+        for key, attr_name in attr_map.items():
+            if key in meta_kwargs:
+                try:
+                    setattr(wrapped, attr_name, meta_kwargs[key])
+                except Exception:
+                    # Best-effort only; do not fail registration
+                    pass
+
+        return wrapped
+
+    return _decorator
+
+
+# Install ASGI middleware for header logging if we can access the underlying app
+# NOTE: When admin_enabled=True, we'll apply middleware to the parent app instead
+# to avoid double-wrapping issues. This middleware is only applied when running
+# FastMCP standalone (admin_enabled=False).
+try:
+    # Only apply middleware if admin is disabled (we'll apply it to parent app if enabled)
+    if not config.admin_enabled:
+        underlying_app = getattr(mcp, "app", None) or getattr(mcp, "asgi_app", None)
+        if underlying_app is not None:
+            wrapped_app = HeaderLoggingASGIMiddleware(underlying_app)
+            # Replace the app on the MCP server so run() uses the wrapped version
+            if hasattr(mcp, "app"):
+                mcp.app = wrapped_app  # type: ignore[attr-defined]
+            elif hasattr(mcp, "asgi_app"):
+                mcp.asgi_app = wrapped_app  # type: ignore[attr-defined]
+            logger.info("HeaderLoggingASGIMiddleware installed on FastMCP app")
+        else:
+            logger.warning(
+                "Could not locate underlying ASGI app on FastMCP; "
+                "header logging middleware not installed. "
+                "Check FastMCP API for correct attribute name."
+            )
+    else:
+        logger.info(
+            "Admin API enabled - header logging middleware will be applied to parent app"
+        )
+except Exception as exc:
+    logger.exception("Failed to install HeaderLoggingASGIMiddleware: %s", exc)
 
 
 # --------------------------------------------------------------------
@@ -224,6 +494,17 @@ def _get_repo_root(name: str) -> Path:
             return Path(root)
         return root
     except KeyError:
+        # Fallback: try to read from the index database if present
+        try:
+            index = _get_index()
+            cursor = index.repos_db.execute("SELECT path FROM repos WHERE name = ?", (name,))
+            row = cursor.fetchone()
+            if row:
+                return Path(row[0])
+        except Exception:
+            # Ignore and raise the original error below
+            pass
+
         raise ValueError(f"Unknown repo {name!r}. Known repos: {sorted(REPOS.keys())}")
 
 
@@ -262,6 +543,228 @@ def _ensure_repos_configured() -> None:
 
 _INDEX: Optional[SigilIndex] = None
 _WATCHER: Optional[FileWatchManager] = None
+
+
+# --------------------------------------------------------------------
+# Shared operational helpers (index and vector index)
+# --------------------------------------------------------------------
+
+def rebuild_index_op(
+    repo: Optional[str] = None,
+    force_rebuild: bool = False,
+) -> Dict[str, object]:
+    """
+    Rebuild the trigram/symbol index for one or all repositories.
+    Uses the same logic as rebuild_indexes.py script.
+    Used by both MCP tools and the admin API.
+    """
+    _ensure_repos_configured()
+    index = _get_index()
+    
+    # Wait a moment for any active file watcher operations to complete
+    # This helps prevent database lock conflicts
+    import time
+    time.sleep(0.5)
+
+    if repo is not None:
+        # Per-repo rebuild: use script's single-repo logic
+        from rebuild_indexes import rebuild_single_repo_index
+        repo_path = _get_repo_root(repo)
+        return rebuild_single_repo_index(
+            index=index,
+            repo_name=repo,
+            repo_path=repo_path,
+            rebuild_embeddings=False,  # Only rebuild trigrams/symbols
+        )
+
+    # Complete rebuild: use script's rebuild_all_indexes logic
+    from rebuild_indexes import rebuild_all_indexes
+    return rebuild_all_indexes(
+        index=index,
+        wipe_index=False,  # Don't wipe - we're using existing index
+        rebuild_embeddings=False,  # Only rebuild trigrams/symbols
+    )
+
+
+def build_vector_index_op(
+    repo: Optional[str] = None,
+    force_rebuild: bool = False,
+    model: str = "default",
+) -> Dict[str, object]:
+    """
+    Build or refresh the vector index for one or all repositories.
+    Uses the same logic as rebuild_indexes.py script.
+    """
+    _ensure_repos_configured()
+    index = _get_index()
+    
+    # Wait a moment for any active file watcher operations to complete
+    # This helps prevent database lock conflicts
+    import time
+    time.sleep(0.5)
+
+    # Ensure embeddings are configured
+    if index.embed_fn is None:
+        from .config import get_config
+        from .embeddings import create_embedding_provider
+        import numpy as np
+        
+        config = get_config()
+        if not config.embeddings_enabled:
+            raise RuntimeError("Embeddings not enabled in configuration")
+        
+        provider = config.embeddings_provider
+        model_name = config.embeddings_model or model
+        
+        if not provider or not model_name:
+            raise RuntimeError("Embedding provider/model not configured")
+        
+        kwargs = dict(config.embeddings_kwargs)
+        if config.embeddings_cache_dir:
+            kwargs["cache_dir"] = config.embeddings_cache_dir
+        if provider == "openai" and config.embeddings_api_key:
+            kwargs["api_key"] = config.embeddings_api_key
+        
+        embedding_provider = create_embedding_provider(
+            provider=provider,
+            model=model_name,
+            dimension=config.embeddings_dimension,
+            **kwargs
+        )
+        
+        def embed_fn(texts):
+            embeddings_list = embedding_provider.embed_documents(list(texts))
+            return np.array(embeddings_list, dtype="float32")
+        
+        index.embed_fn = embed_fn
+        index.embed_model = f"{provider}:{model_name}"
+
+    if repo is not None:
+        # Per-repo rebuild: use script's single-repo logic
+        from rebuild_indexes import rebuild_single_repo_index
+        repo_path = _get_repo_root(repo)
+        result = rebuild_single_repo_index(
+            index=index,
+            repo_name=repo,
+            repo_path=repo_path,
+            rebuild_embeddings=True,
+            embed_fn=index.embed_fn,
+            model=index.embed_model,
+        )
+        # Extract embedding stats and format response
+        embedding_stats = result.get("embedding_stats", {})
+        return {
+            "success": True,
+            "status": "completed",
+            "repo": repo,
+            "model": index.embed_model,
+            "message": f"Successfully rebuilt vector index for {repo}",
+            "stats": {
+                "documents": embedding_stats.get("documents_processed", 0),
+                "symbols": 0,  # Vector index doesn't track symbols
+                "files": embedding_stats.get("documents_processed", 0),
+            },
+            **embedding_stats,
+        }
+
+    # Complete rebuild: use script's rebuild_all_indexes logic
+    from rebuild_indexes import rebuild_all_indexes
+    result = rebuild_all_indexes(
+        index=index,
+        wipe_index=False,  # Don't wipe - we're using existing index
+        rebuild_embeddings=True,  # Rebuild embeddings
+    )
+    # Format response to match expected structure
+    embedding_stats = result.get("embedding_stats", {})
+    total_docs = sum(
+        s.get("documents_processed", 0) for s in embedding_stats.values()
+    )
+    return {
+        "success": True,
+        "status": "completed",
+        "model": index.embed_model,
+        "message": (
+            f"Successfully rebuilt vector index for "
+            f"{len(embedding_stats)} repositories"
+        ),
+        "stats": {
+            "documents": total_docs,
+            "symbols": 0,  # Vector index doesn't track symbols
+            "files": total_docs,
+        },
+        "repos": embedding_stats,
+    }
+
+
+def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
+    """
+    Thin wrapper around SigilIndex.get_index_stats.
+    Returns stats in format expected by Admin UI frontend.
+    """
+    _ensure_repos_configured()
+    index = _get_index()
+    stats = index.get_index_stats(repo=repo)
+    
+    # Handle error response
+    if isinstance(stats, dict) and "error" in stats:
+        return dict(stats)  # type: ignore[return-value]
+    
+    # Transform to match frontend expectations
+    if isinstance(stats, dict):
+        # If repo-specific, return as-is but ensure structure
+        if repo:
+            # Get file count for this repo
+            from .server import REPOS
+            repo_path = Path(REPOS[repo])
+            file_count = (
+                sum(1 for _ in repo_path.rglob("*") if _.is_file())
+                if repo_path.exists()
+                else 0
+            )
+            
+            return {
+                "total_documents": stats.get("documents", 0),
+                "total_symbols": stats.get("symbols", 0),
+                "total_repos": 1,
+                "repos": {
+                    repo: {
+                        "documents": stats.get("documents", 0),
+                        "symbols": stats.get("symbols", 0),
+                        "files": file_count,
+                    }
+                }
+            }
+        # Aggregate stats for all repos - need to get per-repo breakdown
+        total_docs = stats.get("documents", 0)
+        total_symbols = stats.get("symbols", 0)
+        total_repos = stats.get("repositories", 0)
+        
+        # Get per-repo stats
+        repos_dict: Dict[str, Dict[str, int]] = {}
+        from .server import REPOS
+        for repo_name in REPOS.keys():
+            repo_stats = index.get_index_stats(repo=repo_name)
+            if isinstance(repo_stats, dict) and "error" not in repo_stats:
+                repo_path = Path(REPOS[repo_name])
+                file_count = (
+                    sum(1 for _ in repo_path.rglob("*") if _.is_file())
+                    if repo_path.exists()
+                    else 0
+                )
+                repos_dict[repo_name] = {
+                    "documents": int(repo_stats.get("documents", 0)),
+                    "symbols": int(repo_stats.get("symbols", 0)),
+                    "files": int(file_count),
+                }
+        
+        return {
+            "total_documents": total_docs,
+            "total_symbols": total_symbols,
+            "total_repos": total_repos,
+            "repos": repos_dict
+        }
+    
+    return {"error": "invalid_response", "detail": "Unexpected stats format"}
 
 
 def _create_embedding_function():
@@ -351,6 +854,70 @@ def _get_index() -> SigilIndex:
     return _INDEX
 
 
+def _attempt_local_index_remove(repo_name: str, repo_path: Path, file_path: Path) -> bool:
+    """Attempt to find a nearby index directory and remove a file using it.
+
+    This scans one level up from `repo_path` and looks for folders containing
+    `repos.db`. If found, it instantiates a temporary `SigilIndex` and attempts
+    to remove the file. Returns True if removed using a local index.
+    """
+    parent = repo_path.parent
+    logger.warning(
+        "_on_file_change: attempting local fallback under parent %s",
+        parent,
+    )
+    tried_local = False
+    for entry in parent.iterdir():
+        if not entry.is_dir():
+            continue
+        db = entry / "repos.db"
+        if not db.exists():
+            continue
+        tried_local = True
+        logger.warning(
+            "_on_file_change: found local index at %s, trying removal",
+            entry,
+        )
+        try:
+            local_index = SigilIndex(entry)
+            try:
+                removed = local_index.remove_file(repo_name, repo_path, file_path)
+            finally:
+                local_index.repos_db.close()
+                local_index.trigrams_db.close()
+            if removed:
+                logger.info("Removed %s from local index at %s", file_path, entry)
+                return True
+            else:
+                logger.debug("Local index at %s did not contain file %s", entry, file_path)
+        except Exception:
+            logger.exception("Failed to handle local index at %s", entry)
+
+    if not tried_local:
+        logger.debug("_on_file_change: no nearby index dir with repos.db under %s", parent)
+    return False
+
+
+def _handle_deleted_event(index: SigilIndex, repo_name: str, repo_path: Path, file_path: Path) -> bool:
+    """Handle a filesystem 'deleted' event by trying global index then local fallbacks.
+
+    Returns True if the file was removed from an index.
+    """
+    removed = False
+    try:
+        removed = index.remove_file(repo_name, repo_path, file_path)
+        logger.warning("_on_file_change: removed using global index -> %s", removed)
+    except ValueError:
+        logger.debug("_on_file_change: global index raised ValueError; repo unknown")
+    if not removed:
+        try:
+            return _attempt_local_index_remove(repo_name, repo_path, file_path)
+        except Exception:
+            logger.exception("Error attempting local index fallback for %s", repo_name)
+            return False
+    return removed
+
+
 def _on_file_change(repo_name: str, file_path: Path, event_type: str):
     """Handle file change events from watcher."""
     logger.info(f"File {event_type}: {file_path.name} in {repo_name}")
@@ -360,19 +927,7 @@ def _on_file_change(repo_name: str, file_path: Path, event_type: str):
         repo_path = _get_repo_root(repo_name)
         
         if event_type == "deleted":
-            removed = index.remove_file(repo_name, repo_path, file_path)
-            if removed:
-                logger.info(
-                    "Removed deleted file %s from index for repo %s",
-                    file_path,
-                    repo_name,
-                )
-            else:
-                logger.debug(
-                    "Delete event for %s, but no index entry found (repo=%s)",
-                    file_path,
-                    repo_name,
-                )
+            removed = _handle_deleted_event(index, repo_name, repo_path, file_path)
         else:
             # Granular re-indexing for modified/created files
             success = index.index_file(repo_name, repo_path, file_path)
@@ -486,7 +1041,7 @@ async def oauth_authorize_http(
     logger.info("="*80)
     logger.info(f"OAuth authorization request received - Method: {request.method}")
     logger.info(f"Request URL: {request.url}")
-    logger.info(f"Request headers: {dict(request.headers)}")
+    # Headers are now logged by HeaderLoggingASGIMiddleware (redacted)
     
     if not OAUTH_ENABLED:
         return JSONResponse({"error": "oauth_not_enabled"}, status_code=501)
@@ -694,8 +1249,8 @@ async def oauth_token_http(request: Request) -> JSONResponse:
     logger.info("="*80)
     logger.info("OAuth token request received")
     logger.info(f"Request method: {request.method}")
-    logger.info(f"Request headers: {dict(request.headers)}")
     logger.info(f"Request URL: {request.url}")
+    # Headers are now logged by HeaderLoggingASGIMiddleware (redacted)
     
     if not OAUTH_ENABLED:
         return JSONResponse({"error": "oauth_not_enabled"}, status_code=501)
@@ -1168,6 +1723,20 @@ def oauth_client_info() -> Dict[str, object]:
 # --------------------------------------------------------------------
 
 
+@_safe_tool_decorator(
+    title=(
+        "Read-only — ping"
+    ),
+    description=(
+        "Healthcheck (read-only). Returns basic server status and configured "
+        "repo names."
+    ),
+    annotations={
+        "operation": "read",
+        "safety": "non-destructive",
+        "audience": ["assistant", "user"],
+    },
+)
 @mcp.tool()
 def ping() -> Dict[str, object]:
     """
@@ -1188,6 +1757,20 @@ def ping() -> Dict[str, object]:
     }
 
 
+@_safe_tool_decorator(
+    title=(
+        "Read-only — list_repos"
+    ),
+    description=(
+        "List all configured repositories (read-only). Each entry includes "
+        "name and absolute path."
+    ),
+    annotations={
+        "operation": "read",
+        "safety": "non-destructive",
+        "audience": ["assistant", "user"],
+    },
+)
 @mcp.tool()
 def list_repos() -> List[Dict[str, str]]:
     """
@@ -1200,10 +1783,71 @@ def list_repos() -> List[Dict[str, str]]:
     logger.info("list_repos tool called")
     _ensure_repos_configured()
 
-    return [
+    result = [
         {"name": name, "path": str(path)}
         for name, path in sorted(REPOS.items(), key=lambda kv: kv[0])
     ]
+    logger.debug(f"list_repos returning {len(result)} repos: {[r['name'] for r in result]}")
+    return result
+
+
+def _collect_file_entries(
+    root: Path,
+    base_root: Path,
+    repo: str,
+    max_depth: int,
+    include_hidden: bool,
+    max_entries: int,
+) -> tuple[List[Dict[str, str]], bool]:
+    """
+    Collect file and directory entries from a repository.
+    
+    Returns:
+        Tuple of (entries list, truncated flag)
+    """
+    base_parts = len(root.relative_to(base_root).parts)
+    entries: List[Dict[str, str]] = []
+    truncated = False
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        if len(entries) >= max_entries:
+            truncated = True
+            break
+
+        current = Path(dirpath)
+        rel_parts = len(current.relative_to(base_root).parts)
+        depth = rel_parts - base_parts
+
+        if depth > max_depth:
+            dirnames[:] = []
+            continue
+
+        if not include_hidden:
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+
+        for d in dirnames:
+            if len(entries) >= max_entries:
+                truncated = True
+                break
+            rel_path = (current / d).relative_to(base_root).as_posix()
+            entries.append({"repo": repo, "path": rel_path, "type": "dir"})
+
+        if truncated:
+            break
+
+        for f in filenames:
+            if len(entries) >= max_entries:
+                truncated = True
+                break
+            if not include_hidden and f.startswith("."):
+                continue
+            rel_path = (current / f).relative_to(base_root).as_posix()
+            entries.append({"repo": repo, "path": rel_path, "type": "file"})
+
+        if truncated:
+            break
+
+    return entries, truncated
 
 
 @mcp.tool()
@@ -1212,7 +1856,8 @@ def list_repo_files(
     subdir: str = ".",
     max_depth: int = 4,
     include_hidden: bool = False,
-) -> List[Dict[str, str]]:
+    max_entries: int = 1000,
+) -> Dict[str, object]:
     """
     List files and directories under a subdirectory of a given repo.
 
@@ -1221,26 +1866,28 @@ def list_repo_files(
       subdir: Path relative to that repo root (e.g. "src", "crates/codex/src").
       max_depth: Maximum depth below `subdir` to traverse.
       include_hidden: Whether to include dotfiles / dot-directories.
+      max_entries: Maximum number of entries to return (default: 1000).
+                   Prevents timeouts on large repositories.
 
     Returns:
-      A list of entries: { "repo": "<repo>", "path": "src/main.rs", "type": "file"|"dir" }.
+      A dictionary with:
+        - entries: List of entries with "repo", "path", and "type" fields
+        - total_found: Total number of entries found (may be > len(entries) if truncated)
+        - truncated: True if results were truncated due to max_entries limit
     """
     logger.info(
-        "list_repo_files tool called (repo=%r, subdir=%r, max_depth=%r, include_hidden=%r)",
+        "list_repo_files tool called "
+        "(repo=%r, subdir=%r, max_depth=%r, include_hidden=%r, max_entries=%r)",
         repo,
         subdir,
         max_depth,
         include_hidden,
+        max_entries,
     )
     _ensure_repos_configured()
 
     root = _resolve_under_repo(repo, subdir)
     base_root = _get_repo_root(repo)
-
-    # Depth of the starting directory relative to repo root
-    base_parts = len(root.relative_to(base_root).parts)
-
-    entries: List[Dict[str, str]] = []
 
     # Ensure root is a Path object
     if not isinstance(root, Path):
@@ -1248,41 +1895,56 @@ def list_repo_files(
     if not isinstance(base_root, Path):
         base_root = Path(base_root)
 
-    for dirpath, dirnames, filenames in os.walk(root):
-        current = Path(dirpath)
-        rel_parts = len(current.relative_to(base_root).parts)
-        depth = rel_parts - base_parts
+    entries, truncated = _collect_file_entries(
+        root, base_root, repo, max_depth, include_hidden, max_entries
+    )
 
-        if depth > max_depth:
-            # Prevent walking deeper
-            dirnames[:] = []
-            continue
-
-        # Filter hidden directories (if requested)
-        if not include_hidden:
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-
-        rel_dir = current.relative_to(base_root).as_posix()
-
-        # Directories
-        if rel_dir == ".":
-            rel_dir = ""
-        for d in dirnames:
-            rel_path = (current / d).relative_to(base_root).as_posix()
-            entries.append({"repo": repo, "path": rel_path, "type": "dir"})
-
-        # Files
-        for f in filenames:
-            if not include_hidden and f.startswith("."):
-                continue
-            rel_path = (current / f).relative_to(base_root).as_posix()
-            entries.append({"repo": repo, "path": rel_path, "type": "file"})
+    if truncated:
+        logger.warning(
+            f"list_repo_files truncated at {max_entries} entries "
+            f"for repo={repo}, subdir={subdir}"
+        )
 
     # Sort dirs before files, then by repo, then by path
     entries.sort(key=lambda e: (e["type"], e["repo"], e["path"]))
-    return entries
+    
+    total_found = len(entries)
+    
+    logger.debug(
+        f"list_repo_files returning {len(entries)} entries "
+        f"(truncated={truncated}, first 5: {entries[:5] if entries else []})"
+    )
+    
+    return {
+        "entries": entries,
+        "total_found": total_found,
+        "truncated": truncated,
+    }
 
 
+@_safe_tool_decorator(
+    title=(
+        "Read-only — read_repo_file"
+    ),
+    description=(
+        "Read a single file from a repository (read-only)."
+        " Args: repo (repo name), path (relative path), max_bytes (defensive limit)."
+    ),
+    annotations={
+        "operation": "read",
+        "safety": "non-destructive",
+        "audience": ["assistant", "user"],
+    },
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "repo": {"type": "string"},
+            "path": {"type": "string"},
+            "max_bytes": {"type": "integer"}
+        },
+        "required": ["repo", "path"]
+    },
+)
 @mcp.tool()
 def read_repo_file(
     repo: str,
@@ -1325,6 +1987,30 @@ def read_repo_file(
     return data.decode("utf-8", errors="replace")
 
 
+@_safe_tool_decorator(
+    title=(
+        "Read-only — search_repo"
+    ),
+    description=(
+        "Naive full-text search across one repo or all repos (read-only)."
+        " Args: query, optional repo, file_glob, max_results."
+    ),
+    annotations={
+        "operation": "read",
+        "safety": "non-destructive",
+        "audience": ["assistant", "user"],
+    },
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "repo": {"type": ["string", "null"]},
+            "file_glob": {"type": "string"},
+            "max_results": {"type": "integer"}
+        },
+        "required": ["query"]
+    },
+)
 @mcp.tool()
 def search_repo(
     query: str,
@@ -1404,6 +2090,31 @@ def search_repo(
     return matches
 
 
+@_safe_tool_decorator(
+    title=(
+        "Read-only — search"
+    ),
+    description=(
+        "Deep-Research compatible search (read-only). Returns structured result list"
+        " of id/title/url entries."
+        " Args: query, optional repo, file_glob, max_results."
+    ),
+    annotations={
+        "operation": "read",
+        "safety": "non-destructive",
+        "audience": ["assistant", "user"],
+    },
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "repo": {"type": ["string", "null"]},
+            "file_glob": {"type": "string"},
+            "max_results": {"type": "integer"}
+        },
+        "required": ["query"]
+    },
+)
 @mcp.tool()
 def search(
     query: str,
@@ -1551,6 +2262,30 @@ def index_repository(
     }
 
 
+@_safe_tool_decorator(
+    title=(
+        "Read-only — search_code"
+    ),
+    description=(
+        "Fast indexed code search (read-only) using trigram indexing. Returns"
+        " filenames, line numbers and matching text."
+        " Args: query, optional repo, max_results."
+    ),
+    annotations={
+        "operation": "read",
+        "safety": "non-destructive",
+        "audience": ["assistant", "user"],
+    },
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "repo": {"type": ["string", "null"]},
+            "max_results": {"type": "integer"}
+        },
+        "required": ["query"]
+    },
+)
 @mcp.tool()
 def search_code(
     query: str,
@@ -1732,7 +2467,7 @@ def list_symbols(
 
 
 @mcp.tool()
-def get_index_stats(repo: Optional[str] = None) -> Dict[str, Union[int, str]]:
+def get_index_stats(repo: Optional[str] = None) -> Dict[str, object]:
     """
     Get statistics about the code index.
     
@@ -1767,7 +2502,9 @@ def get_index_stats(repo: Optional[str] = None) -> Dict[str, Union[int, str]]:
     _ensure_repos_configured()
     
     index = _get_index()
-    return index.get_index_stats(repo=repo)
+    stats = index.get_index_stats(repo=repo)
+    # Cast to Dict[str, object] to satisfy type checker
+    return {k: v for k, v in stats.items()}
 
 
 @mcp.tool()
@@ -1831,6 +2568,31 @@ def build_vector_index(
     }
 
 
+@_safe_tool_decorator(
+    title=(
+        "Read-only — semantic_search"
+    ),
+    description=(
+        "Semantic code search using vector embeddings (read-only)."
+        " Args: query (natural language or code-like query), repo (required),"
+        " k (top-k), model (embedding model id)."
+    ),
+    annotations={
+        "operation": "read",
+        "safety": "non-destructive",
+        "audience": ["assistant", "user"],
+    },
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "repo": {"type": "string"},
+            "k": {"type": "integer"},
+            "model": {"type": "string"}
+        },
+        "required": ["query", "repo"]
+    },
+)
 @mcp.tool()
 def semantic_search(
     query: str,
@@ -1932,11 +2694,8 @@ def semantic_search(
     }
 
 
-def main():
-    """Main entry point for the Sigil MCP Server."""
-    logger.info("Starting sigil_repos MCP server (transport=streamable-http)")
-    
-    # Initialize authentication
+def _setup_authentication():
+    """Initialize and log authentication configuration."""
     if AUTH_ENABLED:
         logger.info("=" * 60)
         logger.info("AUTHENTICATION ENABLED")
@@ -2005,8 +2764,10 @@ def main():
         logger.warning("To enable authentication, set:")
         logger.warning("  export SIGIL_MCP_AUTH_ENABLED=true")
         logger.warning("")
-    
-    # Start file watching if enabled
+
+
+def _setup_file_watching():
+    """Start file watching if enabled."""
     if config.watch_enabled and REPOS:
         logger.info("=" * 60)
         logger.info("[INFO] FILE WATCHING ENABLED")
@@ -2015,7 +2776,106 @@ def main():
         logger.info("Watching repositories for changes...")
         _start_watching_repos()
         logger.info("")
+
+
+def _create_parent_app_with_admin():
+    """Create parent ASGI app that combines FastMCP and Admin API."""
+    logger.info("=" * 60)
+    logger.info("[INFO] ADMIN API ENABLED")
+    logger.info("=" * 60)
+    logger.info("Admin API integrated into main server process")
+    logger.info("Both MCP and Admin API share the same index instance")
+    logger.info("Admin endpoints available at /admin/*")
+    logger.info("")
     
+    # Get FastMCP's ASGI app
+    # NOTE: We get the raw app here, not the wrapped one, because we'll
+    # wrap the parent app instead to avoid double-wrapping issues
+    # CRITICAL: Must call streamable_http_app() before accessing session_manager
+    mcp_asgi_app = mcp.streamable_http_app()
+    
+    # CRITICAL: FastMCP's streamable HTTP manager requires a task group to be initialized
+    # The session_manager has a run() context manager that initializes the task group
+    # We need to call this in our lifespan to ensure the task group is ready
+    session_manager = mcp.session_manager
+    
+    # Get Admin API app and extract its routes
+    admin_app = _get_admin_app()
+    
+    # Create parent app routes
+    # IMPORTANT: Add Admin API routes BEFORE Mount("/", ...) so they take
+    # precedence. In Starlette, routes are matched in order, so specific
+    # routes must come before catch-all mounts
+    from starlette.routing import BaseRoute
+    parent_routes: list[BaseRoute] = []
+    
+    # Add Admin API routes first (they already have /admin prefix)
+    # This ensures Admin API routes are matched before FastMCP's catch-all mount
+    for route in admin_app.routes:
+        parent_routes.append(route)
+    
+    # Mount FastMCP at root - this will handle all other routes (MCP protocol, OAuth, etc.)
+    # NOTE: We use Mount with "/" to pass all unmatched routes to FastMCP
+    # The scope path is preserved, so FastMCP can handle its own routing
+    parent_routes.append(Mount("/", app=mcp_asgi_app))
+    
+    # Create parent Starlette app with lifespan that initializes FastMCP's task group
+    from contextlib import asynccontextmanager
+    
+    @asynccontextmanager
+    async def combined_lifespan(app: Starlette):
+        # CRITICAL: Initialize FastMCP's session manager task group
+        # The session_manager.run() context manager creates and manages the task group
+        # This is what mcp.run() does internally - we need to do it manually here
+        async with session_manager.run():
+            yield
+    
+    # Create parent Starlette app with combined lifespan
+    parent_app = Starlette(routes=parent_routes, lifespan=combined_lifespan)
+    
+    # Add CORS middleware from Admin API to parent app
+    # (Admin API has CORS for frontend, we want that in parent app too)
+    from starlette.middleware.cors import CORSMiddleware
+    parent_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
+    
+    # Wrap parent app with header logging middleware
+    # This single wrapping will handle all requests (MCP, Admin API, OAuth)
+    wrapped_parent = HeaderLoggingASGIMiddleware(parent_app)
+    
+    return wrapped_parent
+
+
+def _run_server_with_admin():
+    """Run the server with Admin API enabled."""
+    wrapped_parent = _create_parent_app_with_admin()
+    
+    # Run the parent app using uvicorn (same as FastMCP.run() does internally)
+    import uvicorn
+    try:
+        uvicorn.run(
+            wrapped_parent,
+            host=config.server_host,
+            port=config.server_port,
+            log_level=config.log_level.lower(),
+        )
+    finally:
+        # Cleanup on shutdown
+        if _WATCHER:
+            logger.info("Stopping file watcher...")
+            _WATCHER.stop()
+
+
+def _run_server_simple():
+    """Run the server without Admin API."""
     try:
         mcp.run(transport="streamable-http")
     finally:
@@ -2023,6 +2883,21 @@ def main():
         if _WATCHER:
             logger.info("Stopping file watcher...")
             _WATCHER.stop()
+
+
+def main():
+    """Main entry point for the Sigil MCP Server."""
+    logger.info("Starting sigil_repos MCP server (transport=streamable-http)")
+
+    _setup_authentication()
+    _setup_file_watching()
+    
+    # Create parent ASGI app that combines FastMCP and Admin API
+    # This ensures both services share the same process and _INDEX instance
+    if config.admin_enabled:
+        _run_server_with_admin()
+    else:
+        _run_server_simple()
 
 
 if __name__ == "__main__":

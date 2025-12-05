@@ -6,8 +6,8 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 # Sigil MCP Server Troubleshooting Guide
 
-**Version:** 1.0  
-**Last Updated:** 2025-12-03
+**Version:** 1.1  
+**Last Updated:** 2025-12-04
 
 Quick reference for diagnosing and resolving common issues with Sigil MCP Server.
 
@@ -21,6 +21,12 @@ curl http://localhost:8000/health
 
 # Check logs
 tail -50 sigil.log
+
+# Check Admin API status (if enabled)
+curl http://127.0.0.1:8000/admin/status
+
+# View recent logs via Admin API
+curl http://127.0.0.1:8000/admin/logs/tail?n=50
 
 # Verify configuration
 python -c "from sigil_mcp.config import Config; from pathlib import Path; \
@@ -427,6 +433,10 @@ python rebuild_indexes.py
 > This is a known issue caused by Cloudflare Bot Fight Mode blocking ChatGPT's backend.  
 > 📖 See [**Cloudflare OAuth Issue & Solution**](CLOUDFLARE_OAUTH_ISSUE.md) for the fix.
 
+> **502 Bad Gateway with Cloudflare Tunnel?**  
+> Cloudflare may buffer responses, causing 502 errors. The server automatically adds headers to prevent this.  
+> 📖 See [**Cloudflare 502 Fix Guide**](CLOUDFLARE_502_FIX.md) for details and troubleshooting.
+
 #### Symptom: "Invalid client credentials"
 
 **Diagnosis:**
@@ -814,6 +824,79 @@ tail -f /tmp/sigil_server.log | grep -E "POST|OAuth"
 **References:**
 - [MCP Streamable HTTP Spec](https://modelcontextprotocol.io/specification/2025-06-18/transport/streamable-http)
 - [FastMCP TransportSecuritySettings](https://github.com/modelcontextprotocol/python-sdk/blob/main/src/mcp/server/transport_security.py)
+
+---
+
+## Debugging with Header Logs
+
+The server automatically logs all HTTP requests and responses with redacted headers. This is invaluable for debugging client issues.
+
+### Viewing Request Logs
+
+```bash
+# View all incoming requests
+grep "Incoming MCP HTTP request" server.log
+
+# Find requests from specific IP
+grep "client_ip=203.0.113.42" server.log
+
+# Find requests with errors (5xx status)
+grep "status_code=5" server.log
+
+# Find slow requests (>1 second)
+grep "duration_ms=[0-9][0-9][0-9][0-9]" server.log
+
+# Correlate request/response by request_id
+grep "request_id=abc123-def456" server.log
+
+# Find requests with specific Cloudflare ray ID
+grep "cf_ray=8978a4bf1c5a1234-DFW" server.log
+```
+
+### Using Admin API for Debugging
+
+```bash
+# Check server status
+curl http://127.0.0.1:8000/admin/status
+
+# View recent logs (last 100 lines)
+curl http://127.0.0.1:8000/admin/logs/tail?n=100
+
+# Check index statistics
+curl http://127.0.0.1:8000/admin/index/stats
+
+# View configuration
+curl http://127.0.0.1:8000/admin/config
+```
+
+### Common Debugging Scenarios
+
+**ChatGPT connection issues:**
+```bash
+# Find all ChatGPT requests
+grep "user-agent.*OpenAI" server.log
+
+# Find failed OAuth requests
+grep "OAuth.*request" server.log | grep "status_code=4"
+
+# Find requests with specific error
+grep "Error handling MCP request" server.log
+```
+
+**Performance issues:**
+```bash
+# Find slow requests
+grep "duration_ms" server.log | awk -F'duration_ms=' '{print $2}' | sort -n | tail -10
+
+# Find requests to specific endpoint
+grep "path=/oauth" server.log
+```
+
+**For support tickets, include:**
+- Request ID (if available)
+- Cloudflare ray ID (if using Cloudflare)
+- Time window of the issue
+- Relevant log entries (headers are already redacted)
 
 ---
 

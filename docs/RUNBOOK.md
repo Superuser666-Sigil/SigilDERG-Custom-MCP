@@ -6,9 +6,9 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 # Sigil MCP Server Operations Runbook
 
-**Version:** 1.1  
-**Last Updated:** 2025-12-03  
-**Recommended Server Version:** v0.3.1 or later
+**Version:** 1.2  
+**Last Updated:** 2025-12-04  
+**Recommended Server Version:** v0.4.0 or later
 
 This runbook provides operational procedures for running, troubleshooting, and maintaining the Sigil MCP Server in production and development environments.
 
@@ -20,15 +20,16 @@ This runbook provides operational procedures for running, troubleshooting, and m
 2. [Installation Procedures](#installation-procedures)
 3. [Configuration Management](#configuration-management)
 4. [Server Operations](#server-operations)
-5. [Index Management](#index-management)
-6. [Authentication & Security](#authentication--security)
-7. [File Watching](#file-watching)
-8. [Direct Python Testing](#direct-python-testing)
-9. [Troubleshooting](#troubleshooting)
-10. [Monitoring & Health Checks](#monitoring--health-checks)
-11. [Backup & Recovery](#backup--recovery)
-12. [Performance Tuning](#performance-tuning)
-13. [Common Tasks](#common-tasks)
+5. [Admin API](#admin-api)
+6. [Index Management](#index-management)
+7. [Authentication & Security](#authentication--security)
+8. [File Watching](#file-watching)
+9. [Direct Python Testing](#direct-python-testing)
+10. [Troubleshooting](#troubleshooting)
+11. [Monitoring & Health Checks](#monitoring--health-checks)
+12. [Backup & Recovery](#backup--recovery)
+13. [Performance Tuning](#performance-tuning)
+14. [Common Tasks](#common-tasks)
 
 ---
 
@@ -48,10 +49,11 @@ pip install -r requirements.txt
 cp config.example.json config.json
 # Edit config.json with your repository paths
 
-# 4. Start server
-python -m sigil_mcp.server
+# 4. Start servers (MCP server + Admin UI)
+./scripts/restart_servers.sh
 
 # 5. Note OAuth credentials from startup output
+#    Access Admin UI at http://localhost:5173
 ```
 
 ### Production Setup (15 minutes)
@@ -155,13 +157,17 @@ export SIGIL_INDEX_PATH=~/.sigil_index
 ### First Run
 
 ```bash
-# Start server
-python -m sigil_mcp.server
+# Start all servers (MCP + Admin UI)
+./scripts/restart_servers.sh
 
 # Expected output:
-# OAuth Client ID: abc123...
-# OAuth Client Secret: xyz789...
-# Server running on http://127.0.0.1:8000
+# [SUCCESS] MCP Server started (PID: xxxxx)
+# [SUCCESS] Frontend Dev Server started (PID: xxxxx)
+# MCP Server:     http://127.0.0.1:8000
+# Admin UI:       http://localhost:5173
+#
+# OAuth credentials will be in server logs:
+# tail -f /tmp/sigil_server.log
 ```
 
 **[WARNING] Important:** Save OAuth credentials securely!
@@ -238,20 +244,43 @@ python -c "from sigil_mcp.config import Config; from pathlib import Path; \
 
 ### Starting the Server
 
-#### Foreground (Development)
+**Recommended: Use the restart script**
+
+The `scripts/restart_servers.sh` script is the **primary entrypoint** for starting all server processes. It handles:
+- Stopping any existing server processes
+- Starting the MCP Server (port 8000)
+- Starting the Admin UI frontend (port 5173)
+- Running processes with `nohup` for persistence
+- Port availability checks
+- Process verification
 
 ```bash
-python -m sigil_mcp.server
+# Start all servers (MCP + Admin UI)
+./scripts/restart_servers.sh
+
+# Stop all servers
+./scripts/restart_servers.sh --stop
 ```
 
-#### Background (Production)
+**What the script does:**
+1. Finds and stops any running MCP Server or Frontend processes
+2. Waits for ports 8000 and 5173 to be free
+3. Starts MCP Server with `nohup` (logs to `/tmp/sigil_server.log`)
+4. Starts Frontend Dev Server with `nohup` (logs to `/tmp/frontend.log`)
+5. Verifies both servers started successfully
+6. Displays server URLs and log file locations
+
+**Manual start (MCP server only, for development):**
 
 ```bash
-# Using nohup
+# Foreground (Development)
+python -m sigil_mcp.server
+
+# Background (Production)
 nohup python -m sigil_mcp.server > sigil.log 2>&1 &
 echo $! > sigil.pid
 
-# Using systemd (recommended)
+# Using systemd (recommended for production)
 sudo systemctl start sigil-mcp
 ```
 
@@ -283,8 +312,17 @@ sudo systemctl stop sigil-mcp
 
 ### Restarting the Server
 
+**Recommended: Use the restart script**
+
 ```bash
-# Manual
+# Restart all servers (stops existing, then starts fresh)
+./scripts/restart_servers.sh
+```
+
+**Manual restart:**
+
+```bash
+# Manual (MCP server only)
 kill -TERM $(cat sigil.pid) && sleep 2 && python -m sigil_mcp.server &
 
 # systemd
@@ -347,6 +385,219 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
     }
 }
+```
+
+---
+
+## Admin API
+
+The Admin API provides HTTP endpoints for operational management of the Sigil MCP Server. **It's integrated into the main MCP server process** (port 8000) and accessible at `/admin/*` endpoints. A React-based Admin UI is available on port 5173.
+
+### Starting the Admin API & UI
+
+**Recommended: Use the restart script (starts everything):**
+
+```bash
+./scripts/restart_servers.sh
+```
+
+This starts:
+- MCP Server on `http://127.0.0.1:8000` (includes Admin API at `/admin/*`)
+- Admin UI on `http://localhost:5173`
+
+**What the script does:**
+- Stops any existing server processes
+- Starts MCP Server with `nohup` (logs to `/tmp/sigil_server.log`)
+- Starts Admin UI frontend with `nohup` (logs to `/tmp/frontend.log`)
+- Verifies both servers started successfully
+- Both processes persist after terminal closes
+
+**Stop all servers:**
+```bash
+./scripts/restart_servers.sh --stop
+```
+
+### Configuration
+
+The Admin API is enabled by default and integrated into the main server. Configure it in `config.json`:
+
+```json
+{
+  "admin": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8000,
+    "api_key": null,
+    "allowed_ips": ["127.0.0.1", "::1"]
+  }
+}
+```
+
+**Note:** The `admin.port` setting is legacy and no longer used - the Admin API runs on the same port as the MCP server (8000 by default).
+
+Or via environment variables:
+- `SIGIL_MCP_ADMIN_ENABLED` (default: "true")
+- `SIGIL_MCP_ADMIN_API_KEY` (optional, for additional security)
+- `SIGIL_MCP_ADMIN_ALLOWED_IPS` (comma-separated list, default: "127.0.0.1,::1")
+
+### Security
+
+The Admin API uses two layers of security:
+
+1. **IP Whitelist**: Only allows connections from configured IPs (default: localhost only)
+2. **Optional API Key**: If `admin.api_key` is set, requires `X-Admin-Key` header
+
+**Example with API key:**
+```bash
+curl -H "X-Admin-Key: your-secret-key" http://127.0.0.1:8000/admin/status
+```
+
+**Example without API key (localhost only):**
+```bash
+curl http://127.0.0.1:8000/admin/status
+```
+
+### Endpoints
+
+#### GET /admin/status
+
+Get server status, repository list, index information, and watcher status.
+
+```bash
+curl http://127.0.0.1:8000/admin/status
+```
+
+Response:
+```json
+{
+  "admin": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "enabled": true
+  },
+  "repos": {
+    "my-repo": "/path/to/repo"
+  },
+  "index": {
+    "path": "/home/user/.sigil_index",
+    "has_embeddings": true,
+    "embed_model": "sentence-transformers:all-MiniLM-L6-v2"
+  },
+  "watcher": {
+    "enabled": true,
+    "watching": ["my-repo"]
+  }
+}
+```
+
+#### POST /admin/index/rebuild
+
+Rebuild the trigram/symbol index for one or all repositories.
+
+```bash
+# Rebuild all repositories
+curl -X POST http://127.0.0.1:8000/admin/index/rebuild \
+  -H "Content-Type: application/json" \
+  -d '{"force": true}'
+
+# Rebuild specific repository
+curl -X POST http://127.0.0.1:8000/admin/index/rebuild \
+  -H "Content-Type: application/json" \
+  -d '{"repo": "my-repo", "force": true}'
+```
+
+#### GET /admin/index/stats
+
+Get index statistics for one or all repositories.
+
+```bash
+# All repositories
+curl http://127.0.0.1:8000/admin/index/stats
+
+# Specific repository
+curl http://127.0.0.1:8000/admin/index/stats?repo=my-repo
+```
+
+#### POST /admin/vector/rebuild
+
+Rebuild the vector embeddings index.
+
+```bash
+# Rebuild all repositories
+curl -X POST http://127.0.0.1:8000/admin/vector/rebuild \
+  -H "Content-Type: application/json" \
+  -d '{"force": true}'
+
+# Rebuild specific repository with custom model
+curl -X POST http://127.0.0.1:8000/admin/vector/rebuild \
+  -H "Content-Type: application/json" \
+  -d '{"repo": "my-repo", "force": true, "model": "custom-model"}'
+```
+
+#### GET /admin/logs/tail
+
+Get the last N lines from the server log file.
+
+```bash
+# Last 200 lines (default)
+curl http://127.0.0.1:8000/admin/logs/tail
+
+# Last 50 lines
+curl http://127.0.0.1:8000/admin/logs/tail?n=50
+
+# Last 1000 lines (max: 2000)
+curl http://127.0.0.1:8000/admin/logs/tail?n=1000
+```
+
+#### GET /admin/config
+
+View current configuration (read-only).
+
+```bash
+curl http://127.0.0.1:8000/admin/config
+```
+
+Returns the full `config.json` structure.
+
+### Error Responses
+
+All endpoints return structured error responses:
+
+```json
+{
+  "error": "error_code",
+  "detail": "Human-readable error message"
+}
+```
+
+Common status codes:
+- `200` - Success
+- `401` - Unauthorized (invalid API key)
+- `403` - Forbidden (IP not allowed)
+- `404` - Not Found (log file not found)
+- `500` - Internal Server Error
+- `503` - Service Unavailable (admin API disabled)
+
+### Use Cases
+
+**Trigger index rebuild without restart:**
+```bash
+curl -X POST http://127.0.0.1:8000/admin/index/rebuild -d '{"force": true}'
+```
+
+**Check server health:**
+```bash
+curl http://127.0.0.1:8000/admin/status
+```
+
+**View recent errors:**
+```bash
+curl http://127.0.0.1:8000/admin/logs/tail?n=100 | grep ERROR
+```
+
+**Monitor index growth:**
+```bash
+watch -n 5 'curl -s http://127.0.0.1:8000/admin/index/stats | jq'
 ```
 
 ---
@@ -801,6 +1052,72 @@ WARNING: Invalid OAuth token
 4. Enable debug logging
 
 ---
+
+## Monitoring & Health Checks
+
+### Header Logging
+
+The server automatically logs all HTTP requests and responses via ASGI middleware. This provides visibility into:
+
+- All incoming requests (MCP tool calls, OAuth, health checks)
+- Request headers (with sensitive data redacted)
+- Response status codes and duration
+- Client IP addresses
+- Cloudflare ray IDs (if using Cloudflare)
+
+**Log Format:**
+
+```
+Incoming MCP HTTP request
+  request_id=<uuid>
+  method=POST
+  path=/
+  client_ip=203.0.113.42
+  cf_ray=8978a4bf1c5a1234-DFW
+  headers={...}
+
+Outgoing MCP HTTP response
+  request_id=<uuid>
+  status_code=200
+  duration_ms=143
+  path=/
+  method=POST
+```
+
+**Sensitive Headers Redacted:**
+- `authorization`
+- `cookie`
+- `x-api-key`
+- `x-admin-key`
+- `x-openai-session`
+- `x-openai-session-token`
+
+**Using Logs for Debugging:**
+
+```bash
+# Find all requests from a specific client IP
+grep "client_ip=203.0.113.42" server.log
+
+# Find requests with errors
+grep "status_code=5" server.log
+
+# Find slow requests (>1 second)
+grep "duration_ms=[0-9][0-9][0-9][0-9]" server.log
+
+# Correlate request/response by request_id
+grep "request_id=abc123" server.log
+
+# Find requests with specific Cloudflare ray ID
+grep "cf_ray=8978a4bf1c5a1234-DFW" server.log
+```
+
+**For Support Tickets:**
+
+When reporting issues, include:
+- Request ID (if available)
+- Cloudflare ray ID (if using Cloudflare)
+- Time window of the issue
+- Relevant log entries (headers are already redacted)
 
 ## Monitoring & Health Checks
 

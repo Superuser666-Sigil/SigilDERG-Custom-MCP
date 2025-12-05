@@ -116,8 +116,10 @@ class TestEmbeddingConfiguration:
     def test_embeddings_disabled_by_default(self):
         """Test that embeddings are disabled by default."""
         from sigil_mcp.config import Config
+        from pathlib import Path
         
-        config = Config()
+        # Use non-existent path to force env fallback (default behavior)
+        config = Config(Path("/nonexistent/config.json"))
         assert config.embeddings_enabled is False
     
     def test_embeddings_config_properties(self, temp_dir):
@@ -214,6 +216,7 @@ class TestServerEmbeddingIntegration:
     def test_embeddings_disabled_returns_none(self, temp_dir):
         """Test that disabled embeddings return None."""
         import json
+        import importlib
         from sigil_mcp.config import load_config
         
         config_path = temp_dir / "config.json"
@@ -228,7 +231,11 @@ class TestServerEmbeddingIntegration:
         
         load_config(config_path)
         
-        # Import after config is loaded
+        # Reload server module to pick up new config
+        import sigil_mcp.server
+        importlib.reload(sigil_mcp.server)
+        
+        # Import after reload
         from sigil_mcp.server import _create_embedding_function
         
         embed_fn, model_name = _create_embedding_function()

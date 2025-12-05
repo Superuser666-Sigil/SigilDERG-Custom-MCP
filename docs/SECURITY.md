@@ -24,6 +24,13 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 - [YES] Restrict access to known IP addresses
 - [YES] Additional layer of security
 
+### 4. Admin API Security
+- [YES] Admin API integrated into main server (port 8000, `/admin/*` endpoints)
+- [YES] Localhost-only by default (127.0.0.1, ::1)
+- [YES] IP whitelist enforcement
+- [YES] Optional API key authentication
+- [YES] Separate from main MCP server (isolated attack surface)
+
 ## What ngrok Free Tier Gives You
 
 | Feature | Free Tier | Notes |
@@ -43,11 +50,19 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 - [x] Update ChatGPT URL when ngrok restarts
 - [ ] Optional: Set IP whitelist if you know your source IPs
 - [ ] Optional: Upgrade ngrok for static URL
+- [ ] Optional: Set Admin API key if exposing Admin API beyond localhost
+- [ ] Optional: Configure Admin API allowed_ips if needed
 
 ## Common Questions
 
 **Q: Is my code exposed to the internet?**
 A: Only if someone has your API key. Authentication is enabled by default.
+
+**Q: Is the Admin API secure?**
+A: Yes. The Admin API is localhost-only by default and uses IP whitelisting. If you need to expose it beyond localhost, set an API key for additional security.
+
+**Q: Are my credentials logged?**
+A: No. Sensitive headers (authorization, cookies, API keys) are automatically redacted before logging. Only non-sensitive headers are logged for debugging purposes.
 
 **Q: Can someone intercept my traffic?**
 A: No, ngrok uses HTTPS/TLS encryption.

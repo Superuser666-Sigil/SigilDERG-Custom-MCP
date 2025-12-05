@@ -36,9 +36,19 @@ class Config:
     def _load_config(self, config_path: Optional[Path] = None):
         """Load configuration from file or environment."""
         # Try specified path first
-        if config_path and config_path.exists():
-            self._load_from_file(config_path)
-            return
+        if config_path:
+            if config_path.exists():
+                self._load_from_file(config_path)
+                return
+            else:
+                # Explicit path provided but doesn't exist - skip file-based loading
+                # and fall back to environment variables
+                logger.info(
+                    f"Config path {config_path} does not exist, "
+                    "using environment variables"
+                )
+                self._load_from_env()
+                return
         
         # Try current directory
         local_config = Path("config.json")
@@ -105,6 +115,15 @@ class Config:
             "repositories": self._parse_repo_map(os.getenv("SIGIL_REPO_MAP", "")),
             "index": {
                 "path": os.getenv("SIGIL_INDEX_PATH", "~/.sigil_index")
+            },
+            "admin": {
+                "enabled": os.getenv("SIGIL_MCP_ADMIN_ENABLED", "true").lower() == "true",
+                "host": os.getenv("SIGIL_MCP_ADMIN_HOST", "127.0.0.1"),
+                "port": int(os.getenv("SIGIL_MCP_ADMIN_PORT", "8765")),
+                "api_key": os.getenv("SIGIL_MCP_ADMIN_API_KEY") or None,
+                "allowed_ips": (
+                    os.getenv("SIGIL_MCP_ADMIN_ALLOWED_IPS", "127.0.0.1,::1").split(",")
+                )
             }
         }
     
@@ -150,6 +169,16 @@ class Config:
     @property
     def log_level(self) -> str:
         return self.get("server.log_level", "INFO")
+    
+    @property
+    def log_file(self) -> Optional[str]:
+        """Get log file path from config or environment."""
+        # Check environment variable first
+        env_log_file = os.getenv("SIGIL_MCP_LOG_FILE")
+        if env_log_file:
+            return env_log_file
+        # Then check config
+        return self.get("server.log_file") or None
     
     @property
     def allowed_hosts(self) -> list[str]:
@@ -217,6 +246,8 @@ class Config:
             ".so", ".o", ".a", ".dylib", ".dll", ".exe", ".bin",
             # Archives
             ".zip", ".tar", ".gz", ".bz2", ".xz", ".egg",
+            # JavaScript modules (including Vite temporary files)
+            ".mjs",
             # Images
             ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
             # Fonts
@@ -288,6 +319,31 @@ class Config:
     def index_path(self) -> Path:
         path_str = self.get("index.path", "~/.sigil_index")
         return Path(path_str).expanduser().resolve()
+    
+    # --- Admin API configuration ---
+
+    @property
+    def admin_enabled(self) -> bool:
+        return self.get("admin.enabled", True)
+
+    @property
+    def admin_host(self) -> str:
+        return self.get("admin.host", "127.0.0.1")
+
+    @property
+    def admin_port(self) -> int:
+        return int(self.get("admin.port", 8765))
+
+    @property
+    def admin_api_key(self) -> Optional[str]:
+        return self.get("admin.api_key")
+
+    @property
+    def admin_allowed_ips(self) -> list[str]:
+        value = self.get("admin.allowed_ips")
+        if not value:
+            return ["127.0.0.1", "::1"]
+        return value
 
 
 # Global config instance

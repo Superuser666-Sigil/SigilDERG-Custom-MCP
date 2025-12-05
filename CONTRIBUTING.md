@@ -92,8 +92,8 @@ For common licensing questions, see the [Licensing FAQ in README.md](README.md#l
 1. **Fork and clone the repository:**
 
 ```bash
-git clone https://github.com/YourUsername/sigil-mcp-server.git
-cd sigil-mcp-server
+git clone https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP.git
+cd SigilDERG-Custom-MCP
 ```
 
 2. **Create a virtual environment:**

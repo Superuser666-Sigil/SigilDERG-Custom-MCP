@@ -68,22 +68,30 @@ class SigilIndex:
         # (HTTP handlers + file watcher + vector indexing)
         self._lock = threading.RLock()
         
+        # Use longer timeout for multi-process access (Admin API + main server)
+        # 60 seconds should be enough for most operations
         self.repos_db = sqlite3.connect(
             self.index_path / "repos.db",
-            check_same_thread=False
+            check_same_thread=False,
+            timeout=60.0  # 60 second timeout for database locks
         )
         # Enable WAL + sane defaults for concurrent readers / writers
         self.repos_db.execute("PRAGMA journal_mode=WAL;")
         self.repos_db.execute("PRAGMA synchronous=NORMAL;")
-        self.repos_db.execute("PRAGMA busy_timeout=5000;")
+        self.repos_db.execute(
+            "PRAGMA busy_timeout=60000;"
+        )  # 60 seconds in milliseconds
 
         self.trigrams_db = sqlite3.connect(
             self.index_path / "trigrams.db",
-            check_same_thread=False
+            check_same_thread=False,
+            timeout=60.0  # 60 second timeout for database locks
         )
         self.trigrams_db.execute("PRAGMA journal_mode=WAL;")
         self.trigrams_db.execute("PRAGMA synchronous=NORMAL;")
-        self.trigrams_db.execute("PRAGMA busy_timeout=5000;")
+        self.trigrams_db.execute(
+            "PRAGMA busy_timeout=60000;"
+        )  # 60 seconds in milliseconds
         
         self._init_schema()
     
@@ -200,8 +208,9 @@ class SigilIndex:
                 # Get or create repo entry
                 cursor = self.repos_db.cursor()
                 cursor.execute(
-                    "INSERT OR IGNORE INTO repos (name, path, indexed_at) VALUES (?, ?, ?)",
-                    (repo_name, str(repo_path), datetime.now().isoformat())
+                    "INSERT OR IGNORE INTO repos (name, path, indexed_at) "
+                    "VALUES (?, ?, ?)",
+                    (repo_name, str(repo_path), datetime.now().isoformat()),
                 )
                 cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
                 repo_id = cursor.fetchone()[0]
@@ -257,10 +266,30 @@ class SigilIndex:
         # Read file content
         content = self._read_blob(blob_sha)
         if not content:
+            logger.debug(
+                "_update_trigrams_for_file: blob %s not found for doc %s",
+                blob_sha,
+                doc_id,
+            )
             return
-        
+
         text = content.decode('utf-8', errors='replace').lower()
+        logger.warning(
+            "_update_trigrams_for_file: sample text start: %s",
+            repr(text[:200]),
+        )
+        logger.warning(
+            "_update_trigrams_for_file: contains 'new_function'? %s",
+            'new_function' in text,
+        )
         new_trigrams = self._extract_trigrams(text)
+        logger.warning(
+            "_update_trigrams_for_file: repo_id=%s doc_id=%s blob_sha=%s trigrams=%s",
+            repo_id,
+            doc_id,
+            blob_sha,
+            len(new_trigrams),
+        )
         
         # Update trigrams database
         # Note: This is a simplified approach - for production, you'd want to
@@ -273,22 +302,70 @@ class SigilIndex:
             
             if row:
                 # Add this doc_id if not already present
-                existing_ids = {
-                    int(x) for x in zlib.decompress(row[0]).decode().split(',') if x
-                }
+                try:
+                    existing_ids = {
+                        int(x) for x in zlib.decompress(row[0]).decode().split(',') if x
+                    }
+                except Exception:
+                    # Defensive: log and reset existing ids if decompress/parse fails
+                    logger.exception(
+                        "Failed to parse existing doc_ids for trigram %s",
+                        trigram,
+                    )
+                    existing_ids = set()
                 existing_ids.add(doc_id)
             else:
                 existing_ids = {doc_id}
             
-            compressed = zlib.compress(
-                ','.join(str(doc_id) for doc_id in sorted(existing_ids)).encode()
-            )
+            joined_ids = ','.join(str(doc_id) for doc_id in sorted(existing_ids))
+            compressed = zlib.compress(joined_ids.encode())
             self.trigrams_db.execute(
                 "INSERT OR REPLACE INTO trigrams (gram, doc_ids) VALUES (?, ?)",
                 (trigram, compressed)
             )
         
         self.trigrams_db.commit()
+        logger.warning(
+            "_update_trigrams_for_file: committed %d trigrams for doc %s",
+            len(new_trigrams),
+            doc_id,
+        )
+        # Quick verification for common trigrams we expect from function names
+        for sample in ("new", "fun", "unc"):
+            c = self.trigrams_db.execute(
+                "SELECT doc_ids FROM trigrams WHERE gram = ?",
+                (sample,),
+            )
+            r = c.fetchone()
+            if r:
+                try:
+                    ids = {
+                        int(x)
+                        for x in zlib.decompress(r[0]).decode().split(',')
+                        if x
+                    }
+                except Exception:
+                    ids = set()
+                logger.warning(
+                    "_update_trigrams_for_file: sample trigram %s -> %s",
+                    sample,
+                    sorted(ids),
+                )
+            else:
+                logger.warning(
+                    "_update_trigrams_for_file: sample trigram %s -> NOT FOUND",
+                    sample,
+                )
+        # Dump first few grams present for quick inspection
+        try:
+            rows = list(self.trigrams_db.execute("SELECT gram FROM trigrams LIMIT 30"))
+            grams = [r[0] for r in rows]
+            logger.warning(
+                "_update_trigrams_for_file: sample stored grams (first 30): %s",
+                grams,
+            )
+        except Exception:
+            logger.exception("_update_trigrams_for_file: failed to read stored grams")
     
     def index_repository(
         self,
@@ -321,8 +398,9 @@ class SigilIndex:
             # Register or update repo
             cursor = self.repos_db.cursor()
             cursor.execute(
-                "INSERT OR REPLACE INTO repos (name, path, indexed_at) VALUES (?, ?, ?)",
-                (repo_name, str(repo_path), datetime.now().isoformat())
+                "INSERT OR REPLACE INTO repos (name, path, indexed_at) "
+                "VALUES (?, ?, ?)",
+                (repo_name, str(repo_path), datetime.now().isoformat()),
             )
             repo_id = cursor.lastrowid
             if not repo_id:
@@ -410,6 +488,31 @@ class SigilIndex:
                 return None  # Already indexed, skip
             
             # Store document metadata
+            # Remove any existing document rows for this repo/path (stale entries)
+            # This avoids returning an old doc_id that points to a previous blob_sha
+            try:
+                cursor.execute(
+                    "SELECT id FROM documents WHERE repo_id = ? AND path = ?",
+                    (repo_id, rel_path)
+                )
+                rows = cursor.fetchall()
+                for (old_doc_id,) in rows:
+                    # remove symbols referencing the old doc
+                    cursor.execute(
+                        "DELETE FROM symbols WHERE doc_id = ?",
+                        (old_doc_id,),
+                    )
+                    # remove embeddings referencing the old doc (if any)
+                    cursor.execute(
+                        "DELETE FROM embeddings WHERE doc_id = ?",
+                        (old_doc_id,),
+                    )
+                    # remove the old document row
+                    cursor.execute("DELETE FROM documents WHERE id = ?", (old_doc_id,))
+            except Exception:
+                # Be defensive; if cleanup fails, continue (we'll still insert)
+                logger.exception("Failed to cleanup old document rows for %s", rel_path)
+
             cursor.execute("""
                 INSERT INTO documents (repo_id, path, blob_sha, size, language)
                 VALUES (?, ?, ?, ?, ?)
@@ -427,7 +530,9 @@ class SigilIndex:
             symbols = self._extract_symbols(file_path, language)
             for symbol in symbols:
                 cursor.execute("""
-                    INSERT INTO symbols (doc_id, name, kind, line, character, signature, scope)
+                    INSERT INTO symbols (
+                        doc_id, name, kind, line, character, signature, scope
+                    )
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     doc_id,
@@ -579,7 +684,7 @@ class SigilIndex:
             '.pyc', '.so', '.o', '.a', '.dylib', '.dll',
             '.exe', '.bin', '.pdf', '.png', '.jpg', '.gif',
             '.svg', '.ico', '.woff', '.woff2', '.ttf',
-            '.zip', '.tar', '.gz', '.bz2', '.xz'
+            '.zip', '.tar', '.gz', '.bz2', '.xz', '.mjs'
         }
         
         # Check if any parent is in skip_dirs
@@ -593,6 +698,10 @@ class SigilIndex:
         
         # Skip files starting with .
         if path.name.startswith('.'):
+            return True
+        
+        # Skip Vite temporary build files (e.g., vite.config.ts.timestamp-*.mjs)
+        if '.timestamp-' in path.name:
             return True
         
         # Skip large files (> 1MB)
@@ -624,8 +733,14 @@ class SigilIndex:
         with self._lock:
             query_lower = query.lower()
             query_trigrams = self._extract_trigrams(query_lower)
-            
+            logger.warning(
+                "search_code: query=%s trigrams=%s",
+                query,
+                sorted(query_trigrams),
+            )
+
             if not query_trigrams:
+                logger.debug("search_code: no trigrams extracted for query %s", query)
                 return []
             
             # Fetch document IDs for each trigram
@@ -639,8 +754,14 @@ class SigilIndex:
                     doc_ids = {
                         int(x) for x in zlib.decompress(row[0]).decode().split(',') if x
                     }
+                    logger.warning(
+                        "search_code: trigram %s -> doc_ids=%s",
+                        gram,
+                        sorted(doc_ids),
+                    )
                     doc_id_sets.append(doc_ids)
                 else:
+                    logger.debug("search_code: trigram %s not found", gram)
                     # Trigram not found, no results
                     return []
             
@@ -655,12 +776,11 @@ class SigilIndex:
                 row = cursor.fetchone()
                 if row:
                     repo_id = row[0]
-                    cursor = self.repos_db.execute(
-                        "SELECT id FROM documents WHERE repo_id = ? AND id IN ({})".format(
-                            ','.join('?' * len(candidate_doc_ids))
-                        ),
-                        (repo_id, *candidate_doc_ids)
+                    stmt = (
+                        "SELECT id FROM documents WHERE repo_id = ? AND id IN ({})"
+                        .format(','.join('?' * len(candidate_doc_ids)))
                     )
+                    cursor = self.repos_db.execute(stmt, (repo_id, *candidate_doc_ids))
                     candidate_doc_ids = {row[0] for row in cursor.fetchall()}
             
             # Verify matches and extract context
@@ -812,6 +932,92 @@ class SigilIndex:
                 'repo_name': row[3]
             }
         return None
+
+    def _delete_symbols_and_embeddings_for_doc(self, doc_id: int) -> None:
+        """Delete symbols and embeddings for a document id."""
+        self.repos_db.execute("DELETE FROM symbols WHERE doc_id = ?", (doc_id,))
+        self.repos_db.execute("DELETE FROM embeddings WHERE doc_id = ?", (doc_id,))
+
+    def _remove_trigrams_for_doc_fast(self, doc_id: int, trigrams: Set[str]) -> None:
+        """Fast path for removing doc_id from a list of trigrams."""
+        for gram in trigrams:
+            tri_cursor = self.trigrams_db.execute(
+                "SELECT doc_ids FROM trigrams WHERE gram = ?",
+                (gram,),
+            )
+            tri_row = tri_cursor.fetchone()
+            if not tri_row:
+                continue
+
+            existing_ids = {
+                int(x) for x in zlib.decompress(tri_row[0]).decode().split(",") if x
+            }
+            if doc_id not in existing_ids:
+                logger.debug(
+                    "remove_file: doc_id %s not in posting for gram %s",
+                    doc_id,
+                    gram,
+                )
+                continue
+
+            existing_ids.remove(doc_id)
+            if not existing_ids:
+                logger.debug("remove_file: dropping trigram %s (no docs left)", gram)
+                self.trigrams_db.execute("DELETE FROM trigrams WHERE gram = ?", (gram,))
+            else:
+                joined = ",".join(str(x) for x in sorted(existing_ids))
+                compressed = zlib.compress(joined.encode())
+                self.trigrams_db.execute(
+                    "INSERT OR REPLACE INTO trigrams (gram, doc_ids) VALUES (?, ?)",
+                    (gram, compressed),
+                )
+                logger.debug(
+                    "remove_file: updated trigram %s -> %s",
+                    gram,
+                    sorted(existing_ids),
+                )
+
+    def _remove_trigrams_for_doc_scan(self, doc_id: int) -> None:
+        """
+        Slow fallback scanning removal: scan all trigrams and remove this doc_id
+        where present.
+        """
+        tri_cursor = self.trigrams_db.execute("SELECT gram, doc_ids FROM trigrams")
+        rows = tri_cursor.fetchall()
+        for gram, blob in rows:
+            existing_ids = {
+                int(x) for x in zlib.decompress(blob).decode().split(",") if x
+            }
+            if doc_id not in existing_ids:
+                continue
+
+            existing_ids.remove(doc_id)
+            if not existing_ids:
+                self.trigrams_db.execute("DELETE FROM trigrams WHERE gram = ?", (gram,))
+            else:
+                joined = ",".join(str(x) for x in sorted(existing_ids))
+                compressed = zlib.compress(joined.encode())
+                self.trigrams_db.execute(
+                    "INSERT OR REPLACE INTO trigrams (gram, doc_ids) VALUES (?, ?)",
+                    (gram, compressed),
+                )
+
+    def _delete_blob_if_unreferenced(self, blob_sha: str, rel_path: str) -> None:
+        """Delete blob file if no other document references it."""
+        curs = self.repos_db.cursor()
+        curs.execute("SELECT COUNT(*) FROM documents WHERE blob_sha = ?", (blob_sha,))
+        ref_count = curs.fetchone()[0]
+        if ref_count == 0:
+            blob_file = self.index_path / "blobs" / blob_sha[:2] / blob_sha[2:]
+            try:
+                if blob_file.exists():
+                    blob_file.unlink()
+            except OSError:
+                logger.debug(
+                    "Failed to delete blob file %s for %s",
+                    blob_file,
+                    rel_path,
+                )
     
     def _chunk_text(
         self,
@@ -890,10 +1096,14 @@ class SigilIndex:
             
             # Optionally wipe old embeddings for this repo + model
             if force:
-                cur.execute("""
+                cur.execute(
+                    """
                     DELETE FROM embeddings
-                    WHERE doc_id IN (SELECT id FROM documents WHERE repo_id = ?) AND model = ?
-                """, (repo_id, model))
+                    WHERE doc_id IN (SELECT id FROM documents WHERE repo_id = ?)
+                    AND model = ?
+                    """,
+                    (repo_id, model),
+                )
                 self.repos_db.commit()
             
             cur.execute(
@@ -906,7 +1116,8 @@ class SigilIndex:
                 # Skip if already embedded (unless force)
                 if not force:
                     cur2 = self.repos_db.execute(
-                        "SELECT COUNT(*) FROM embeddings WHERE doc_id = ? AND model = ?",
+                        "SELECT COUNT(*) FROM embeddings WHERE doc_id = ? "
+                        "AND model = ?",
                         (doc_id, model),
                     )
                     if cur2.fetchone()[0] > 0:
@@ -945,8 +1156,10 @@ class SigilIndex:
             
             self.repos_db.commit()
             logger.info(
-                f"Built vector index for {repo}: {stats['documents_processed']} documents, "
-                f"{stats['chunks_indexed']} chunks"
+                "Built vector index for %s: %s documents, %s chunks",
+                repo,
+                stats['documents_processed'],
+                stats['chunks_indexed'],
             )
             return stats
     
@@ -1031,6 +1244,9 @@ class SigilIndex:
                 score = float(scores[idx])
                 doc_id, chunk_idx, start_line, end_line, path = meta[idx]
                 doc = self._get_document(doc_id)
+                if doc is None:
+                    # Document was deleted but embedding still exists - skip it
+                    continue
                 results.append({
                     "repo": doc["repo_name"],
                     "path": path,
@@ -1142,6 +1358,12 @@ class SigilIndex:
                     return False
 
                 doc_id, blob_sha = row
+                logger.warning(
+                    "remove_file: found doc_id=%s blob_sha=%s for %s",
+                    doc_id,
+                    blob_sha,
+                    rel_path,
+                )
 
                 # Load content for trigram cleanup (optional but ideal).
                 # If the blob is missing or unreadable, we still must ensure that
@@ -1151,88 +1373,25 @@ class SigilIndex:
                 if content is not None:
                     text = content.decode("utf-8", errors="replace").lower()
                     trigrams = self._extract_trigrams(text)
+                    logger.warning(
+                        "remove_file: found %d trigrams for doc %s",
+                        len(trigrams),
+                        doc_id,
+                    )
                 else:
                     trigrams = None
 
                 # Delete symbols and embeddings for this doc
-                self.repos_db.execute(
-                    "DELETE FROM symbols WHERE doc_id = ?",
-                    (doc_id,),
-                )
-                self.repos_db.execute(
-                    "DELETE FROM embeddings WHERE doc_id = ?",
-                    (doc_id,),
-                )
+                self._delete_symbols_and_embeddings_for_doc(doc_id)
 
                 # Update trigram index to drop this doc_id
                 if trigrams is not None:
-                    # Fast path: we know exactly which trigrams belonged to this document.
+                    # Fast path: we know which trigrams belonged to this document.
                     if trigrams:
-                        for gram in trigrams:
-                            tri_cursor = self.trigrams_db.execute(
-                                "SELECT doc_ids FROM trigrams WHERE gram = ?",
-                                (gram,),
-                            )
-                            tri_row = tri_cursor.fetchone()
-                            if not tri_row:
-                                continue
-
-                            existing_ids = {
-                                int(x)
-                                for x in zlib.decompress(tri_row[0]).decode().split(",")
-                                if x
-                            }
-                            if doc_id not in existing_ids:
-                                continue
-
-                            existing_ids.remove(doc_id)
-                            if not existing_ids:
-                                # No docs left for this trigram – drop it
-                                self.trigrams_db.execute(
-                                    "DELETE FROM trigrams WHERE gram = ?",
-                                    (gram,),
-                                )
-                            else:
-                                compressed = zlib.compress(
-                                    ",".join(str(x) for x in sorted(existing_ids)).encode()
-                                )
-                                self.trigrams_db.execute(
-                                    "INSERT OR REPLACE INTO trigrams (gram, doc_ids) "
-                                    "VALUES (?, ?)",
-                                    (gram, compressed),
-                                )
+                        self._remove_trigrams_for_doc_fast(doc_id, trigrams)
                 else:
-                    # Slow fallback: blob was missing/unreadable, so we don't know which
-                    # trigrams were associated with this document. Scan all postings and
-                    # strip this doc_id anywhere it appears to avoid orphaned references.
-                    tri_cursor = self.trigrams_db.execute(
-                        "SELECT gram, doc_ids FROM trigrams"
-                    )
-                    rows = tri_cursor.fetchall()
-                    for gram, blob in rows:
-                        existing_ids = {
-                            int(x)
-                            for x in zlib.decompress(blob).decode().split(",")
-                            if x
-                        }
-                        if doc_id not in existing_ids:
-                            continue
-
-                        existing_ids.remove(doc_id)
-                        if not existing_ids:
-                            self.trigrams_db.execute(
-                                "DELETE FROM trigrams WHERE gram = ?",
-                                (gram,),
-                            )
-                        else:
-                            compressed = zlib.compress(
-                                ",".join(str(x) for x in sorted(existing_ids)).encode()
-                            )
-                            self.trigrams_db.execute(
-                                "INSERT OR REPLACE INTO trigrams (gram, doc_ids) "
-                                "VALUES (?, ?)",
-                                (gram, compressed),
-                            )
+                    # Fallback scan to remove doc_id from any trigram postings found
+                    self._remove_trigrams_for_doc_scan(doc_id)
 
                 # Delete document row
                 self.repos_db.execute(
@@ -1241,30 +1400,15 @@ class SigilIndex:
                 )
 
                 # Optionally delete blob content if no other docs reference it
-                cursor.execute(
-                    "SELECT COUNT(*) FROM documents WHERE blob_sha = ?",
-                    (blob_sha,),
-                )
-                ref_count = cursor.fetchone()[0]
-                if ref_count == 0:
-                    blob_file = (
-                        self.index_path
-                        / "blobs"
-                        / blob_sha[:2]
-                        / blob_sha[2:]
-                    )
-                    try:
-                        if blob_file.exists():
-                            blob_file.unlink()
-                    except OSError:
-                        logger.debug(
-                            "Failed to delete blob file %s for %s",
-                            blob_file,
-                            rel_path,
-                        )
+                self._delete_blob_if_unreferenced(blob_sha, rel_path)
 
                 self.repos_db.commit()
                 self.trigrams_db.commit()
+                logger.warning(
+                    "remove_file: committed deletion for doc_id %s "
+                    "and updated trigrams",
+                    doc_id,
+                )
 
                 logger.info("Removed %s from index (repo=%s)", rel_path, repo_name)
                 return True

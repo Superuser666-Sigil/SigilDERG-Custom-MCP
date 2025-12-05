@@ -332,18 +332,34 @@ cloudflared tunnel route dns sigil-mcp mcp.yourdomain.com
 
 ### 502 Bad Gateway
 
-This means tunnel is connected but backend (MCP server) is down:
+**Common Causes:**
 
-```bash
-# Check if server is running
-ps aux | grep sigil_mcp
+1. **MCP server is down** - Check if server is running:
+   ```bash
+   # Check if server is running
+   ps aux | grep sigil_mcp
+   
+   # Check server logs
+   journalctl -u sigil-mcp -f
+   
+   # Restart MCP server
+   sudo systemctl restart sigil-mcp
+   ```
 
-# Check server logs
-journalctl -u sigil-mcp -f
+2. **Cloudflare buffering responses** - The server automatically adds headers to prevent buffering:
+   - `X-Accel-Buffering: no` - Tells Cloudflare/Nginx not to buffer
+   - `Cache-Control: no-cache, no-store, must-revalidate` - Prevents caching
+   - `Connection: keep-alive` - Keeps connection alive
+   
+   These headers are added automatically by the server's middleware. If you're still getting 502 errors:
+   - Ensure you're running the latest version of the server
+   - Check server logs for any errors
+   - Verify the tunnel is connected: `sudo systemctl status cloudflared`
 
-# Restart MCP server
-sudo systemctl restart sigil-mcp
-```
+3. **Connection timeout** - Cloudflare may timeout if the server takes too long to respond:
+   - Check server response times in logs
+   - Ensure the server isn't overloaded
+   - Consider increasing Cloudflare timeout settings (requires paid plan)
 
 ### ICMP Proxy Warnings
 

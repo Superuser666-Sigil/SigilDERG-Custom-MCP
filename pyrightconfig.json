@@ -1,0 +1,38 @@
+{
+  "include": [
+    "sigil_mcp",
+    "tests",
+    "*.py"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    "**/.venv",
+    "**/venv",
+    "dist",
+    "build",
+    "sigil-admin-ui"
+  ],
+  "defineConstant": {
+    "DEBUG": true
+  },
+  "stubPath": ".",
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": false,
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "pythonVersion": "3.12",
+      "pythonPlatform": "Linux",
+      "extraPaths": [
+        "."
+      ]
+    }
+  ]
+}
+

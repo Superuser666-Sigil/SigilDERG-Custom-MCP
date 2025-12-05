@@ -7,7 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+- Added `scripts/restart_servers.sh` - Main entrypoint script for starting/stopping all server processes
+  - Automatically stops any running MCP Server or Frontend processes
+  - Starts MCP Server with `nohup` (port 8000, logs to `/tmp/sigil_server.log`)
+  - Starts Admin UI frontend with `nohup` (port 5173, logs to `/tmp/frontend.log`)
+  - Verifies both servers started successfully
+  - Processes persist after terminal closes
+  - Use `./scripts/restart_servers.sh --stop` to stop all servers
+
+### Changed
+- **Admin API Integration**: Admin API now runs integrated into the main MCP server process (port 8000, `/admin/*` endpoints)
+  - No longer requires separate service or port
+  - Shares the same index instance (eliminates database lock conflicts)
+  - `admin_api_main.py` is deprecated (Admin API starts automatically with main server)
+- **Server Startup**: `scripts/restart_servers.sh` is now the recommended way to start all servers
+  - Updated README.md, RUNBOOK.md, and all documentation to reference the restart script
+  - All server processes run with `nohup` for persistence
+
+## [0.4.0] - 2025-12-04
+
+### Added
+- Added Admin API (`sigil_mcp/admin_api.py`) - Separate HTTP service for operational management
+  - `GET /admin/status` - Server status, repositories, index info, watcher status
+  - `POST /admin/index/rebuild` - Rebuild trigram/symbol index (all repos or specific repo)
+  - `GET /admin/index/stats` - Get index statistics (all repos or specific repo)
+  - `POST /admin/vector/rebuild` - Rebuild vector embeddings index
+  - `GET /admin/logs/tail` - Get last N lines from server log file
+  - `GET /admin/config` - View current configuration (read-only)
+- Added Admin API configuration properties to `Config` class:
+  - `admin.enabled` - Enable/disable Admin API (default: true)
+  - `admin.host` - Admin API host (default: 127.0.0.1)
+  - `admin.port` - Admin API port (default: 8765)
+  - `admin.api_key` - Optional API key for additional security
+  - `admin.allowed_ips` - IP whitelist (default: 127.0.0.1, ::1)
+- Added `HeaderLoggingASGIMiddleware` - ASGI middleware for comprehensive request/response logging
+  - Logs all HTTP requests with redacted headers
+  - Logs response status codes and duration
+  - Extracts client IP from X-Forwarded-For or direct connection
+  - Extracts Cloudflare ray IDs for correlation
+  - Generates request IDs for request/response correlation
+  - Redacts sensitive headers (authorization, cookies, API keys)
+- Added operational helper functions to `server.py`:
+  - `rebuild_index_op()` - Rebuild trigram/symbol index (used by Admin API and MCP tools)
+  - `build_vector_index_op()` - Rebuild vector embeddings index
+  - `get_index_stats_op()` - Get index statistics
+- Added `test_header_logging.py` - Comprehensive test suite for header logging middleware
+- Added `test_admin_api.py` - Test suite for Admin API endpoints
+
+### Changed
+- Improved config loading behavior: explicit non-existent paths now skip file-based loading and fall back to environment variables
+- Reduced OAuth route header logging: OAuth routes now rely on middleware for header logging (with redaction) instead of logging raw headers
+- Enhanced error handling in `semantic_search`: gracefully handles missing documents (deleted files with orphaned embeddings)
+
+### Fixed
+- Fixed type annotation issue in `get_index_stats` MCP tool (return type now matches implementation)
+- Fixed potential `None` subscript error in `semantic_search` when document is deleted but embedding still exists
 
 ## [0.3.2] - 2025-12-04
 
@@ -117,10 +172,11 @@ No changes yet.
 - Contributor guidelines (CONTRIBUTING.md)
 - Code of Conduct (Contributor Covenant 2.1)
 
-[Unreleased]: https://github.com/yourusername/sigil-mcp-server/compare/v0.3.2...HEAD
-[0.3.2]: https://github.com/yourusername/sigil-mcp-server/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/yourusername/sigil-mcp-server/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/yourusername/sigil-mcp-server/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/yourusername/sigil-mcp-server/compare/v0.1.1...v0.2.0
-[0.1.1]: https://github.com/yourusername/sigil-mcp-server/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/yourusername/sigil-mcp-server/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP/compare/v0.3.2...v0.4.0
+[0.3.2]: https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP/releases/tag/v0.1.0

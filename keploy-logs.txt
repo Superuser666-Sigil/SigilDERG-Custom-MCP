@@ -1,0 +1,34 @@
+🐰 Keploy: 2025-12-05T01:59:15.993530074-06:00 	[34mINFO[0m	setting up app	{"keployContainer": "keploy-v2"}
+🐰 Keploy: 2025-12-05T01:59:16.902114569-06:00 	[34mINFO[0m	keploy initialized and probes added to the kernel.
+🐰 Keploy: 2025-12-05T01:59:17.450207607-06:00 	[34mINFO[0m	starting UDP DNS server at addr :26789
+🐰 Keploy: 2025-12-05T01:59:17.450218658-06:00 	[34mINFO[0m	starting TCP DNS server at addr :26789
+🐰 Keploy: 2025-12-05T01:59:17.450554725-06:00 	[34mINFO[0m	Keploy has taken control of the DNS resolution mechanism, your application may misbehave if you have provided wrong domain name in your application code.
+🐰 Keploy: 2025-12-05T01:59:17.450596514-06:00 	[34mINFO[0m	Proxy started at port:16789
+🐰 Keploy: 2025-12-05T02:03:26.851514358-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 0, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:51672: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.610794155-06:00 	[31mERROR[0m	failed to find unique process groups	{"pid": 183990, "error": "open /proc/183990/status: no such file or directory"}
+🐰 Keploy: 2025-12-05T02:03:29.611067022-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 20, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:46228: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611117808-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 4, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:38188: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611103561-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 22, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:46802: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611114521-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 16, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:50202: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611167542-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 30, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:51140: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611315362-06:00 	[31mERROR[0m	failed to read the response message from the destination server	{"Type": "http"}
+🐰 Keploy: 2025-12-05T02:03:29.611135461-06:00 	[31mERROR[0m	failed to read the response message from the destination server	{"Type": "http"}
+🐰 Keploy: 2025-12-05T02:03:29.611125903-06:00 	[31mERROR[0m	failed to read the response message from the destination server	{"Type": "http"}
+🐰 Keploy: 2025-12-05T02:03:29.611184985-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 28, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:33858: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.61118248-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 6, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:45648: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611219941-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 10, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:34118: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.61118257-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 18, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:37664: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611249177-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 14, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:41208: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611189844-06:00 	[31mERROR[0m	failed to read the response message from the destination server	{"Type": "http"}
+🐰 Keploy: 2025-12-05T02:03:29.611227435-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 24, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:53834: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611319369-06:00 	[31mERROR[0m	failed to read the response message from the destination server	{"Type": "http"}
+🐰 Keploy: 2025-12-05T02:03:29.611170437-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 12, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:54476: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611337003-06:00 	[31mERROR[0m	failed to read the response message from the destination server	{"Type": "http"}
+🐰 Keploy: 2025-12-05T02:03:29.611383862-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 26, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:33856: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611283702-06:00 	[31mERROR[0m	failed to read the response message from the destination server	{"Type": "http"}
+🐰 Keploy: 2025-12-05T02:03:29.611206375-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 8, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:40388: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611283281-06:00 	[31mERROR[0m	failed to read the response message from the destination server	{"Type": "http"}
+🐰 Keploy: 2025-12-05T02:03:29.611254396-06:00 	[31mERROR[0m	failed to close the source connection	{"clientConnID": 2, "error": "tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 127.0.0.1:16789->127.0.0.1:48042: write: broken pipe"}
+🐰 Keploy: 2025-12-05T02:03:29.611263133-06:00 	[31mERROR[0m	failed to read the response message from the destination server	{"Type": "http"}
+🐰 Keploy: 2025-12-05T02:03:29.61131456-06:00 	[31mERROR[0m	failed to read the response message from the destination server	{"Type": "http"}
+🐰 Keploy: 2025-12-05T02:03:29.611843653-06:00 	[34mINFO[0m	proxy stopped...

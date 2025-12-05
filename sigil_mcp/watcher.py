@@ -34,6 +34,17 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Reduce noise from watchdog's internal inotify logging
+# These DEBUG logs are very verbose and not useful for our purposes
+# Set this early to prevent any watchdog DEBUG logs from appearing
+for logger_name in [
+    "watchdog.observers.inotify_buffer",
+    "watchdog.observers.inotify",
+    "watchdog.observers",
+    "watchdog",
+]:
+    logging.getLogger(logger_name).setLevel(logging.WARNING)
+
 
 class RepositoryWatcher(FileSystemEventHandler):
     """Watches a repository directory for file changes."""
@@ -133,6 +144,10 @@ class RepositoryWatcher(FileSystemEventHandler):
             if ext in self.ignore_extensions:
                 return True
         
+        # Skip Vite temporary build files (e.g., vite.config.ts.timestamp-*.mjs)
+        if '.timestamp-' in path.name:
+            return True
+        
         return False
     
     def _schedule_change(self, path_str: str, event_type: str):
@@ -146,7 +161,15 @@ class RepositoryWatcher(FileSystemEventHandler):
             except ValueError:
                 return  # Outside repo, ignore
             
-            if path.is_file() and not self._should_ignore(path):
+            # For deletions the file will not exist anymore, but we still
+            # need to schedule the event so callers can react to deletes.
+            should_schedule = False
+            if event_type == "deleted":
+                should_schedule = True
+            elif path.is_file():
+                should_schedule = True
+
+            if should_schedule and not self._should_ignore(path):
                 with self.lock:
                     # Update or add pending change
                     self.pending_changes[str(path)] = (path, event_type, time.time())
@@ -156,18 +179,51 @@ class RepositoryWatcher(FileSystemEventHandler):
         except Exception as e:
             logger.debug(f"Error scheduling change for {path_str}: {e}")
     
+    def _should_ignore_path(self, path_str: str) -> bool:
+        """Quick check to ignore paths before any processing."""
+        normalized = path_str.replace('\\', '/')
+        parts = normalized.split('/')
+        
+        # Check against configured ignore directories
+        # This prevents watchdog from even processing events for these dirs
+        if self.ignore_dirs:
+            # Normalize ignore dirs (handle with/without leading dot)
+            normalized_ignore = set()
+            for ignore_dir in self.ignore_dirs:
+                normalized_ignore.add(ignore_dir)
+                if ignore_dir.startswith('.'):
+                    normalized_ignore.add(ignore_dir.lstrip('.'))
+                else:
+                    normalized_ignore.add(f'.{ignore_dir}')
+            
+            # Check if any path component matches an ignored directory
+            if any(part in normalized_ignore or f'.{part}' in normalized_ignore 
+                   for part in parts):
+                return True
+        
+        return False
+    
     def on_modified(self, event: FileSystemEvent):  # type: ignore
         """Called when a file is modified."""
+        # Ignore .git directory entirely - don't even process these events
+        if self._should_ignore_path(str(event.src_path)):
+            return
         if not event.is_directory:
             self._schedule_change(str(event.src_path), "modified")
     
     def on_created(self, event: FileSystemEvent):  # type: ignore
         """Called when a file is created."""
+        # Ignore .git directory entirely - don't even process these events
+        if self._should_ignore_path(str(event.src_path)):
+            return
         if not event.is_directory:
             self._schedule_change(str(event.src_path), "created")
     
     def on_deleted(self, event: FileSystemEvent):  # type: ignore
         """Called when a file is deleted."""
+        # Ignore .git directory entirely - don't even process these events
+        if self._should_ignore_path(str(event.src_path)):
+            return
         if not event.is_directory:
             self._schedule_change(str(event.src_path), "deleted")
     
@@ -247,6 +303,16 @@ class FileWatchManager:
                 ignore_dirs=self.ignore_dirs,
                 ignore_extensions=self.ignore_extensions,
             )
+            # Ensure server.REPOS knows about this repository so callbacks
+            # that rely on server.REPOS (e.g., _on_file_change) can resolve
+            # the repo root when running inside tests or external watchers.
+            try:
+                from sigil_mcp import server as _server  # local import to avoid circular top-level import
+                if repo_name not in getattr(_server, "REPOS", {}):
+                    _server.REPOS[repo_name] = repo_path
+            except Exception:
+                # Non-fatal: if we can't update server.REPOS, continue watching
+                pass
             
             self.observer.schedule(watcher, str(repo_path), recursive=recursive)
             self.watchers[repo_name] = watcher

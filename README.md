@@ -21,6 +21,8 @@ A Model Context Protocol (MCP) server that provides IDE-like code navigation and
 - Thread-safe concurrent access (SQLite WAL mode + RLock serialization)
 - File watcher, HTTP handlers, and vector indexing run safely in parallel
 - No "database is locked" errors from concurrent operations
+- Admin API for operational management (index rebuilds, stats, logs)
+- Comprehensive request/response logging with header redaction
 
 **Enterprise Security**
 - OAuth 2.0 authentication with PKCE support for remote access
@@ -103,8 +105,28 @@ export SIGIL_REPO_MAP="my_project:/path/to/project;another:/path/to/another"
 
 ### Running the Server
 
+**Recommended: Use the restart script (starts both MCP server and Admin UI):**
+
 ```bash
-python server.py
+./scripts/restart_servers.sh
+```
+
+This script will:
+- Stop any running server processes
+- Start the MCP Server on port 8000
+- Start the Admin UI frontend on port 5173
+- Run both processes with `nohup` so they persist after terminal closes
+
+**Manual start (MCP server only):**
+
+```bash
+python -m sigil_mcp.server
+```
+
+**Stop all servers:**
+
+```bash
+./scripts/restart_servers.sh --stop
 ```
 
 On first run, OAuth credentials will be generated. Save the Client ID and Client Secret for connecting from ChatGPT.
@@ -156,6 +178,13 @@ See [docs/CHATGPT_SETUP.md](docs/CHATGPT_SETUP.md) for detailed instructions.
   },
   "index": {
     "path": "~/.sigil_index"
+  },
+  "admin": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8765,
+    "api_key": null,
+    "allowed_ips": ["127.0.0.1", "::1"]
   }
 }
 ```
@@ -227,6 +256,42 @@ export SIGIL_MCP_API_KEY=your_secure_key_here
 ```
 
 See [docs/SECURITY.md](docs/SECURITY.md) for security best practices.
+
+## Admin API & Admin UI
+
+The Admin API provides HTTP endpoints for operational management without restarting the server. It's **integrated into the main MCP server** (port 8000) and accessible at `/admin/*` endpoints. A React-based Admin UI is available on port 5173.
+
+**Start everything (recommended):**
+```bash
+./scripts/restart_servers.sh
+```
+
+This starts both:
+- MCP Server on `http://127.0.0.1:8000` (includes Admin API at `/admin/*`)
+- Admin UI on `http://localhost:5173`
+
+**Admin API Endpoints:**
+- `GET /admin/status` - Server status, repositories, index info
+- `POST /admin/index/rebuild` - Rebuild index (all repos or specific)
+- `GET /admin/index/stats` - Get index statistics
+- `POST /admin/vector/rebuild` - Rebuild vector embeddings
+- `GET /admin/logs/tail` - View recent log entries
+- `GET /admin/config` - View current configuration
+
+**Security:**
+- IP whitelist (default: localhost only)
+- Optional API key authentication
+
+**Manual start (Admin UI only, for development):**
+```bash
+cd sigil-admin-ui
+npm install
+npm run dev
+```
+
+Then open `http://localhost:5173` in your browser.
+
+See [docs/RUNBOOK.md](docs/RUNBOOK.md#admin-api) for complete Admin API documentation.
 
 ## Usage Examples
 
@@ -310,6 +375,19 @@ For detailed troubleshooting, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING
 
 **More help:** See comprehensive [Troubleshooting Guide](docs/TROUBLESHOOTING.md) and [Operations Runbook](docs/RUNBOOK.md).
 
+## Request Logging
+
+All HTTP requests and responses are automatically logged with:
+- Request headers (sensitive data redacted)
+- Response status codes and duration
+- Client IP addresses
+- Cloudflare ray IDs (if using Cloudflare)
+- Request IDs for correlation
+
+This provides full visibility for debugging client issues and support tickets. Sensitive headers (authorization, cookies, API keys) are automatically redacted before logging.
+
+See [docs/adr-012-header-logging-middleware.md](docs/adr-012-header-logging-middleware.md) for details.
+
 ## Documentation
 
 **Setup Guides**
@@ -331,6 +409,9 @@ For detailed troubleshooting, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING
 - [ADR-007: File Watching](docs/adr-007-file-watching.md)
 - [ADR-008: Granular Re-indexing and Configurable Patterns](docs/adr-008-granular-indexing.md)
 - [ADR-009: ChatGPT MCP Connector Compatibility](docs/adr-009-chatgpt-compatibility.md)
+- [ADR-010: Thread Safety and SQLite WAL Mode](docs/adr-010-thread-safety-sqlite.md)
+- [ADR-011: Admin API for Operational Management](docs/adr-011-admin-api.md)
+- [ADR-012: ASGI Header Logging Middleware](docs/adr-012-header-logging-middleware.md)
 
 **Feature Documentation**
 - [Vector Embeddings Usage Guide](docs/VECTOR_EMBEDDINGS.md)
