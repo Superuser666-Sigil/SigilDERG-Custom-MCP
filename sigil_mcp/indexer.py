@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from datetime import datetime
 import numpy as np
 import threading
+import lancedb
+import pyarrow as pa
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,10 @@ class SigilIndex:
         self.index_path.mkdir(parents=True, exist_ok=True)
         self.embed_fn = embed_fn
         self.embed_model = embed_model
+
+        self.lance_db_path = self.index_path / "lancedb"
+        self.lance = lancedb.connect(self.lance_db_path)
+        self.vector_table_name = "code_vectors"
 
         # Global lock to serialize DB access across threads
         # (HTTP handlers + file watcher + vector indexing)
@@ -169,7 +175,19 @@ class SigilIndex:
             CREATE INDEX IF NOT EXISTS idx_embeddings_doc
             ON embeddings(doc_id)
         """)
-        
+
+        self.trigrams_db.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts 
+            USING fts5(
+                path UNINDEXED, 
+                repo_id UNINDEXED, 
+                content, 
+                tokenize='trigram'
+             )
+        """
+        )
+
         # Trigram inverted index for fast text search
         self.trigrams_db.execute("""
             CREATE TABLE IF NOT EXISTS trigrams (
@@ -730,84 +748,83 @@ class SigilIndex:
         Returns:
             List of search results with context
         """
-        with self._lock:
-            query_lower = query.lower()
-            query_trigrams = self._extract_trigrams(query_lower)
-            logger.warning(
-                "search_code: query=%s trigrams=%s",
-                query,
-                sorted(query_trigrams),
-            )
+        query_lower = query.lower()
+        query_trigrams = self._extract_trigrams(query_lower)
+        logger.warning(
+            "search_code: query=%s trigrams=%s",
+            query,
+            sorted(query_trigrams),
+        )
 
-            if not query_trigrams:
-                logger.debug("search_code: no trigrams extracted for query %s", query)
+        if not query_trigrams:
+            logger.debug("search_code: no trigrams extracted for query %s", query)
+            return []
+
+        # Fetch document IDs for each trigram
+        doc_id_sets = []
+        for gram in query_trigrams:
+            cursor = self.trigrams_db.execute(
+                "SELECT doc_ids FROM trigrams WHERE gram = ?", (gram,)
+            )
+            row = cursor.fetchone()
+            if row:
+                doc_ids = {
+                    int(x) for x in zlib.decompress(row[0]).decode().split(',') if x
+                }
+                logger.warning(
+                    "search_code: trigram %s -> doc_ids=%s",
+                    gram,
+                    sorted(doc_ids),
+                )
+                doc_id_sets.append(doc_ids)
+            else:
+                logger.debug("search_code: trigram %s not found", gram)
+                # Trigram not found, no results
                 return []
-            
-            # Fetch document IDs for each trigram
-            doc_id_sets = []
-            for gram in query_trigrams:
-                cursor = self.trigrams_db.execute(
-                    "SELECT doc_ids FROM trigrams WHERE gram = ?", (gram,)
+
+        # Intersection of all doc_id sets
+        candidate_doc_ids = set.intersection(*doc_id_sets)
+
+        # Filter by repo if specified
+        if repo:
+            cursor = self.repos_db.execute(
+                "SELECT id FROM repos WHERE name = ?", (repo,)
+            )
+            row = cursor.fetchone()
+            if row:
+                repo_id = row[0]
+                stmt = (
+                    "SELECT id FROM documents WHERE repo_id = ? AND id IN ({})"
+                    .format(','.join('?' * len(candidate_doc_ids)))
                 )
-                row = cursor.fetchone()
-                if row:
-                    doc_ids = {
-                        int(x) for x in zlib.decompress(row[0]).decode().split(',') if x
-                    }
-                    logger.warning(
-                        "search_code: trigram %s -> doc_ids=%s",
-                        gram,
-                        sorted(doc_ids),
-                    )
-                    doc_id_sets.append(doc_ids)
-                else:
-                    logger.debug("search_code: trigram %s not found", gram)
-                    # Trigram not found, no results
-                    return []
-            
-            # Intersection of all doc_id sets
-            candidate_doc_ids = set.intersection(*doc_id_sets)
-            
-            # Filter by repo if specified
-            if repo:
-                cursor = self.repos_db.execute(
-                    "SELECT id FROM repos WHERE name = ?", (repo,)
-                )
-                row = cursor.fetchone()
-                if row:
-                    repo_id = row[0]
-                    stmt = (
-                        "SELECT id FROM documents WHERE repo_id = ? AND id IN ({})"
-                        .format(','.join('?' * len(candidate_doc_ids)))
-                    )
-                    cursor = self.repos_db.execute(stmt, (repo_id, *candidate_doc_ids))
-                    candidate_doc_ids = {row[0] for row in cursor.fetchall()}
-            
-            # Verify matches and extract context
-            results = []
-            for doc_id in candidate_doc_ids:
-                if len(results) >= max_results:
-                    break
-                
-                doc = self._get_document(doc_id)
-                if doc:
-                    content = self._read_blob(doc['blob_sha'])
-                    if content:
-                        text = content.decode('utf-8', errors='replace')
-                        # Find matching lines
-                        for line_num, line in enumerate(text.splitlines(), start=1):
-                            if query.lower() in line.lower():
-                                results.append(SearchResult(
-                                    repo=doc['repo_name'],
-                                    path=doc['path'],
-                                    line=line_num,
-                                    text=line.strip(),
-                                    doc_id=f"{doc['repo_name']}::{doc['path']}"
-                                ))
-                                if len(results) >= max_results:
-                                    break
-            
-            return results
+                cursor = self.repos_db.execute(stmt, (repo_id, *candidate_doc_ids))
+                candidate_doc_ids = {row[0] for row in cursor.fetchall()}
+
+        # Verify matches and extract context
+        results = []
+        for doc_id in candidate_doc_ids:
+            if len(results) >= max_results:
+                break
+
+            doc = self._get_document(doc_id)
+            if doc:
+                content = self._read_blob(doc['blob_sha'])
+                if content:
+                    text = content.decode('utf-8', errors='replace')
+                    # Find matching lines
+                    for line_num, line in enumerate(text.splitlines(), start=1):
+                        if query.lower() in line.lower():
+                            results.append(SearchResult(
+                                repo=doc['repo_name'],
+                                path=doc['path'],
+                                line=line_num,
+                                text=line.strip(),
+                                doc_id=f"{doc['repo_name']}::{doc['path']}"
+                            ))
+                            if len(results) >= max_results:
+                                break
+
+        return results
     
     def find_symbol(
         self,

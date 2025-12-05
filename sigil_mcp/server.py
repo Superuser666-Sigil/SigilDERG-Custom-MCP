@@ -246,6 +246,7 @@ ALLOWED_IPS = config.allowed_ips
 # MCP server
 # --------------------------------------------------------------------
 
+
 class ChatGPTComplianceMiddleware:
     """
     Normalizes ChatGPT's non-compliant requests to standard JSON-RPC.
@@ -264,7 +265,9 @@ class ChatGPTComplianceMiddleware:
             if b"application/octet-stream" in ct:
                 # Rewrite header to application/json so FastMCP accepts it
                 new_headers = [
-                    (k, v) if k.lower() != b"content-type" else (b"content-type", b"application/json")
+                    (k, v)
+                    if k.lower() != b"content-type"
+                    else (b"content-type", b"application/json")
                     for k, v in scope["headers"]
                 ]
                 scope["headers"] = new_headers
@@ -276,13 +279,22 @@ def _wrap_mcp_app_for_chatgpt(mcp_server: FastMCP) -> None:
     """Ensure the MCP ASGI app is wrapped with ChatGPT compliance middleware."""
 
     underlying_app = getattr(mcp_server, "app", None)
-    if underlying_app is not None and not isinstance(underlying_app, ChatGPTComplianceMiddleware):
+    if underlying_app is not None and not isinstance(
+        underlying_app, ChatGPTComplianceMiddleware
+    ):
         mcp_server.app = ChatGPTComplianceMiddleware(underlying_app)  # type: ignore[attr-defined]
         return
 
     underlying_asgi_app = getattr(mcp_server, "asgi_app", None)
-    if underlying_asgi_app is not None and not isinstance(underlying_asgi_app, ChatGPTComplianceMiddleware):
-        mcp_server.asgi_app = ChatGPTComplianceMiddleware(underlying_asgi_app)  # type: ignore[attr-defined]
+    if underlying_asgi_app is not None and not isinstance(
+        underlying_asgi_app, ChatGPTComplianceMiddleware
+    ):
+        # asgi_app isn't part of FastMCP's type hints, so set dynamically
+        setattr(
+            mcp_server,
+            "asgi_app",
+            ChatGPTComplianceMiddleware(underlying_asgi_app),
+        )
 
 
 # Disable ALL transport security for ChatGPT compatibility
@@ -906,7 +918,9 @@ def _attempt_local_index_remove(repo_name: str, repo_path: Path, file_path: Path
     return False
 
 
-def _handle_deleted_event(index: SigilIndex, repo_name: str, repo_path: Path, file_path: Path) -> bool:
+def _handle_deleted_event(
+    index: SigilIndex, repo_name: str, repo_path: Path, file_path: Path
+) -> bool:
     """Handle a filesystem 'deleted' event by trying global index then local fallbacks.
 
     Returns True if the file was removed from an index.
@@ -929,20 +943,21 @@ def _handle_deleted_event(index: SigilIndex, repo_name: str, repo_path: Path, fi
 def _on_file_change(repo_name: str, file_path: Path, event_type: str):
     """Handle file change events from watcher."""
     logger.info(f"File {event_type}: {file_path.name} in {repo_name}")
-    
+
     try:
         index = _get_index()
         repo_path = _get_repo_root(repo_name)
-        
+
         if event_type == "deleted":
-            removed = _handle_deleted_event(index, repo_name, repo_path, file_path)
+            _handle_deleted_event(index, repo_name, repo_path, file_path)
+            return
+
+        # Granular re-indexing for modified/created files
+        success = index.index_file(repo_name, repo_path, file_path)
+        if success:
+            logger.info(f"Re-indexed {file_path.name} after {event_type}")
         else:
-            # Granular re-indexing for modified/created files
-            success = index.index_file(repo_name, repo_path, file_path)
-            if success:
-                logger.info(f"Re-indexed {file_path.name} after {event_type}")
-            else:
-                logger.debug(f"Skipped re-indexing {file_path.name}")
+            logger.debug(f"Skipped re-indexing {file_path.name}")
     except Exception as e:
         logger.error(f"Error re-indexing after {event_type}: {e}")
 
