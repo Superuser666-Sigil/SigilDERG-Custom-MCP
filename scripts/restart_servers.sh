@@ -190,6 +190,9 @@ else
         npm install
     fi
     
+    # Tell Vite which backend to use (defaults to MCP port env or 8000)
+    export VITE_API_BASE_URL="http://127.0.0.1:${SIGIL_MCP_PORT:-8000}"
+    
     if [ -f "/tmp/frontend.log" ]; then
         mv /tmp/frontend.log /tmp/frontend.log.old 2>/dev/null || true
     fi
@@ -237,4 +240,3 @@ if [ "${1:-}" = "--stop" ]; then
     log_success "All servers stopped"
     exit 0
 fi
-

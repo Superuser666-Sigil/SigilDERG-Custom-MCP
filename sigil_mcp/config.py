@@ -270,13 +270,16 @@ class Config:
     @property
     def embeddings_provider(self) -> Optional[str]:
         """Get embedding provider name."""
-        return self.get("embeddings.provider")
-    
+        return self.get("embeddings.provider", "llamacpp")
+
     @property
     def embeddings_model(self) -> Optional[str]:
         """Get embedding model name or path."""
-        return self.get("embeddings.model")
-    
+        return self.get(
+            "embeddings.model",
+            "models/jina-embeddings-v2-base-en.Q4_K_M.gguf",
+        )
+
     @property
     def embeddings_dimension(self) -> int:
         """Get embedding dimension."""

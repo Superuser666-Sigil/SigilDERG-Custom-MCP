@@ -307,7 +307,8 @@ class FileWatchManager:
             # that rely on server.REPOS (e.g., _on_file_change) can resolve
             # the repo root when running inside tests or external watchers.
             try:
-                from sigil_mcp import server as _server  # local import to avoid circular top-level import
+                # local import to avoid circular top-level import
+                from sigil_mcp import server as _server
                 if repo_name not in getattr(_server, "REPOS", {}):
                     _server.REPOS[repo_name] = repo_path
             except Exception:

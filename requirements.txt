@@ -9,6 +9,7 @@
 
 mcp>=1.22.0
 numpy>=1.24.0,<3.0
+lancedb>=0.4.0
 
 # Optional dependencies for embeddings (install with: pip install -e ".[embeddings]")
 # sentence-transformers>=2.2.0

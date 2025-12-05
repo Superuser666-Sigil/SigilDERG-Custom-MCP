@@ -12,7 +12,7 @@ import type {
 
 // Admin API is now integrated into main server (same process as MCP)
 // Use main server port instead of separate admin port
-const API_BASE_URL = 'http://127.0.0.1:8000'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
 
 // Get API key from localStorage or environment
 const getApiKey = (): string | null => {
@@ -133,5 +133,4 @@ export const setApiKey = (key: string | null): void => {
     }
   }
 }
-
 
