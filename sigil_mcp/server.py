@@ -18,6 +18,7 @@ from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
 from starlette.datastructures import UploadFile
 from starlette.applications import Starlette
 from starlette.routing import Mount
+from starlette.types import ASGIApp, Scope, Receive, Send
 from .indexer import SigilIndex
 from .auth import initialize_api_key, verify_api_key, get_api_key_from_env
 from .oauth import get_oauth_manager
@@ -245,6 +246,45 @@ ALLOWED_IPS = config.allowed_ips
 # MCP server
 # --------------------------------------------------------------------
 
+class ChatGPTComplianceMiddleware:
+    """
+    Normalizes ChatGPT's non-compliant requests to standard JSON-RPC.
+    Handles: Content-Type: application/octet-stream -> application/json
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] == "http" and scope["method"] == "POST":
+            headers = dict(scope.get("headers", []))
+
+            # Fix ChatGPT sending binary content-type for JSON
+            ct = headers.get(b"content-type", b"")
+            if b"application/octet-stream" in ct:
+                # Rewrite header to application/json so FastMCP accepts it
+                new_headers = [
+                    (k, v) if k.lower() != b"content-type" else (b"content-type", b"application/json")
+                    for k, v in scope["headers"]
+                ]
+                scope["headers"] = new_headers
+
+        await self.app(scope, receive, send)
+
+
+def _wrap_mcp_app_for_chatgpt(mcp_server: FastMCP) -> None:
+    """Ensure the MCP ASGI app is wrapped with ChatGPT compliance middleware."""
+
+    underlying_app = getattr(mcp_server, "app", None)
+    if underlying_app is not None and not isinstance(underlying_app, ChatGPTComplianceMiddleware):
+        mcp_server.app = ChatGPTComplianceMiddleware(underlying_app)  # type: ignore[attr-defined]
+        return
+
+    underlying_asgi_app = getattr(mcp_server, "asgi_app", None)
+    if underlying_asgi_app is not None and not isinstance(underlying_asgi_app, ChatGPTComplianceMiddleware):
+        mcp_server.asgi_app = ChatGPTComplianceMiddleware(underlying_asgi_app)  # type: ignore[attr-defined]
+
+
 # Disable ALL transport security for ChatGPT compatibility
 # ChatGPT's MCP connector sends:
 # 1. Content-Type: application/octet-stream (invalid, should be application/json)
@@ -254,49 +294,17 @@ transport_security = TransportSecuritySettings(
     enable_dns_rebinding_protection=False
 )
 
-# The MCP library enforces a strict Content-Type check for POST requests
-# unconditionally inside TransportSecurityMiddleware.validate_request.
-# For ChatGPT compatibility the connector may send `application/octet-stream`,
-# which would trigger a 400 before our handlers run. We want to keep DNS
-# rebinding protections configurable, but when the setting explicitly
-# disables DNS rebinding protection we also need to avoid the Content-Type
-# enforcement so legitimate ChatGPT connector requests are accepted.
-#
-# We apply a small, scoped monkeypatch: if `is_post` is True but
-# `enable_dns_rebinding_protection` is False, call the original validator
-# with `is_post=False` (skipping content-type validation) while preserving
-# the rest of the validation logic (host/origin) when enabled.
-try:
-    from mcp.server.transport_security import TransportSecurityMiddleware
-
-    _orig_validate_request = TransportSecurityMiddleware.validate_request
-
-    async def _patched_validate_request(self, request, is_post: bool = False):
-        if is_post and (
-            self.settings is None or
-            not getattr(self.settings, "enable_dns_rebinding_protection", False)
-        ):
-            return await _orig_validate_request(self, request, is_post=False)
-        return await _orig_validate_request(self, request, is_post=is_post)
-
-    TransportSecurityMiddleware.validate_request = _patched_validate_request
-    logger.info(
-        "Patched TransportSecurityMiddleware.validate_request to allow non-JSON POSTs"
-    )
-except Exception:
-    # If monkeypatching fails for any reason, proceed without modification
-    logger.exception("Failed to apply TransportSecurityMiddleware monkeypatch")
-
 mcp = FastMCP(
-    name=config.server_name, 
+    name=config.server_name,
     json_response=True,
     streamable_http_path="/",
     transport_security=transport_security
 )
+
+# Wrap the internal Starlette app to normalize ChatGPT requests
+_wrap_mcp_app_for_chatgpt(mcp)
 # Helper: safe decorator wrapper for attaching metadata to MCP tools.
 
-# Helper: safe decorator wrapper for attaching metadata to MCP tools.
-# Helper: safe decorator wrapper for attaching metadata to MCP tools.
 # We try to call `mcp.tool` with the provided kwargs; if the installed
 # FastMCP decorator doesn't accept these kwargs, we fall back to the
 # simple decorator and attach metadata attributes to the wrapped function
@@ -1205,7 +1213,7 @@ async def oauth_authorize_http(
     </head>
     <body>
         <div class="container">
-            <h1>🔐 Authorize Access</h1>
+            <h1>馃攼 Authorize Access</h1>
             <p><strong>ChatGPT</strong> is requesting access to your Sigil MCP Server.</p>
             
             <div class="info">
@@ -1725,7 +1733,7 @@ def oauth_client_info() -> Dict[str, object]:
 
 @_safe_tool_decorator(
     title=(
-        "Read-only — ping"
+        "Read-only 鈥� ping"
     ),
     description=(
         "Healthcheck (read-only). Returns basic server status and configured "
@@ -1759,7 +1767,7 @@ def ping() -> Dict[str, object]:
 
 @_safe_tool_decorator(
     title=(
-        "Read-only — list_repos"
+        "Read-only 鈥� list_repos"
     ),
     description=(
         "List all configured repositories (read-only). Each entry includes "
@@ -1924,7 +1932,7 @@ def list_repo_files(
 
 @_safe_tool_decorator(
     title=(
-        "Read-only — read_repo_file"
+        "Read-only 鈥� read_repo_file"
     ),
     description=(
         "Read a single file from a repository (read-only)."
@@ -1989,7 +1997,7 @@ def read_repo_file(
 
 @_safe_tool_decorator(
     title=(
-        "Read-only — search_repo"
+        "Read-only 鈥� search_repo"
     ),
     description=(
         "Naive full-text search across one repo or all repos (read-only)."
@@ -2092,7 +2100,7 @@ def search_repo(
 
 @_safe_tool_decorator(
     title=(
-        "Read-only — search"
+        "Read-only 鈥� search"
     ),
     description=(
         "Deep-Research compatible search (read-only). Returns structured result list"
@@ -2264,7 +2272,7 @@ def index_repository(
 
 @_safe_tool_decorator(
     title=(
-        "Read-only — search_code"
+        "Read-only 鈥� search_code"
     ),
     description=(
         "Fast indexed code search (read-only) using trigram indexing. Returns"
@@ -2570,7 +2578,7 @@ def build_vector_index(
 
 @_safe_tool_decorator(
     title=(
-        "Read-only — semantic_search"
+        "Read-only 鈥� semantic_search"
     ),
     description=(
         "Semantic code search using vector embeddings (read-only)."
@@ -2704,7 +2712,7 @@ def _setup_authentication():
         # Initialize OAuth if enabled
         if OAUTH_ENABLED:
             logger.info("")
-            logger.info("🔐 OAuth2 Authentication")
+            logger.info("馃攼 OAuth2 Authentication")
             logger.info("=" * 60)
             
             oauth_manager = get_oauth_manager()
@@ -2712,7 +2720,7 @@ def _setup_authentication():
             
             if credentials:
                 client_id, client_secret = credentials
-                logger.info("🆕 NEW OAuth client created!")
+                logger.info("馃啎 NEW OAuth client created!")
                 logger.info("")
                 logger.info(f"Client ID:     {client_id}")
                 logger.info(f"Client Secret: {client_secret}")
@@ -2787,6 +2795,8 @@ def _create_parent_app_with_admin():
     logger.info("Both MCP and Admin API share the same index instance")
     logger.info("Admin endpoints available at /admin/*")
     logger.info("")
+    # Ensure the MCP ASGI app is normalized for ChatGPT compatibility
+    _wrap_mcp_app_for_chatgpt(mcp)
     
     # Get FastMCP's ASGI app
     # NOTE: We get the raw app here, not the wrapped one, because we'll
@@ -2876,6 +2886,7 @@ def _run_server_with_admin():
 
 def _run_server_simple():
     """Run the server without Admin API."""
+    _wrap_mcp_app_for_chatgpt(mcp)
     try:
         mcp.run(transport="streamable-http")
     finally:
