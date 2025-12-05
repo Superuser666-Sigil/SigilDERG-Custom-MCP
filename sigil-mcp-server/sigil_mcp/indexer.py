@@ -22,7 +22,6 @@ from datetime import datetime
 import numpy as np
 import threading
 import lancedb
-import pyarrow as pa
 
 logger = logging.getLogger(__name__)
 
@@ -176,17 +175,17 @@ class SigilIndex:
             ON embeddings(doc_id)
         """)
 
-        self.trigrams_db.execute(
-            """
+        # Keep 'repos' table
+        # Replace 'file_content_fts' creation with:
+        self.trigrams_db.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts 
             USING fts5(
                 path UNINDEXED, 
                 repo_id UNINDEXED, 
                 content, 
                 tokenize='trigram'
-             )
-        """
-        )
+            )
+        """)
 
         # Trigram inverted index for fast text search
         self.trigrams_db.execute("""
@@ -748,6 +747,7 @@ class SigilIndex:
         Returns:
             List of search results with context
         """
+        # The database connection is thread-safe for reads in WAL mode.
         query_lower = query.lower()
         query_trigrams = self._extract_trigrams(query_lower)
         logger.warning(

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sigil MCP Admin</title>
+    <script>
+      // Apply theme before React loads to prevent flash
+      (function() {
+        const saved = localStorage.getItem('sigil-admin-theme');
+        const validThemes = ['light', 'dark', 'high-contrast'];
+        const theme = saved && validThemes.includes(saved) ? saved : 'light';
+        document.documentElement.classList.add(theme);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
+

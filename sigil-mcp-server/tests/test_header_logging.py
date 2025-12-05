@@ -8,15 +8,12 @@ Tests for header logging middleware.
 
 import pytest
 import logging
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
 from sigil_mcp.server import (
     HeaderLoggingASGIMiddleware,
     _redact_headers,
     SENSITIVE_HEADERS,
 )
-
 # Use anyio for async tests (already installed via pytest-anyio plugin)
-import asyncio
 
 
 class TestHeaderRedaction:
@@ -230,7 +227,7 @@ class TestHeaderLoggingMiddleware:
         call_count_before = 0
         try:
             call_count_before = len([c for c in mock_app.__call__.mock_calls if c])
-        except:
+        except Exception:
             pass
         
         await middleware(scope, receive, send)

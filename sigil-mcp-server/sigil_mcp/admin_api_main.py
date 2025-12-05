@@ -5,17 +5,9 @@ Entry point for the Sigil MCP Admin API service.
 Starts a separate HTTP server for operational management endpoints.
 """
 
-import logging
 import sys
-from pathlib import Path
-
+import logging
 import uvicorn
-
-# Always use absolute imports - works for both module and script execution
-# Add parent directory to path if needed
-_parent = Path(__file__).parent.parent
-if str(_parent) not in sys.path:
-    sys.path.insert(0, str(_parent))
 
 from sigil_mcp.admin_api import app
 from sigil_mcp.config import get_config
@@ -62,8 +54,8 @@ def main():
     logger.info("")
     
     if config.admin_api_key:
-        logger.info(f"API Key authentication: ENABLED")
-        logger.info(f"Use header: X-Admin-Key: <your-key>")
+        logger.info("API Key authentication: ENABLED")
+        logger.info("Use header: X-Admin-Key: <your-key>")
     else:
         logger.info("API Key authentication: DISABLED")
     

@@ -282,7 +282,11 @@ def _wrap_mcp_app_for_chatgpt(mcp_server: FastMCP) -> None:
     if underlying_app is not None and not isinstance(
         underlying_app, ChatGPTComplianceMiddleware
     ):
-        mcp_server.app = ChatGPTComplianceMiddleware(underlying_app)  # type: ignore[attr-defined]
+        setattr(
+            mcp_server,
+            "app",
+            ChatGPTComplianceMiddleware(underlying_app),
+        )
         return
 
     underlying_asgi_app = getattr(mcp_server, "asgi_app", None)
@@ -293,7 +297,9 @@ def _wrap_mcp_app_for_chatgpt(mcp_server: FastMCP) -> None:
         setattr(
             mcp_server,
             "asgi_app",
-            ChatGPTComplianceMiddleware(underlying_asgi_app),
+            (
+                ChatGPTComplianceMiddleware(underlying_asgi_app)
+            ),
         )
 
 
@@ -368,9 +374,9 @@ try:
             wrapped_app = HeaderLoggingASGIMiddleware(underlying_app)
             # Replace the app on the MCP server so run() uses the wrapped version
             if hasattr(mcp, "app"):
-                mcp.app = wrapped_app  # type: ignore[attr-defined]
+                setattr(mcp, "app", wrapped_app)  # type: ignore[attr-defined]
             elif hasattr(mcp, "asgi_app"):
-                mcp.asgi_app = wrapped_app  # type: ignore[attr-defined]
+                setattr(mcp, "asgi_app", wrapped_app)  # type: ignore[attr-defined]
             logger.info("HeaderLoggingASGIMiddleware installed on FastMCP app")
         else:
             logger.warning(
@@ -890,13 +896,18 @@ def _attempt_local_index_remove(repo_name: str, repo_path: Path, file_path: Path
     for entry in parent.iterdir():
         if not entry.is_dir():
             continue
+        # Ensure this directory looks like a real index by checking for
+        # both repos.db and trigrams.db. This reduces the chance we
+        # accidentally instantiate an index for an unrelated directory.
         db = entry / "repos.db"
-        if not db.exists():
+        tri = entry / "trigrams.db"
+        if not (db.exists() and tri.exists()):
             continue
         tried_local = True
         logger.warning(
-            "_on_file_change: found local index at %s, trying removal",
+            "_on_file_change: found local index at %s for repo %s, trying removal",
             entry,
+            repo_name,
         )
         try:
             local_index = SigilIndex(entry)
@@ -906,15 +917,28 @@ def _attempt_local_index_remove(repo_name: str, repo_path: Path, file_path: Path
                 local_index.repos_db.close()
                 local_index.trigrams_db.close()
             if removed:
-                logger.info("Removed %s from local index at %s", file_path, entry)
+                logger.info(
+                    "Removed %s from local index at %s for repo %s",
+                    file_path,
+                    entry,
+                    repo_name,
+                )
                 return True
             else:
-                logger.debug("Local index at %s did not contain file %s", entry, file_path)
+                logger.debug(
+                    "Local index at %s did not contain file %s for repo %s",
+                    entry,
+                    file_path,
+                    repo_name,
+                )
         except Exception:
             logger.exception("Failed to handle local index at %s", entry)
 
     if not tried_local:
-        logger.debug("_on_file_change: no nearby index dir with repos.db under %s", parent)
+        logger.debug(
+            "_on_file_change: no nearby index dir with repos.db under %s",
+            parent,
+        )
     return False
 
 
@@ -928,7 +952,18 @@ def _handle_deleted_event(
     removed = False
     try:
         removed = index.remove_file(repo_name, repo_path, file_path)
-        logger.warning("_on_file_change: removed using global index -> %s", removed)
+        if removed:
+            logger.info(
+                "_on_file_change: removed %s from global index for repo %s",
+                file_path,
+                repo_name,
+            )
+        else:
+            logger.debug(
+                "_on_file_change: global index did not contain %s for repo %s",
+                file_path,
+                repo_name,
+            )
     except ValueError:
         logger.debug("_on_file_change: global index raised ValueError; repo unknown")
     if not removed:
