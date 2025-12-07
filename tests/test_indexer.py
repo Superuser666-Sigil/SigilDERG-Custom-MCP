@@ -76,11 +76,8 @@ class TestSigilIndexInitialization:
         cursor = test_index.repos_db.cursor()
         cursor.execute("PRAGMA table_info(embeddings)")
         columns = {row[1] for row in cursor.fetchall()}
-        assert "id" in columns
-        assert "doc_id" in columns
-        assert "chunk_index" in columns
-        assert "vector" in columns
-        assert "model" in columns
+        # Legacy table should be dropped now that embeddings live in LanceDB
+        assert not columns
     
     def test_schema_trigrams_table(self, test_index):
         """Test that trigrams table is created."""
@@ -251,27 +248,20 @@ class TestVectorIndexing:
         """Test that embeddings are stored in database."""
         index = indexed_repo["index"]
         index.build_vector_index(repo="test_repo", force=True)
-        
-        cursor = index.repos_db.cursor()
-        cursor.execute("SELECT COUNT(*) FROM embeddings")
-        embedding_count = cursor.fetchone()[0]
-        
-        assert embedding_count > 0
-    
+
+        assert index.vectors is not None
+        assert index.vectors.count_rows() > 0
+
     def test_embedding_vector_format(self, indexed_repo):
         """Test that embedding vectors are stored correctly."""
         index = indexed_repo["index"]
         index.build_vector_index(repo="test_repo", force=True)
-        
-        cursor = index.repos_db.cursor()
-        cursor.execute("SELECT vector, dim FROM embeddings LIMIT 1")
-        result = cursor.fetchone()
-        
-        if result:
-            vector_blob, dim = result
-            vector = np.frombuffer(vector_blob, dtype='float32')
-            assert len(vector) == dim
-            assert vector.dtype == np.float32
+
+        assert index.vectors is not None
+        rows = index.vectors.to_arrow().to_pylist()
+        assert rows
+        vector = rows[0]["vector"]
+        assert len(vector) == index.embedding_dimension
 
 
 class TestSemanticSearch:

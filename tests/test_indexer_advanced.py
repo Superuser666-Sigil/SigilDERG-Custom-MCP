@@ -268,8 +268,13 @@ class TestRemoveFile:
         cursor.execute("SELECT COUNT(*) FROM symbols WHERE doc_id = ?", (doc_id,))
         symbol_count_before = cursor.fetchone()[0]
 
-        cursor.execute("SELECT COUNT(*) FROM embeddings WHERE doc_id = ?", (doc_id,))
-        embedding_count_before = cursor.fetchone()[0]
+        embedding_count_before = 0
+        if index.vectors is not None:
+            embedding_count_before = len([
+                row
+                for row in index.vectors.to_arrow().to_pylist()
+                if row.get("doc_id") == str(doc_id)
+            ])
 
         # Removing the file should return True
         removed = index.remove_file(repo_name, test_repo_path, target_file)
@@ -284,8 +289,12 @@ class TestRemoveFile:
         assert cursor.fetchone()[0] == 0
 
         # Embeddings for this document should be gone (if any existed)
-        cursor.execute("SELECT COUNT(*) FROM embeddings WHERE doc_id = ?", (doc_id,))
-        assert cursor.fetchone()[0] == 0
+        if index.vectors is not None:
+            assert not [
+                row
+                for row in index.vectors.to_arrow().to_pylist()
+                if row.get("doc_id") == str(doc_id)
+            ]
 
         # Trigram postings should not reference this doc_id anymore
         if symbol_count_before > 0 or embedding_count_before > 0:
@@ -392,30 +401,20 @@ class TestEmbeddingDimensions:
         """Test that embeddings have consistent dimensions."""
         index = indexed_repo["index"]
         index.build_vector_index(repo="test_repo", force=True)
-        
-        cursor = index.repos_db.cursor()
-        cursor.execute("SELECT DISTINCT dim FROM embeddings")
-        dimensions = cursor.fetchall()
-        
-        # All embeddings should have same dimension
-        assert len(dimensions) <= 1
-        
-        if dimensions:
-            dim = dimensions[0][0]
-            assert dim > 0
-    
+
+        rows = index.vectors.to_arrow().to_pylist()
+        dims = {len(row["vector"]) for row in rows}
+        assert len(dims) == 1
+        assert dims.pop() == index.embedding_dimension
+
     def test_embedding_normalization(self, indexed_repo):
         """Test that embeddings are normalized."""
         index = indexed_repo["index"]
         index.build_vector_index(repo="test_repo", force=True)
-        
-        cursor = index.repos_db.cursor()
-        cursor.execute("SELECT vector FROM embeddings LIMIT 5")
-        
-        for (vector_blob,) in cursor.fetchall():
-            vector = np.frombuffer(vector_blob, dtype='float32')
-            norm = np.linalg.norm(vector)
-            # Should be approximately unit norm (allowing for float precision)
+
+        vectors = [row["vector"] for row in index.vectors.to_arrow().to_pylist()[:5]]
+        for vector in vectors:
+            norm = np.linalg.norm(np.array(vector, dtype="float32"))
             assert 0.95 <= norm <= 1.05
 
 

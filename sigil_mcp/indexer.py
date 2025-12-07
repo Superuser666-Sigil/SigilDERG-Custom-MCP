@@ -9,11 +9,12 @@ Combines trigram-based text search with symbol extraction for IDE-like features.
 Designed to work well with ChatGPT and other AI assistants via MCP.
 """
 
-import sqlite3
 import hashlib
 import zlib
 import json
 import subprocess
+import os
+import sqlite3
 from pathlib import Path
 from typing import List, Optional, Set, Callable, Sequence
 import logging
@@ -25,7 +26,7 @@ import lancedb
 import pyarrow as pa
 
 from .config import get_config
-from .schema import CodeChunk
+from .schema import get_code_chunk_model
 
 logger = logging.getLogger(__name__)
 
@@ -70,21 +71,37 @@ class SigilIndex:
         self.embed_model = embed_model
 
         config = get_config()
+        self.embedding_dimension = config.embeddings_dimension
+        self.embedding_provider = config.embeddings_provider
         if config.index_path == self.index_path:
             self.lance_db_path = config.lance_dir
         else:
             self.lance_db_path = self.index_path / "lancedb"
         self.lance_db = None
         self.vectors = None
-        if config.embeddings_enabled:
-            self.lance_db_path.mkdir(parents=True, exist_ok=True)
+
+        self._embeddings_active = config.embeddings_enabled or self.embed_fn is not None
+        if self.embed_fn is not None and not config.embeddings_enabled:
+            logger.warning(
+                "Embedding function provided but embeddings.enabled is False; "
+                "LanceDB will still be initialized for vector storage."
+            )
+
+        if self._embeddings_active:
+            self._ensure_lance_dir_permissions()
             self.lance_db = lancedb.connect(self.lance_db_path)
+            code_chunk_model = get_code_chunk_model(self.embedding_dimension)
+            self._code_chunk_model = code_chunk_model
             if "code_chunks" in self.lance_db.table_names():
                 self.vectors = self.lance_db.open_table("code_chunks")
             else:
                 self.vectors = self.lance_db.create_table(
-                    "code_chunks", schema=CodeChunk
+                    "code_chunks", schema=code_chunk_model
                 )
+            self._log_embedding_startup()
+            self._warn_on_vector_schema_mismatch()
+        else:
+            self._code_chunk_model = None
 
         # Global lock to serialize DB access across threads
         # (HTTP handlers + file watcher + vector indexing)
@@ -116,6 +133,70 @@ class SigilIndex:
         )  # 60 seconds in milliseconds
         
         self._init_schema()
+
+    def _ensure_lance_dir_permissions(self) -> None:
+        """Create the LanceDB path and align its permissions to the index dir."""
+
+        created = False
+        if not self.lance_db_path.exists():
+            self.lance_db_path.mkdir(parents=True, exist_ok=True)
+            created = True
+        else:
+            self.lance_db_path.mkdir(parents=True, exist_ok=True)
+
+        if created:
+            try:
+                mode = self.index_path.stat().st_mode & 0o777
+                os.chmod(self.lance_db_path, mode)
+            except Exception:
+                logger.exception(
+                    "Failed to apply index directory permissions to LanceDB path %s",
+                    self.lance_db_path,
+                )
+
+    def _log_embedding_startup(self) -> None:
+        """Log embedding provider configuration for visibility at startup."""
+
+        if self.vectors is None:
+            return
+
+        logger.info(
+            "Embeddings enabled: provider=%s model=%s dim=%s lance_path=%s",
+            self.embedding_provider,
+            self.embed_model,
+            self.embedding_dimension,
+            self.lance_db_path,
+        )
+
+        if self.embed_fn is None:
+            logger.warning(
+                "LanceDB initialized but no embedding function configured; "
+                "vector indexing calls will fail until embeddings are set."
+            )
+
+    def _warn_on_vector_schema_mismatch(self) -> None:
+        """Warn if the LanceDB schema does not match configured dimensions."""
+
+        if self.vectors is None:
+            return
+
+        try:
+            vector_field = self.vectors.schema.field("vector")
+            vector_type = vector_field.type
+            actual_dim = None
+            if isinstance(vector_type, pa.FixedSizeListType):
+                actual_dim = vector_type.list_size
+        except Exception:
+            logger.debug("Could not inspect LanceDB vector schema", exc_info=True)
+            return
+
+        if actual_dim and actual_dim != self.embedding_dimension:
+            logger.warning(
+                "Configured embedding dimension %s does not match LanceDB table "
+                "dimension %s. Consider rebuilding embeddings to avoid mismatches.",
+                self.embedding_dimension,
+                actual_dim,
+            )
     
     def _init_schema(self):
         """Initialize database schema."""
@@ -172,7 +253,10 @@ class SigilIndex:
         """)
         
         # Remove legacy embeddings table now that vectors are stored in LanceDB
-        self.repos_db.execute("DROP TABLE IF EXISTS embeddings")
+        try:
+            self.repos_db.execute("DROP TABLE IF EXISTS embeddings")
+        except Exception:
+            logger.debug("Skipping removal of legacy embeddings table", exc_info=True)
 
         self.trigrams_db.execute(
             """
@@ -1132,11 +1216,12 @@ class SigilIndex:
             )
             return
 
-        if embeddings.shape[1] != 768:
+        if embeddings.shape[1] != self.embedding_dimension:
             logger.warning(
-                "Unexpected embedding dimension %s for %s (expected 768)",
+                "Unexpected embedding dimension %s for %s (expected %s)",
                 embeddings.shape[1],
                 rel_path,
+                self.embedding_dimension,
             )
 
         timestamp = datetime.now()
@@ -1149,8 +1234,11 @@ class SigilIndex:
             logger.exception("Failed to delete existing vectors for %s", rel_path)
 
         records = []
+        code_chunk_model = self._code_chunk_model or get_code_chunk_model(
+            self.embedding_dimension
+        )
         for (chunk_idx, start_line, end_line, chunk_text), vector in zip(chunks, embeddings):
-            records.append(CodeChunk(
+            records.append(code_chunk_model(
                 vector=np.asarray(vector, dtype="float32"),
                 doc_id=str(doc_id),
                 repo_id=str(repo_id),
