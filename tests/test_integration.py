@@ -170,21 +170,16 @@ class TestDataPersistence:
         index1 = SigilIndex(test_index_path, dummy_embed_fn, "test")
         index1.index_repository("test_repo", test_repo_path, force=True)
         index1.build_vector_index(repo="test_repo", force=True)
-        
-        # Get embedding count
-        cursor = index1.repos_db.cursor()
-        cursor.execute("SELECT COUNT(*) FROM embeddings")
-        count1 = cursor.fetchone()[0]
-        
+
+        count1 = index1.vectors.count_rows() if index1.vectors else 0
+
         index1.repos_db.close()
         index1.trigrams_db.close()
-        
+
         # Reopen
         index2 = SigilIndex(test_index_path, dummy_embed_fn, "test")
-        cursor = index2.repos_db.cursor()
-        cursor.execute("SELECT COUNT(*) FROM embeddings")
-        count2 = cursor.fetchone()[0]
-        
+        count2 = index2.vectors.count_rows() if index2.vectors else 0
+
         # Should have same embeddings
         assert count2 == count1
         

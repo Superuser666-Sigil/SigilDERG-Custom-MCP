@@ -120,6 +120,11 @@ def dummy_embed_fn():
 @pytest.fixture
 def test_index(test_index_path, dummy_embed_fn):
     """Create a SigilIndex instance for testing."""
+    original_config = sigil_config._config
+    cfg = sigil_config.Config()
+    cfg.config_data.setdefault("embeddings", {})["enabled"] = True
+    sigil_config._config = cfg
+
     index = SigilIndex(
         index_path=test_index_path,
         embed_fn=dummy_embed_fn,
@@ -129,6 +134,7 @@ def test_index(test_index_path, dummy_embed_fn):
     # Cleanup
     index.repos_db.close()
     index.trigrams_db.close()
+    sigil_config._config = original_config
 
 
 @pytest.fixture

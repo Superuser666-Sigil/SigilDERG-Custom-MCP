@@ -2,16 +2,30 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from functools import lru_cache
 from lancedb.pydantic import LanceModel, Vector
 
 
-class CodeChunk(LanceModel):
-    vector: Vector(768)
-    doc_id: str
-    repo_id: str
-    file_path: str
-    chunk_index: int
-    start_line: int
-    end_line: int
-    content: str
-    last_updated: datetime
+@lru_cache(maxsize=None)
+def get_code_chunk_model(dimension: int) -> type[LanceModel]:
+    """Return a LanceModel configured for the given vector dimension."""
+
+    class CodeChunk(LanceModel):
+        vector: Vector(dimension)
+        doc_id: str
+        repo_id: str
+        file_path: str
+        chunk_index: int
+        start_line: int
+        end_line: int
+        content: str
+        last_updated: datetime
+
+    CodeChunk.__name__ = "CodeChunk"
+    return CodeChunk
+
+
+# Backwards compatibility export
+CodeChunk = get_code_chunk_model(768)
+
+__all__ = ["CodeChunk", "get_code_chunk_model"]
