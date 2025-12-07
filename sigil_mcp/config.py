@@ -32,6 +32,7 @@ class Config:
         """
         self.config_data: Dict[str, Any] = {}
         self._load_config(config_path)
+        self._validate_embeddings_dimension()
     
     def _load_config(self, config_path: Optional[Path] = None):
         """Load configuration from file or environment."""
@@ -65,6 +66,34 @@ class Config:
         # Fall back to environment variables
         logger.info("No config.json found, using environment variables")
         self._load_from_env()
+
+    def _validate_embeddings_dimension(self) -> None:
+        """Validate the configured embeddings dimension and warn on mismatch."""
+        dimension_value = self.get("embeddings.dimension")
+        if dimension_value is None:
+            # Ensure a default is present for downstream consumers
+            self.config_data.setdefault("embeddings", {}).setdefault(
+                "dimension", 768
+            )
+            return
+
+        try:
+            dimension = int(dimension_value)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid embeddings.dimension '%s', defaulting to 768", dimension_value
+            )
+            self.config_data.setdefault("embeddings", {})["dimension"] = 768
+            return
+
+        if dimension != 768:
+            logger.warning(
+                "Configured embeddings.dimension %s differs from default 768. "
+                "Ensure the selected embedding model matches this dimension.",
+                dimension,
+            )
+
+        self.config_data.setdefault("embeddings", {})["dimension"] = dimension
     
     def _load_from_file(self, path: Path):
         """Load configuration from JSON file."""
@@ -270,20 +299,24 @@ class Config:
     @property
     def embeddings_provider(self) -> Optional[str]:
         """Get embedding provider name."""
-        return self.get("embeddings.provider", "llamacpp")
+        return self.get("embeddings.provider", "jina")
 
     @property
     def embeddings_model(self) -> Optional[str]:
         """Get embedding model name or path."""
-        return self.get(
-            "embeddings.model",
-            "models/jina-embeddings-v2-base-en.Q4_K_M.gguf",
-        )
+        return self.get("embeddings.model", "jina-embeddings-v2-base")
 
     @property
     def embeddings_dimension(self) -> int:
         """Get embedding dimension."""
-        return self.get("embeddings.dimension", 768)
+        value = self.get("embeddings.dimension", 768)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid embeddings.dimension '%s', defaulting to 768", value
+            )
+            return 768
     
     @property
     def embeddings_cache_dir(self) -> Optional[str]:
@@ -322,6 +355,14 @@ class Config:
     def index_path(self) -> Path:
         path_str = self.get("index.path", "~/.sigil_index")
         return Path(path_str).expanduser().resolve()
+
+    @property
+    def lance_dir(self) -> Path:
+        """Directory used by LanceDB, defaulting to ``index_dir / "lancedb"``."""
+        path_str = self.get("index.lance_dir")
+        if path_str:
+            return Path(path_str).expanduser().resolve()
+        return self.index_path / "lancedb"
     
     # --- Admin API configuration ---
 

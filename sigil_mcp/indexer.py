@@ -70,7 +70,10 @@ class SigilIndex:
         self.embed_model = embed_model
 
         config = get_config()
-        self.lance_db_path = self.index_path / "lancedb"
+        if config.index_path == self.index_path:
+            self.lance_db_path = config.lance_dir
+        else:
+            self.lance_db_path = self.index_path / "lancedb"
         self.lance_db = None
         self.vectors = None
         if config.embeddings_enabled:
