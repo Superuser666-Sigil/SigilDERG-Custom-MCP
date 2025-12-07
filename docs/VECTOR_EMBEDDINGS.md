@@ -22,7 +22,9 @@ While trigram search (substring matching) and symbol search (definitions) are gr
 
 ### Storage
 
-Embeddings are stored in the existing `repos.db` SQLite database:
+Embeddings are stored in a LanceDB-backed `code_vectors` table under each repository's index directory (see [ADR-013](adr-013-lancedb-vector-store.md) for the rationale). The table tracks repository name, file path, chunk metadata, embedding model, dimension, and the vector itself. A product-quantization index on the vector column accelerates approximate-nearest-neighbor queries while keeping the on-disk footprint manageable.
+
+Legacy repositories created before the LanceDB migration may still have embeddings in the `repos.db` SQLite table shown below. Run the migration tooling to move these rows into LanceDB if you need ANN-backed queries.
 
 ```sql
 CREATE TABLE embeddings (
