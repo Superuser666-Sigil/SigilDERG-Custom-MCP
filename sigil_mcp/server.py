@@ -660,19 +660,16 @@ def build_vector_index_op(
         index.embed_model = f"{provider}:{model_name}"
 
     if repo is not None:
-        # Per-repo rebuild: use script's single-repo logic
-        from rebuild_indexes import rebuild_single_repo_index
         repo_path = _get_repo_root(repo)
-        result = rebuild_single_repo_index(
-            index=index,
-            repo_name=repo,
-            repo_path=repo_path,
-            rebuild_embeddings=True,
+        if not repo_path.exists():
+            raise ValueError(f"Repository path does not exist: {repo_path}")
+
+        embedding_stats = index.build_vector_index(
+            repo=repo,
             embed_fn=index.embed_fn,
             model=index.embed_model,
+            force=force_rebuild,
         )
-        # Extract embedding stats and format response
-        embedding_stats = result.get("embedding_stats", {})
         return {
             "success": True,
             "status": "completed",
@@ -687,18 +684,23 @@ def build_vector_index_op(
             **embedding_stats,
         }
 
-    # Complete rebuild: use script's rebuild_all_indexes logic
-    from rebuild_indexes import rebuild_all_indexes
-    result = rebuild_all_indexes(
-        index=index,
-        wipe_index=False,  # Don't wipe - we're using existing index
-        rebuild_embeddings=True,  # Rebuild embeddings
-    )
-    # Format response to match expected structure
-    embedding_stats = result.get("embedding_stats", {})
-    total_docs = sum(
-        s.get("documents_processed", 0) for s in embedding_stats.values()
-    )
+    embedding_stats: Dict[str, Dict[str, int]] = {}
+    total_docs = 0
+    for repo_name in REPOS.keys():
+        try:
+            stats = index.build_vector_index(
+                repo=repo_name,
+                embed_fn=index.embed_fn,
+                model=index.embed_model,
+                force=force_rebuild,
+            )
+        except Exception:
+            logger.exception("Failed to rebuild vector index for %s", repo_name)
+            raise
+
+        embedding_stats[repo_name] = stats
+        total_docs += stats.get("documents_processed", 0)
+
     return {
         "success": True,
         "status": "completed",
@@ -723,6 +725,37 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
     """
     _ensure_repos_configured()
     index = _get_index()
+
+    def _get_vector_count(repo_name: Optional[str] = None) -> int:
+        """Count vectors stored in LanceDB, optionally filtered by repo."""
+        if index.vectors is None:
+            return 0
+
+        if repo_name is None:
+            try:
+                return int(index.vectors.count_rows())
+            except Exception:
+                logger.exception("Failed to count vectors across all repositories")
+                return 0
+
+        cursor = index.repos_db.cursor()
+        cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
+        row = cursor.fetchone()
+        if not row:
+            return 0
+
+        repo_id = str(row[0])
+
+        try:
+            arrow_table = index.vectors.to_arrow()
+            repo_ids = arrow_table.column("repo_id")
+            if repo_ids is None:
+                return 0
+            return sum(1 for value in repo_ids.to_pylist() if str(value) == repo_id)
+        except Exception:
+            logger.exception("Failed to count vectors for repo %s", repo_name)
+            return 0
+
     stats = index.get_index_stats(repo=repo)
     
     # Handle error response
@@ -745,12 +778,14 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
             return {
                 "total_documents": stats.get("documents", 0),
                 "total_symbols": stats.get("symbols", 0),
+                "total_vectors": _get_vector_count(repo),
                 "total_repos": 1,
                 "repos": {
                     repo: {
                         "documents": stats.get("documents", 0),
                         "symbols": stats.get("symbols", 0),
                         "files": file_count,
+                        "vectors": _get_vector_count(repo),
                     }
                 }
             }
@@ -758,7 +793,8 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
         total_docs = stats.get("documents", 0)
         total_symbols = stats.get("symbols", 0)
         total_repos = stats.get("repositories", 0)
-        
+        total_vectors = _get_vector_count()
+
         # Get per-repo stats
         repos_dict: Dict[str, Dict[str, int]] = {}
         from .server import REPOS
@@ -775,12 +811,14 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
                     "documents": int(repo_stats.get("documents", 0)),
                     "symbols": int(repo_stats.get("symbols", 0)),
                     "files": int(file_count),
+                    "vectors": _get_vector_count(repo_name),
                 }
-        
+
         return {
             "total_documents": total_docs,
             "total_symbols": total_symbols,
             "total_repos": total_repos,
+            "total_vectors": total_vectors,
             "repos": repos_dict
         }
     
