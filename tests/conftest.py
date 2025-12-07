@@ -14,6 +14,7 @@ import numpy as np
 from sigil_mcp.indexer import SigilIndex
 from sigil_mcp.auth import API_KEY_FILE
 from sigil_mcp.oauth import CLIENT_FILE, TOKENS_FILE
+import sigil_mcp.config as sigil_config
 
 
 @pytest.fixture
@@ -102,7 +103,7 @@ def dummy_embed_fn():
     """Create a dummy embedding function for testing."""
     def embed_fn(texts):
         """Generate deterministic embeddings for testing."""
-        dim = 384
+        dim = 768
         embeddings = np.random.randn(len(texts), dim).astype('float32')
         # Make deterministic based on text content
         for i, text in enumerate(texts):
@@ -140,6 +141,37 @@ def indexed_repo(test_index, test_repo_path):
         "repo_name": "test_repo",
         "stats": stats
     }
+
+
+@pytest.fixture
+def embeddings_enabled_index(temp_dir, test_repo_path, dummy_embed_fn):
+    """Create an index with embeddings enabled for LanceDB-covered tests."""
+
+    # Temporarily enable embeddings in global config for this test run
+    original_config = sigil_config._config
+    cfg = sigil_config.Config()
+    cfg.config_data.setdefault("embeddings", {})["enabled"] = True
+    sigil_config._config = cfg
+
+    index_path = temp_dir / ".test_index_vectors"
+    index_path.mkdir(parents=True, exist_ok=True)
+
+    index = SigilIndex(
+        index_path=index_path,
+        embed_fn=dummy_embed_fn,
+        embed_model="test-model",
+    )
+
+    try:
+        yield {
+            "index": index,
+            "repo_path": test_repo_path,
+            "repo_name": "test_repo",
+        }
+    finally:
+        index.repos_db.close()
+        index.trigrams_db.close()
+        sigil_config._config = original_config
 
 
 @pytest.fixture

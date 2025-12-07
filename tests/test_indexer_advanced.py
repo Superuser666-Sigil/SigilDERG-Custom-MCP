@@ -344,6 +344,46 @@ class TestRemoveFile:
             }
             assert doc_id not in ids
 
+    def test_remove_file_clears_lancedb_rows(
+        self, embeddings_enabled_index
+    ):
+        """Removing a file should clear matching LanceDB rows by repo/path."""
+
+        index = embeddings_enabled_index["index"]
+        repo_name = embeddings_enabled_index["repo_name"]
+        repo_path = embeddings_enabled_index["repo_path"]
+
+        stats = index.index_repository(repo_name, repo_path, force=True)
+        assert stats["files_indexed"] > 0
+
+        index.build_vector_index(repo=repo_name, force=True)
+
+        target_file = repo_path / "main.py"
+        rel_path = target_file.relative_to(repo_path).as_posix()
+
+        repo_cursor = index.repos_db.cursor()
+        repo_cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
+        repo_id = repo_cursor.fetchone()[0]
+
+        existing_rows = index.vectors.to_arrow().to_pylist()
+        matches = [
+            row
+            for row in existing_rows
+            if row.get("repo_id") == str(repo_id) and row.get("file_path") == rel_path
+        ]
+        assert len(matches) > 0
+
+        removed = index.remove_file(repo_name, repo_path, target_file)
+        assert removed is True
+
+        remaining_rows = index.vectors.to_arrow().to_pylist()
+        remaining_matches = [
+            row
+            for row in remaining_rows
+            if row.get("repo_id") == str(repo_id) and row.get("file_path") == rel_path
+        ]
+        assert len(remaining_matches) == 0
+
 
 class TestEmbeddingDimensions:
     """Test handling of different embedding dimensions."""
@@ -377,6 +417,52 @@ class TestEmbeddingDimensions:
             norm = np.linalg.norm(vector)
             # Should be approximately unit norm (allowing for float precision)
             assert 0.95 <= norm <= 1.05
+
+
+class TestPartialReindexingVectors:
+    """Tests ensuring partial reindex refreshes LanceDB entries."""
+
+    def test_index_file_refreshes_vectors_for_path(self, embeddings_enabled_index):
+        index = embeddings_enabled_index["index"]
+        repo_name = embeddings_enabled_index["repo_name"]
+        repo_path = embeddings_enabled_index["repo_path"]
+
+        index.index_repository(repo_name, repo_path, force=True)
+        index.build_vector_index(repo=repo_name, force=True)
+
+        target_file = repo_path / "utils.py"
+        rel_path = target_file.relative_to(repo_path).as_posix()
+
+        repo_cursor = index.repos_db.cursor()
+        repo_cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
+        repo_id = repo_cursor.fetchone()[0]
+
+        original_chunks = index._chunk_text(target_file.read_text())
+        original_rows = index.vectors.to_arrow().to_pylist()
+        original_matches = [
+            row
+            for row in original_rows
+            if row.get("repo_id") == str(repo_id) and row.get("file_path") == rel_path
+        ]
+        assert len(original_matches) == len(original_chunks)
+
+        # Modify the file to produce a different chunking pattern
+        target_file.write_text(
+            target_file.read_text() + "\n\n# new helper added\n" "def helper():\n    return True\n"
+        )
+
+        updated_chunks = index._chunk_text(target_file.read_text())
+
+        reindexed = index.index_file(repo_name, repo_path, target_file)
+        assert reindexed is True
+
+        refreshed_rows = index.vectors.to_arrow().to_pylist()
+        refreshed_matches = [
+            row
+            for row in refreshed_rows
+            if row.get("repo_id") == str(repo_id) and row.get("file_path") == rel_path
+        ]
+        assert len(refreshed_matches) == len(updated_chunks)
 
 
 class TestCleanup:
