@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-Script to delete all embeddings, trigrams, and vectors, then rebuild them.
+Script to wipe the entire index (SQLite + LanceDB) and rebuild it from scratch.
 
 This script:
-1. Deletes all entries from the trigrams table
-2. Deletes all entries from the embeddings table
-3. Rebuilds trigrams by re-indexing all repositories
-4. Rebuilds embeddings/vectors for all repositories (if embeddings enabled)
+1. Deletes the entire index directory (including LanceDB data)
+2. Rebuilds trigrams by re-indexing all repositories
+3. Rebuilds embeddings/vectors for all repositories (if embeddings enabled)
 """
 
 import sys
@@ -38,20 +37,6 @@ def delete_all_trigrams(index: SigilIndex) -> int:
     index.trigrams_db.commit()
     
     logger.info(f"Deleted {count_before} trigram entries")
-    return count_before
-
-
-def delete_all_embeddings(index: SigilIndex) -> int:
-    """Delete all embeddings from the repos database."""
-    logger.info("Deleting all embeddings...")
-    cursor = index.repos_db.cursor()
-    cursor.execute("SELECT COUNT(*) FROM embeddings")
-    count_before = cursor.fetchone()[0]
-    
-    cursor.execute("DELETE FROM embeddings")
-    index.repos_db.commit()
-    
-    logger.info(f"Deleted {count_before} embedding entries")
     return count_before
 
 
@@ -93,12 +78,17 @@ def _setup_index_for_rebuild(
 ) -> SigilIndex:
     """Initialize or prepare index for rebuild."""
     config = get_config()
-    
-    # Step 0: delete entire index directory for a truly clean rebuild
+
+    # Step 0: delete entire index directory (and LanceDB dir if customized)
     index_dir = config.index_path
-    if wipe_index and index_dir.exists():
-        logger.info(f"Removing entire index directory at {index_dir}")
-        shutil.rmtree(index_dir)
+    lance_dir = config.lance_dir
+    if wipe_index:
+        if index_dir.exists():
+            logger.info(f"Removing entire index directory at {index_dir}")
+            shutil.rmtree(index_dir)
+        if lance_dir.exists() and lance_dir != index_dir:
+            logger.info(f"Removing LanceDB directory at {lance_dir}")
+            shutil.rmtree(lance_dir)
     # Recreate base directory for subsequent operations
     index_dir.mkdir(parents=True, exist_ok=True)
     
@@ -228,15 +218,11 @@ def rebuild_all_indexes(
     # Step 1: Delete all trigrams
     logger.info("Deleting all trigrams...")
     trigram_count = delete_all_trigrams(index)
-    
-    # Step 2: Delete all embeddings
-    logger.info("Deleting all embeddings...")
-    embedding_count = delete_all_embeddings(index)
-    
-    # Step 3: Rebuild trigrams for all repos
+
+    # Step 2: Rebuild trigrams for all repos
     trigram_stats = _rebuild_trigrams_for_all_repos(index, repos)
-    
-    # Step 4: Rebuild embeddings if enabled
+
+    # Step 3: Rebuild embeddings if enabled
     embedding_stats = {}
     if rebuild_embeddings and config.embeddings_enabled:
         try:
@@ -263,7 +249,6 @@ def rebuild_all_indexes(
         "status": "completed",
         "message": f"Successfully rebuilt indexes for {len(repos)} repositories",
         "deleted_trigrams": trigram_count,
-        "deleted_embeddings": embedding_count,
         "stats": {
             "documents": total_files,
             "symbols": total_symbols,
@@ -353,7 +338,6 @@ def main():
         print()
         print("Summary:")
         print(f"  Deleted trigrams: {result['deleted_trigrams']}")
-        print(f"  Deleted embeddings: {result['deleted_embeddings']}")
         print()
         print("Trigram rebuild summary:")
         for repo_name, stats in result["repos"].items():
