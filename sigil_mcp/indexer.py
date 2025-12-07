@@ -244,8 +244,20 @@ class SigilIndex:
                 result = self._index_file(
                     repo_id, repo_name, repo_path, file_path, language
                 )
-                
+
                 if result:
+                    if self.vectors is not None and self.embed_fn is not None:
+                        chunks = self._chunk_text(result.get("text", ""))
+                        if chunks:
+                            embeddings = self.embed_fn([c[3] for c in chunks])
+                            self._index_file_vectors(
+                                repo_id,
+                                result.get("doc_id", 0),
+                                result.get("rel_path", file_path.as_posix()),
+                                chunks,
+                                embeddings,
+                            )
+
                     # Rebuild trigrams for this file
                     self._update_trigrams_for_file(repo_id, repo_path, file_path)
                     self.repos_db.commit()
@@ -478,10 +490,11 @@ class SigilIndex:
         repo_root: Path,
         file_path: Path,
         language: str
-    ) -> Optional[dict[str, int]]:
+    ) -> Optional[dict[str, object]]:
         """Index a single file."""
         try:
             content = file_path.read_bytes()
+            text = content.decode("utf-8", errors="replace")
             blob_sha = hashlib.sha256(content).hexdigest()
             rel_path = file_path.relative_to(repo_root).as_posix()
             
@@ -516,10 +529,22 @@ class SigilIndex:
                         (old_doc_id,),
                     )
                     # remove embeddings referencing the old doc (if any)
-                    cursor.execute(
-                        "DELETE FROM embeddings WHERE doc_id = ?",
-                        (old_doc_id,),
-                    )
+                    try:
+                        cursor.execute(
+                            "DELETE FROM embeddings WHERE doc_id = ?",
+                            (old_doc_id,),
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Embeddings table missing when cleaning up doc %s", old_doc_id
+                        )
+                    if self.vectors is not None:
+                        try:
+                            self.vectors.delete(f"doc_id == '{old_doc_id}'")
+                        except Exception:
+                            logger.exception(
+                                "Failed to delete vector rows for stale doc %s", old_doc_id
+                            )
                     # remove the old document row
                     cursor.execute("DELETE FROM documents WHERE id = ?", (old_doc_id,))
             except Exception:
@@ -556,10 +581,13 @@ class SigilIndex:
                     symbol.signature,
                     symbol.scope
                 ))
-            
+
             return {
                 "symbols": len(symbols),
-                "bytes": int(len(content))
+                "bytes": int(len(content)),
+                "doc_id": doc_id,
+                "rel_path": rel_path,
+                "text": text,
             }
         
         except Exception as e:
@@ -948,7 +976,17 @@ class SigilIndex:
     def _delete_symbols_and_embeddings_for_doc(self, doc_id: int) -> None:
         """Delete symbols and embeddings for a document id."""
         self.repos_db.execute("DELETE FROM symbols WHERE doc_id = ?", (doc_id,))
-        self.repos_db.execute("DELETE FROM embeddings WHERE doc_id = ?", (doc_id,))
+        try:
+            self.repos_db.execute("DELETE FROM embeddings WHERE doc_id = ?", (doc_id,))
+        except Exception:
+            # Embeddings table may not exist in newer versions; ignore errors
+            logger.debug("No embeddings table found when deleting doc %s", doc_id)
+
+        if self.vectors is not None:
+            try:
+                self.vectors.delete(f"doc_id == '{doc_id}'")
+            except Exception:
+                logger.exception("Failed to delete vector rows for doc %s", doc_id)
 
     def _remove_trigrams_for_doc_fast(self, doc_id: int, trigrams: Set[str]) -> None:
         """Fast path for removing doc_id from a list of trigrams."""
@@ -1052,7 +1090,7 @@ class SigilIndex:
         chunks = []
         i = 0
         chunk_idx = 0
-        
+
         while i < len(lines):
             start = i
             end = min(i + max_lines, len(lines))
@@ -1063,8 +1101,66 @@ class SigilIndex:
             chunks.append((chunk_idx, start + 1, end, chunk_text))  # 1-indexed lines
             chunk_idx += 1
             i += max_lines - overlap
-        
+
         return chunks
+
+    def _index_file_vectors(
+        self,
+        repo_id: int,
+        doc_id: int,
+        rel_path: str,
+        chunks: Sequence[tuple[int, int, int, str]],
+        embeddings: np.ndarray,
+    ) -> None:
+        """Replace vector rows for a file with fresh embeddings."""
+
+        if self.vectors is None:
+            return
+
+        if embeddings.shape[0] != len(chunks):
+            logger.warning(
+                "Embedding/chunk count mismatch for %s: %s embeddings vs %s chunks",
+                rel_path,
+                embeddings.shape[0],
+                len(chunks),
+            )
+            return
+
+        if embeddings.shape[1] != 768:
+            logger.warning(
+                "Unexpected embedding dimension %s for %s (expected 768)",
+                embeddings.shape[1],
+                rel_path,
+            )
+
+        timestamp = datetime.now()
+
+        try:
+            self.vectors.delete(
+                f"repo_id == '{repo_id}' AND file_path == '{rel_path}'"
+            )
+        except Exception:
+            logger.exception("Failed to delete existing vectors for %s", rel_path)
+
+        records = []
+        for (chunk_idx, start_line, end_line, chunk_text), vector in zip(chunks, embeddings):
+            records.append(CodeChunk(
+                vector=np.asarray(vector, dtype="float32"),
+                doc_id=str(doc_id),
+                repo_id=str(repo_id),
+                file_path=rel_path,
+                chunk_index=int(chunk_idx),
+                start_line=int(start_line),
+                end_line=int(end_line),
+                content=chunk_text,
+                last_updated=timestamp,
+            ))
+
+        if records:
+            try:
+                self.vectors.add(records)
+            except Exception:
+                logger.exception("Failed to upsert vectors for %s", rel_path)
     
     def build_vector_index(
         self,
@@ -1097,79 +1193,55 @@ class SigilIndex:
                 "chunks_indexed": 0,
                 "documents_processed": 0,
             }
-            
+
             cur = self.repos_db.cursor()
             cur.execute("SELECT id FROM repos WHERE name = ?", (repo,))
             row = cur.fetchone()
             if not row:
                 raise ValueError(f"Repository {repo!r} not indexed yet")
-            
+
             repo_id = row[0]
-            
-            # Optionally wipe old embeddings for this repo + model
-            if force:
-                cur.execute(
-                    """
-                    DELETE FROM embeddings
-                    WHERE doc_id IN (SELECT id FROM documents WHERE repo_id = ?)
-                    AND model = ?
-                    """,
-                    (repo_id, model),
-                )
-                self.repos_db.commit()
+
+            if self.vectors is None:
+                logger.info("Vector index not initialized; skipping build for %s", repo)
+                return stats
+
+            if force and self.vectors is not None:
+                try:
+                    self.vectors.delete(f"repo_id == '{repo_id}'")
+                except Exception:
+                    logger.exception(
+                        "Failed to clear existing vectors for repo %s", repo
+                    )
             
             cur.execute(
-                "SELECT id, blob_sha FROM documents WHERE repo_id = ?",
+                "SELECT id, blob_sha, path FROM documents WHERE repo_id = ?",
                 (repo_id,)
             )
             docs = cur.fetchall()
-            
-            for doc_id, blob_sha in docs:
-                # Skip if already embedded (unless force)
-                if not force:
-                    cur2 = self.repos_db.execute(
-                        "SELECT COUNT(*) FROM embeddings WHERE doc_id = ? "
-                        "AND model = ?",
-                        (doc_id, model),
-                    )
-                    if cur2.fetchone()[0] > 0:
-                        continue
-                
+
+            for doc_id, blob_sha, rel_path in docs:
                 content = self._read_blob(blob_sha)
                 if not content:
                     continue
-                
+
                 text = content.decode("utf-8", errors="replace")
                 chunks = self._chunk_text(text)
                 if not chunks:
                     continue
-                
+
                 texts = [c[3] for c in chunks]
                 vectors = embed_fn(texts)  # np.ndarray (N, dim)
-                dim = int(vectors.shape[1])
-                
-                for (chunk_idx, start_line, end_line, _), vec in zip(chunks, vectors):
-                    self.repos_db.execute("""
-                        INSERT OR REPLACE INTO embeddings
-                        (doc_id, chunk_index, start_line, end_line, model, dim, vector)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        doc_id,
-                        chunk_idx,
-                        start_line,
-                        end_line,
-                        model,
-                        dim,
-                        vec.astype("float32").tobytes(),
-                    ))
-                
+
+                self._index_file_vectors(repo_id, doc_id, rel_path, chunks, vectors)
+
                 stats["documents_processed"] += 1
                 stats["chunks_indexed"] += len(chunks)
-            
-            self.repos_db.commit()
+
             logger.info(
-                "Built vector index for %s: %s documents, %s chunks",
+                "Built vector index for %s using model %s: %s documents, %s chunks",
                 repo,
+                model,
                 stats['documents_processed'],
                 stats['chunks_indexed'],
             )
@@ -1197,6 +1269,9 @@ class SigilIndex:
             List of search results with scores, sorted by relevance
         """
         with self._lock:
+            if self.vectors is None:
+                return []
+
             if embed_fn is None:
                 embed_fn = self.embed_fn
             if embed_fn is None:
@@ -1215,59 +1290,37 @@ class SigilIndex:
             if not row:
                 raise ValueError(f"Repository {repo!r} not indexed yet")
             repo_id = row[0]
-            
-            # 2) fetch all embeddings for this repo + model
-            cur.execute("""
-                SELECT e.doc_id, e.chunk_index, e.start_line, e.end_line,
-                       e.dim, e.vector, d.path
-                FROM embeddings e
-                JOIN documents d ON d.id = e.doc_id
-                WHERE d.repo_id = ? AND e.model = ?
-            """, (repo_id, model))
-            
-            rows = cur.fetchall()
-            if not rows:
-                return []
-            
-            # 3) compute cosine similarity in-memory
-            vecs = []
-            meta = []
-            for doc_id, chunk_idx, start_line, end_line, dim, blob, path in rows:
-                v = np.frombuffer(blob, dtype="float32")
-                if v.shape[0] != dim:
-                    continue
-                vecs.append(v)
-                meta.append((doc_id, chunk_idx, start_line, end_line, path))
-            
-            if not vecs:
-                return []
-            
-            mat = np.stack(vecs, axis=0)
-            norms = np.linalg.norm(mat, axis=1)
-            norms[norms == 0] = 1.0
-            mat = mat / norms[:, None]
-            
-            scores = mat @ q_vec
-            top_idx = np.argsort(scores)[::-1][:k]
-            
-            # 4) map back to repo/path/lines
+
+            query_results = (
+                self.vectors.search(q_vec.astype("float32"))
+                .where(f"repo_id == '{repo_id}'")
+                .limit(k)
+                .to_list()
+            )
+
             results = []
-            for idx in top_idx:
-                score = float(scores[idx])
-                doc_id, chunk_idx, start_line, end_line, path = meta[idx]
+            for row in query_results:
+                try:
+                    doc_id = int(row.get("doc_id", 0))
+                except (TypeError, ValueError):
+                    continue
+
                 doc = self._get_document(doc_id)
                 if doc is None:
-                    # Document was deleted but embedding still exists - skip it
                     continue
+
+                distance = float(row.get("_distance", 0.0))
+                score = 1.0 / (1.0 + distance)
+
                 results.append({
                     "repo": doc["repo_name"],
-                    "path": path,
-                    "start_line": start_line,
-                    "end_line": end_line,
+                    "path": row.get("file_path", ""),
+                    "start_line": int(row.get("start_line", 0)),
+                    "end_line": int(row.get("end_line", 0)),
                     "score": score,
-                    "doc_id": f"{doc['repo_name']}::{path}",
+                    "doc_id": f"{doc['repo_name']}::{row.get('file_path', '')}",
                 })
-            
+
             return results
     
     def get_index_stats(self, repo: Optional[str] = None) -> dict[str, int | str]:
