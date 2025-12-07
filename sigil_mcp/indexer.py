@@ -1253,7 +1253,7 @@ class SigilIndex:
     def semantic_search(
         self,
         query: str,
-        repo: str,
+        repo: Optional[str] = None,
         k: int = 20,
         embed_fn: Optional[EmbeddingFn] = None,
         model: Optional[str] = None,
@@ -1263,7 +1263,7 @@ class SigilIndex:
         
         Args:
             query: Natural language or code query
-            repo: Repository name to search
+            repo: Repository name to search (optional; searches all if omitted)
             k: Number of top results to return
             embed_fn: Embedding function (uses instance default if None)
             model: Model identifier (uses instance default if None)
@@ -1272,34 +1272,36 @@ class SigilIndex:
             List of search results with scores, sorted by relevance
         """
         with self._lock:
-            if self.vectors is None:
-                return []
-
             if embed_fn is None:
                 embed_fn = self.embed_fn
             if embed_fn is None:
                 raise RuntimeError("No embedding function configured")
-            
+
+            if self.vectors is None:
+                raise RuntimeError("Vector index is not available")
+
             model = model or self.embed_model
-            
+
             # 1) embed query
             q_vec = embed_fn([query])[0].astype("float32")
             q_norm = np.linalg.norm(q_vec) or 1.0
             q_vec = q_vec / q_norm
-            
-            cur = self.repos_db.cursor()
-            cur.execute("SELECT id FROM repos WHERE name = ?", (repo,))
-            row = cur.fetchone()
-            if not row:
-                raise ValueError(f"Repository {repo!r} not indexed yet")
-            repo_id = row[0]
 
-            query_results = (
-                self.vectors.search(q_vec.astype("float32"))
-                .where(f"repo_id == '{repo_id}'")
-                .limit(k)
-                .to_list()
-            )
+            repo_id: Optional[str] = None
+            repo_lookup: dict[str, str] = {}
+            query_builder = self.vectors.search(q_vec.astype("float32"))
+
+            if repo:
+                cur = self.repos_db.cursor()
+                cur.execute("SELECT id FROM repos WHERE name = ?", (repo,))
+                row = cur.fetchone()
+                if not row:
+                    raise ValueError(f"Repository {repo!r} not indexed yet")
+                repo_id = str(row[0])
+                query_builder = query_builder.where(f"repo_id == '{repo_id}'")
+                repo_lookup[repo_id] = repo
+
+            query_results = query_builder.limit(k).to_list()
 
             results = []
             for row in query_results:
@@ -1308,20 +1310,30 @@ class SigilIndex:
                 except (TypeError, ValueError):
                     continue
 
-                doc = self._get_document(doc_id)
-                if doc is None:
+                repo_name: Optional[str] = None
+                if repo_id is not None:
+                    repo_name = repo_lookup.get(repo_id)
+                else:
+                    doc = self._get_document(doc_id)
+                    if doc is not None:
+                        repo_name = doc.get("repo_name")
+                        if doc.get("repo_name"):
+                            repo_lookup[str(row.get("repo_id", ""))] = doc["repo_name"]
+                if repo_name is None:
                     continue
 
                 distance = float(row.get("_distance", 0.0))
                 score = 1.0 / (1.0 + distance)
 
                 results.append({
-                    "repo": doc["repo_name"],
+                    "repo": repo_name,
                     "path": row.get("file_path", ""),
+                    "chunk_index": int(row.get("chunk_index", -1)),
                     "start_line": int(row.get("start_line", 0)),
                     "end_line": int(row.get("end_line", 0)),
+                    "content": row.get("content", ""),
                     "score": score,
-                    "doc_id": f"{doc['repo_name']}::{row.get('file_path', '')}",
+                    "doc_id": f"{repo_name}::{row.get('file_path', '')}",
                 })
 
             return results

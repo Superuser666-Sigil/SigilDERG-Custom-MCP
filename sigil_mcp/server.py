@@ -2597,7 +2597,7 @@ def build_vector_index(
     ),
     description=(
         "Semantic code search using vector embeddings (read-only)."
-        " Args: query (natural language or code-like query), repo (required),"
+        " Args: query (natural language or code-like query), optional repo filter,"
         " k (top-k), model (embedding model id)."
     ),
     annotations={
@@ -2613,13 +2613,13 @@ def build_vector_index(
             "k": {"type": "integer"},
             "model": {"type": "string"}
         },
-        "required": ["query", "repo"]
+        "required": ["query"]
     },
 )
 @mcp.tool()
 def semantic_search(
     query: str,
-    repo: str,
+    repo: Optional[str] = None,
     k: int = 20,
     model: str = "default",
 ) -> Dict[str, object]:
@@ -2631,7 +2631,7 @@ def semantic_search(
     
     Args:
       query: Natural language or code-like query describing what you're looking for
-      repo: Repository name (required)
+      repo: Repository name (optional; when omitted searches across all indexed repos)
       k: Number of results to return (default: 20)
       model: Embedding model identifier (default: "default")
     
@@ -2672,11 +2672,11 @@ def semantic_search(
         model,
     )
     _ensure_repos_configured()
-    
+
     index = _get_index()
 
     # If embeddings are not configured, fail gracefully instead of crashing
-    if index.embed_fn is None:
+    if index.embed_fn is None or index.vectors is None:
         logger.warning(
             "semantic_search called but embeddings are not configured "
             "(embeddings_enabled=%r, embed_model=%r)",
