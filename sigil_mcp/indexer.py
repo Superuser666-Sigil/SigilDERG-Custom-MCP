@@ -24,6 +24,9 @@ import threading
 import lancedb
 import pyarrow as pa
 
+from .config import get_config
+from .schema import CodeChunk
+
 logger = logging.getLogger(__name__)
 
 # Type alias for embedding function: takes sequence of texts, returns (N, dim) array
@@ -66,9 +69,19 @@ class SigilIndex:
         self.embed_fn = embed_fn
         self.embed_model = embed_model
 
+        config = get_config()
         self.lance_db_path = self.index_path / "lancedb"
-        self.lance = lancedb.connect(self.lance_db_path)
-        self.vector_table_name = "code_vectors"
+        self.lance_db = None
+        self.vectors = None
+        if config.embeddings_enabled:
+            self.lance_db_path.mkdir(parents=True, exist_ok=True)
+            self.lance_db = lancedb.connect(self.lance_db_path)
+            if "code_chunks" in self.lance_db.table_names():
+                self.vectors = self.lance_db.open_table("code_chunks")
+            else:
+                self.vectors = self.lance_db.create_table(
+                    "code_chunks", schema=CodeChunk
+                )
 
         # Global lock to serialize DB access across threads
         # (HTTP handlers + file watcher + vector indexing)
@@ -155,26 +168,8 @@ class SigilIndex:
             ON symbols(kind)
         """)
         
-        # Embeddings table for semantic/vector search
-        self.repos_db.execute("""
-            CREATE TABLE IF NOT EXISTS embeddings (
-                id INTEGER PRIMARY KEY,
-                doc_id INTEGER NOT NULL,
-                chunk_index INTEGER NOT NULL,
-                start_line INTEGER NOT NULL,
-                end_line INTEGER NOT NULL,
-                model TEXT NOT NULL,
-                dim INTEGER NOT NULL,
-                vector BLOB NOT NULL,
-                FOREIGN KEY(doc_id) REFERENCES documents(id),
-                UNIQUE(doc_id, chunk_index, model)
-            )
-        """)
-        
-        self.repos_db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_embeddings_doc
-            ON embeddings(doc_id)
-        """)
+        # Remove legacy embeddings table now that vectors are stored in LanceDB
+        self.repos_db.execute("DROP TABLE IF EXISTS embeddings")
 
         self.trigrams_db.execute(
             """
