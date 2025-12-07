@@ -670,7 +670,8 @@ Contents:
 - `trigrams.db-wal` - WAL file for trigrams database (v0.3.3+)
 - `trigrams.db-shm` - Shared memory for trigrams WAL (v0.3.3+)
 - `blobs/` - Compressed file contents
-- `vectors/` - Vector embeddings (if enabled)
+- `lancedb/` - LanceDB vector store (one `code_vectors` table per repo)
+- `vectors/` - Legacy vector embeddings (pre-LanceDB, if still present)
 
 **Note:** WAL mode (Write-Ahead Logging) is enabled by default since v0.3.3 to support concurrent access from HTTP handlers, file watcher, and vector indexing operations. The `-wal` and `-shm` files are automatically managed by SQLite.
 
@@ -707,7 +708,7 @@ python rebuild_indexes.py
 This script:
 
 - Deletes the entire index directory (default `~/.sigil_index`, or `index.path` from `config.json`)
-- Recreates the index
+- Recreates the index (including `lancedb/` for embeddings)
 - Rebuilds all repositories defined in your current configuration
 
 Use this when:
@@ -715,6 +716,8 @@ Use this when:
 - You suspect index corruption and want a clean slate
 - You have changed low-level indexing behavior and want all data regenerated
 - You want to ensure no stale documents, trigrams, or vectors remain
+- You're migrating from SQLite-backed embeddings and want LanceDB-only storage (drop the old table after the rebuild with
+  `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`)
 
 ### Index Backup
 

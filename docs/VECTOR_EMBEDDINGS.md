@@ -22,9 +22,9 @@ While trigram search (substring matching) and symbol search (definitions) are gr
 
 ### Storage
 
-Embeddings are stored in a LanceDB-backed `code_vectors` table under each repository's index directory (see [ADR-013](adr-013-lancedb-vector-store.md) for the rationale). The table tracks repository name, file path, chunk metadata, embedding model, dimension, and the vector itself. A product-quantization index on the vector column accelerates approximate-nearest-neighbor queries while keeping the on-disk footprint manageable.
+Embeddings are stored in a LanceDB-backed `code_vectors` table under each repository's index directory (see [ADR-013](adr-013-lancedb-vector-store.md) for the rationale). The table tracks repository name, file path, chunk metadata, embedding model, dimension, and the vector itself. A product-quantization index on the vector column accelerates approximate-nearest-neighbor queries while keeping the on-disk footprint manageable. The files live inside your index path at `index_dir/lancedb/<repo_name>/code_vectors`.
 
-Legacy repositories created before the LanceDB migration may still have embeddings in the `repos.db` SQLite table shown below. Run the migration tooling to move these rows into LanceDB if you need ANN-backed queries.
+Legacy repositories created before the LanceDB migration may still have embeddings in the `repos.db` SQLite table shown below. Run the migration tooling to move these rows into LanceDB if you need ANN-backed queries, then drop the legacy table to avoid double-counting and free disk space: `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`.
 
 ```sql
 CREATE TABLE embeddings (
@@ -156,8 +156,8 @@ index = SigilIndex(
 )
 ```
 
-**Recommended models**:
-- `all-MiniLM-L6-v2`: Fast, 384-dim, good quality (default)
+**Recommended models** (optimized for the LanceDB ANN index):
+- `all-MiniLM-L12-v2`: Balanced quality/speed, **768-dim** (current default)
 - `all-mpnet-base-v2`: Higher quality, 768-dim, slower
 - `paraphrase-multilingual-MiniLM-L12-v2`: Multi-language support
 
@@ -312,6 +312,13 @@ index.build_vector_index(repo="my-project", force=False)
 
 # Force rebuild all embeddings
 index.build_vector_index(repo="my-project", force=True)
+```
+
+If you're migrating from the old SQLite storage, run a full rebuild once to populate LanceDB and then drop the legacy table:
+
+```bash
+python rebuild_indexes.py  # or POST /admin/vector/rebuild per repo
+sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"
 ```
 
 ## Troubleshooting

@@ -220,6 +220,21 @@ cd /path/to/repository && ls
 find /path/to/repository -type f ! -readable
 ```
 
+### Vector embeddings missing after upgrade
+
+**Symptom:** `semantic_search` returns no results or logs show `code_vectors` not found.
+
+**Diagnosis:**
+```bash
+ls -la ~/.sigil_index/lancedb
+sqlite3 ~/.sigil_index/repos.db "SELECT name FROM sqlite_master WHERE type='table' AND name='embeddings';"
+```
+
+**Solution:**
+1. Rebuild embeddings into LanceDB: `python rebuild_indexes.py` (or `POST /admin/vector/rebuild` per repo).
+2. Drop the legacy SQLite table to avoid confusion: `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`.
+3. Confirm per-repo subdirectories exist under `~/.sigil_index/lancedb/`.
+
 ### Slow Indexing
 
 #### Symptom: Indexing takes >5 minutes for small repo

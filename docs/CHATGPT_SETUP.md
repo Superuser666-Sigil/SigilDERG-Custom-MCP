@@ -8,6 +8,10 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 This guide shows you how to configure your Sigil MCP server with ChatGPT using Developer Mode and a custom connector.
 
+Semantic search now stores embeddings in a LanceDB vector store at `~/.sigil_index/lancedb/` (or your configured index path).
+If you're upgrading from a build that used the SQLite `embeddings` table, rebuild vectors once and drop the old table to keep
+ChatGPT results consistent: `python rebuild_indexes.py` then `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`.
+
 ## Prerequisites
 
 - ChatGPT Plus subscription
