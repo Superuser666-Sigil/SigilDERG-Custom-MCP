@@ -10,6 +10,11 @@ This guide helps you choose and install the right embedding provider for your ha
 
 ## Quick Decision Guide
 
+All embeddings are stored in a **LanceDB vector store** under your index directory at `~/.sigil_index/lancedb/` (or the custom
+`index.path` you configure). Each repository gets its own `code_vectors` table inside that directory. The current
+recommendation is a **768-dimension model** to balance recall and storage size; the examples below use that dimension unless
+otherwise noted.
+
 **Choose sentence-transformers if:**
 - [YES] You have an NVIDIA GPU
 - [YES] You want the simplest setup
@@ -45,8 +50,8 @@ Configuration in `config.json`:
   "embeddings": {
     "enabled": true,
     "provider": "sentence-transformers",
-    "model": "all-MiniLM-L6-v2",
-    "dimension": 384,
+    "model": "all-MiniLM-L12-v2",
+    "dimension": 768,
     "cache_dir": "~/.cache/sigil-embeddings"
   }
 }
@@ -165,8 +170,8 @@ Configuration in `config.json`:
   "embeddings": {
     "enabled": true,
     "provider": "openai",
-    "model": "text-embedding-3-small",
-    "dimension": 1536,
+  "model": "text-embedding-3-small",
+  "dimension": 1536,
     "api_key": "sk-..."
   }
 }
@@ -260,6 +265,16 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, ROCm: {torch
 ```
 
 ## Troubleshooting
+
+### Migrating from SQLite embeddings to LanceDB
+- New deployments store vectors in LanceDB at `~/.sigil_index/lancedb/`. If you previously relied on the SQLite `embeddings`
+  table inside `repos.db`, rebuild so every repository has a LanceDB-backed `code_vectors` table:
+  1. Stop the server and back up your index directory.
+  2. Run `python rebuild_indexes.py` (or `POST /admin/vector/rebuild` for individual repos) to regenerate embeddings into
+     LanceDB.
+  3. Remove the legacy table once you're confident in the new data: `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`.
+- After rebuilding you should see a `lancedb` directory under your index path with per-repo subdirectories and `code_vectors`
+  tables.
 
 ### "No module named 'sentence_transformers'"
 You need to install the provider:

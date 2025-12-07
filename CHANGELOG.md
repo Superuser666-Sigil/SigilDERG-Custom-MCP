@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Use `./scripts/restart_servers.sh --stop` to stop all servers
 
 ### Changed
+- Embeddings now default to a LanceDB-backed vector store located at `index_dir/lancedb/` with a recommended 768-dimension model;
+  documentation includes rebuild steps and guidance for dropping the legacy SQLite `embeddings` table after migration.
 - **Admin API Integration**: Admin API now runs integrated into the main MCP server process (port 8000, `/admin/*` endpoints)
   - No longer requires separate service or port
   - Shares the same index instance (eliminates database lock conflicts)
