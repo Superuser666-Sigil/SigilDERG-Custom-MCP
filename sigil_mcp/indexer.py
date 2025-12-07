@@ -523,28 +523,10 @@ class SigilIndex:
                 )
                 rows = cursor.fetchall()
                 for (old_doc_id,) in rows:
-                    # remove symbols referencing the old doc
-                    cursor.execute(
-                        "DELETE FROM symbols WHERE doc_id = ?",
-                        (old_doc_id,),
+                    # remove symbols referencing the old doc and any stale vectors
+                    self._delete_symbols_and_embeddings_for_doc(
+                        old_doc_id, repo_id, rel_path
                     )
-                    # remove embeddings referencing the old doc (if any)
-                    try:
-                        cursor.execute(
-                            "DELETE FROM embeddings WHERE doc_id = ?",
-                            (old_doc_id,),
-                        )
-                    except Exception:
-                        logger.debug(
-                            "Embeddings table missing when cleaning up doc %s", old_doc_id
-                        )
-                    if self.vectors is not None:
-                        try:
-                            self.vectors.delete(f"doc_id == '{old_doc_id}'")
-                        except Exception:
-                            logger.exception(
-                                "Failed to delete vector rows for stale doc %s", old_doc_id
-                            )
                     # remove the old document row
                     cursor.execute("DELETE FROM documents WHERE id = ?", (old_doc_id,))
             except Exception:
@@ -973,8 +955,18 @@ class SigilIndex:
             }
         return None
 
-    def _delete_symbols_and_embeddings_for_doc(self, doc_id: int) -> None:
-        """Delete symbols and embeddings for a document id."""
+    def _delete_symbols_and_embeddings_for_doc(
+        self,
+        doc_id: int,
+        repo_id: int | None = None,
+        rel_path: str | None = None,
+    ) -> None:
+        """Delete symbols and embeddings for a document id.
+
+        When LanceDB is enabled, this also deletes vector rows keyed by doc_id
+        and (repo_id, file_path) to ensure stale chunks are removed even if
+        doc_id reuse or path changes occur.
+        """
         self.repos_db.execute("DELETE FROM symbols WHERE doc_id = ?", (doc_id,))
         try:
             self.repos_db.execute("DELETE FROM embeddings WHERE doc_id = ?", (doc_id,))
@@ -983,10 +975,21 @@ class SigilIndex:
             logger.debug("No embeddings table found when deleting doc %s", doc_id)
 
         if self.vectors is not None:
-            try:
-                self.vectors.delete(f"doc_id == '{doc_id}'")
-            except Exception:
-                logger.exception("Failed to delete vector rows for doc %s", doc_id)
+            delete_clauses = [f"doc_id == '{doc_id}'"]
+            if repo_id is not None and rel_path is not None:
+                delete_clauses.append(
+                    f"repo_id == '{repo_id}' AND file_path == '{rel_path}'"
+                )
+
+            for clause in delete_clauses:
+                try:
+                    self.vectors.delete(clause)
+                except Exception:
+                    logger.exception(
+                        "Failed to delete vector rows for doc %s using clause %s",
+                        doc_id,
+                        clause,
+                    )
 
     def _remove_trigrams_for_doc_fast(self, doc_id: int, trigrams: Set[str]) -> None:
         """Fast path for removing doc_id from a list of trigrams."""
@@ -1446,8 +1449,10 @@ class SigilIndex:
                 else:
                     trigrams = None
 
-                # Delete symbols and embeddings for this doc
-                self._delete_symbols_and_embeddings_for_doc(doc_id)
+                # Delete symbols and embeddings for this doc and clear vectors
+                self._delete_symbols_and_embeddings_for_doc(
+                    doc_id, repo_id, rel_path
+                )
 
                 # Update trigram index to drop this doc_id
                 if trigrams is not None:
