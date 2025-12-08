@@ -391,7 +391,7 @@ server {
 
 ## Admin API
 
-The Admin API provides HTTP endpoints for operational management of the Sigil MCP Server. **It's integrated into the main MCP server process** (port 8000) and accessible at `/admin/*` endpoints. A React-based Admin UI is available on port 5173.
+The Admin API provides HTTP endpoints for operational management of the Sigil MCP Server. **It's integrated into the main MCP server process** (port 8000) and accessible at `/admin/*` endpoints. A React-based Admin UI is available on port 5173 for day-to-day use. Always start/stop the UI together with the MCP server so `/admin/*` calls terminate on the same host – the UI simply proxies API requests, so if you expose the server publicly ensure both ports are protected by the same OAuth/API-key rules.
 
 ### Starting the Admin API & UI
 
@@ -1756,6 +1756,24 @@ python -m sigil_mcp.server
 sqlite3 ~/.sigil_index/repos.db \
   "SELECT COUNT(*) FROM documents"
 ```
+
+### Verifying the Admin UI Test Suite
+
+When preparing a release or validating frontend changes, run the Admin UI regression suite to ensure coverage targets remain satisfied:
+
+```bash
+cd sigil-admin-ui
+npm install
+npm run test -- --coverage
+```
+
+Expectations:
+
+1. Overall Vitest coverage ≥70%.
+2. Critical flows (Status, Index, Vector, Logs, Config pages plus `src/utils/api.ts`) remain at 100% line coverage.
+3. Failing tests usually indicate a missing `data-testid`, window/clipboard access outside guards, or timers not cleaned up. Resolve before shipping.
+
+See [docs/adr-014-admin-ui-testing.md](adr-014-admin-ui-testing.md) for the testing strategy.
 
 ---
 

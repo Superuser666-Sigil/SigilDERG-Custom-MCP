@@ -2,6 +2,10 @@
 # Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
+# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+# Commercial licenses are available. Contact: davetmire85@gmail.com
+
 """
 Configuration loader for Sigil MCP Server.
 
@@ -15,6 +19,13 @@ from typing import Dict, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_csv_list(raw_value: Optional[str]) -> list[str]:
+    """Parse comma-separated environment variable values into a list."""
+    if not raw_value:
+        return []
+    return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
 class Config:
@@ -120,11 +131,10 @@ class Config:
                 "allow_local_bypass": (
                     os.getenv("SIGIL_MCP_ALLOW_LOCAL_BYPASS", "true").lower() == "true"
                 ),
-                "allowed_ips": (
-                    os.getenv("SIGIL_MCP_ALLOWED_IPS", "").split(",")
-                    if os.getenv("SIGIL_MCP_ALLOWED_IPS")
-                    else []
-                )
+                "allowed_ips": _parse_csv_list(os.getenv("SIGIL_MCP_ALLOWED_IPS")),
+                "redirect_allow_list": _parse_csv_list(
+                    os.getenv("SIGIL_MCP_OAUTH_REDIRECT_ALLOW_LIST")
+                ),
             },
             "watch": {
                 "enabled": os.getenv("SIGIL_MCP_WATCH_ENABLED", "true").lower() == "true",
@@ -145,15 +155,21 @@ class Config:
             "index": {
                 "path": os.getenv("SIGIL_INDEX_PATH", "~/.sigil_index")
             },
-            "admin": {
-                "enabled": os.getenv("SIGIL_MCP_ADMIN_ENABLED", "true").lower() == "true",
-                "host": os.getenv("SIGIL_MCP_ADMIN_HOST", "127.0.0.1"),
-                "port": int(os.getenv("SIGIL_MCP_ADMIN_PORT", "8765")),
-                "api_key": os.getenv("SIGIL_MCP_ADMIN_API_KEY") or None,
-                "allowed_ips": (
-                    os.getenv("SIGIL_MCP_ADMIN_ALLOWED_IPS", "127.0.0.1,::1").split(",")
-                )
-            }
+            "admin": self._load_admin_from_env(),
+        }
+
+    def _load_admin_from_env(self) -> Dict[str, Any]:
+        """Load admin config from environment variables."""
+        allowed_ips_raw = os.getenv("SIGIL_MCP_ADMIN_ALLOWED_IPS", "127.0.0.1,::1")
+        return {
+            "enabled": os.getenv("SIGIL_MCP_ADMIN_ENABLED", "true").lower() == "true",
+            "host": os.getenv("SIGIL_MCP_ADMIN_HOST", "127.0.0.1"),
+            "port": int(os.getenv("SIGIL_MCP_ADMIN_PORT", "8765")),
+            "api_key": os.getenv("SIGIL_MCP_ADMIN_API_KEY") or None,
+            "require_api_key": (
+                os.getenv("SIGIL_MCP_ADMIN_REQUIRE_API_KEY", "true").lower() == "true"
+            ),
+            "allowed_ips": _parse_csv_list(allowed_ips_raw),
         }
     
     def _parse_repo_map(self, repo_map_str: str) -> Dict[str, str]:
@@ -229,6 +245,21 @@ class Config:
     @property
     def allowed_ips(self) -> list:
         return self.get("authentication.allowed_ips", [])
+    
+    @property
+    def oauth_redirect_allow_list(self) -> list[str]:
+        default_allow_list = [
+            "https://chat.openai.com",
+            "https://chatgpt.com",
+            "https://chat.openai.com/aip/oauth/callback",
+            "https://chatgpt.com/aip/oauth/callback",
+        ]
+        value = self.get("authentication.redirect_allow_list")
+        if not value:
+            return default_allow_list
+        if isinstance(value, str):
+            value = [value]
+        return [str(item).strip() for item in value if str(item).strip()]
     
     @property
     def watch_enabled(self) -> bool:
@@ -384,10 +415,11 @@ class Config:
 
     @property
     def admin_allowed_ips(self) -> list[str]:
-        value = self.get("admin.allowed_ips")
-        if not value:
-            return ["127.0.0.1", "::1"]
-        return value
+        return self.get("admin.allowed_ips", ["127.0.0.1", "::1"])
+
+    @property
+    def admin_require_api_key(self) -> bool:
+        return self.get("admin.require_api_key", True)
 
 
 # Global config instance

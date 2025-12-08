@@ -1,5 +1,10 @@
+// Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+// Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+// Commercial licenses are available. Contact: davetmire85@gmail.com
+
 import { useEffect, useState, useRef } from 'react'
-import { getLogsTail, type LogsResponse, type ErrorResponse } from '@/utils/api'
+import { getLogsTail } from '@/utils/api'
+import type { LogsResponse, ErrorResponse } from '@/types/api'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,7 +19,7 @@ export function LogsPage() {
   const [error, setError] = useState<ErrorResponse | null>(null)
   const [lineCount, setLineCount] = useState(200)
   const [autoRefresh, setAutoRefresh] = useState(false)
-  const [refreshInterval, setRefreshInterval] = useState<NodeJS.Timeout | null>(null)
+  const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
 
   const fetchLogs = async () => {
@@ -23,10 +28,9 @@ export function LogsPage() {
       setError(null)
       const data = await getLogsTail(lineCount)
       setLogs(data)
-      // Auto-scroll to bottom
-      setTimeout(() => {
+      if (typeof window !== 'undefined') {
         logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-      }, 100)
+      }
     } catch (err) {
       setError(err as ErrorResponse)
     } finally {
@@ -41,15 +45,16 @@ export function LogsPage() {
   useEffect(() => {
     if (autoRefresh) {
       const interval = setInterval(fetchLogs, 3000) // Refresh every 3 seconds
-      setRefreshInterval(interval)
+      refreshIntervalRef.current = interval
       return () => {
-        if (interval) clearInterval(interval)
+        clearInterval(interval)
+        refreshIntervalRef.current = null
       }
-    } else {
-      if (refreshInterval) {
-        clearInterval(refreshInterval)
-        setRefreshInterval(null)
-      }
+    }
+
+    if (refreshIntervalRef.current) {
+      clearInterval(refreshIntervalRef.current)
+      refreshIntervalRef.current = null
     }
   }, [autoRefresh])
 
@@ -73,7 +78,7 @@ export function LogsPage() {
             <Input
               type="number"
               value={lineCount}
-              onChange={(e) => setLineCount(Math.max(1, Math.min(2000, parseInt(e.target.value) || 200)))}
+              onChange={(e) => setLineCount(Math.max(1, Math.min(2000, parseInt(e.target.value, 10) || 200)))}
               className="w-24"
               min={1}
               max={2000}
@@ -122,7 +127,7 @@ export function LogsPage() {
           <CardContent>
             <div className="bg-muted rounded-md p-4 max-h-[600px] overflow-auto font-mono text-sm">
               {logs.lines.length > 0 ? (
-                logs.lines.map((line, index) => (
+                logs.lines.map((line: string, index: number) => (
                   <div key={index} className="whitespace-pre-wrap break-words">
                     {line}
                   </div>

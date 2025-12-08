@@ -67,3 +67,7 @@ ngrok
 *.temp
 .cache/
 .venv/
+
+# Admin UI tracked lib utilities
+!/sigil-admin-ui/src/lib/
+!/sigil-admin-ui/src/lib/**

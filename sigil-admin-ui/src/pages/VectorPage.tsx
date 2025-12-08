@@ -1,6 +1,11 @@
+// Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+// Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+// Commercial licenses are available. Contact: davetmire85@gmail.com
+
 import { useEffect, useState } from 'react'
-import { rebuildVector, type ErrorResponse, type RebuildResponse } from '@/utils/api'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { rebuildVector, getStatus } from '@/utils/api'
+import type { ErrorResponse, RebuildResponse, AdminStatusResponse } from '@/types/api'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
@@ -8,10 +13,9 @@ import { ErrorAlert } from '@/components/ErrorAlert'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { RefreshCw, Sparkles } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import { getStatus } from '@/utils/api'
 
 export function VectorPage() {
-  const [status, setStatus] = useState<any>(null)
+  const [status, setStatus] = useState<AdminStatusResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<ErrorResponse | null>(null)
   const [selectedRepo, setSelectedRepo] = useState<string>('')
@@ -168,7 +172,7 @@ export function VectorPage() {
             }}>
               Close
             </Button>
-            <Button onClick={handleRebuild} disabled={rebuilding}>
+            <Button data-testid="confirm-vector-rebuild" onClick={handleRebuild} disabled={rebuilding}>
               {rebuilding ? (
                 <>
                   <RefreshCw className="h-4 w-4 mr-2 animate-spin" />

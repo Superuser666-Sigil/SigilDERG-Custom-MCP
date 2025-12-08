@@ -1,5 +1,10 @@
+// Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+// Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+// Commercial licenses are available. Contact: davetmire85@gmail.com
+
 import { useEffect, useState } from 'react'
-import { getIndexStats, rebuildIndex, type IndexStatsResponse, type ErrorResponse, type RebuildResponse } from '@/utils/api'
+import { getIndexStats, rebuildIndex } from '@/utils/api'
+import type { IndexStatsResponse, ErrorResponse, RebuildResponse } from '@/types/api'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
@@ -193,7 +198,7 @@ export function IndexPage() {
             <Button variant="outline" onClick={() => setRebuildDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleRebuild} disabled={rebuilding}>
+            <Button data-testid="confirm-index-rebuild" onClick={handleRebuild} disabled={rebuilding}>
               {rebuilding ? (
                 <>
                   <RefreshCw className="h-4 w-4 mr-2 animate-spin" />

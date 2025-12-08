@@ -2,12 +2,17 @@
 # Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
+# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+# Commercial licenses are available. Contact: davetmire85@gmail.com
+
 import logging
+import secrets
 import time
 import uuid
 from pathlib import Path
 from typing import List, Dict, Optional, Union, Sequence
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 import numpy as np
 import os
 
@@ -407,6 +412,52 @@ def is_local_connection(client_ip: Optional[str] = None) -> bool:
     return client_ip in local_ips
 
 
+def _is_redirect_uri_allowed(
+    redirect_uri: str,
+    registered_redirects: Sequence[str],
+    allow_list: Sequence[str],
+) -> bool:
+    """Validate redirect URI against registered URIs and configured allow-list."""
+    if redirect_uri in registered_redirects:
+        return True
+
+    parsed = urlparse(redirect_uri)
+    if parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}:
+        return True
+
+    for allowed in allow_list:
+        if not allowed:
+            continue
+        if redirect_uri.startswith(allowed):
+            return True
+    return False
+
+
+def _extract_api_key_from_headers(
+    request_headers: Optional[Dict[str, str]],
+) -> Optional[str]:
+    """Return API key from headers, handling common capitalizations."""
+    if not request_headers:
+        return None
+    return (
+        request_headers.get("x-api-key")
+        or request_headers.get("X-API-Key")
+        or request_headers.get("X-Api-Key")
+    )
+
+
+def _api_key_is_valid(provided_key: str) -> bool:
+    """Validate provided API key against env override or stored hash."""
+    env_key = get_api_key_from_env()
+    if env_key:
+        try:
+            if secrets.compare_digest(env_key, provided_key):
+                return True
+        except Exception:
+            logger.exception("Failed to compare env API key value securely")
+    return verify_api_key(provided_key)
+
+
 def check_authentication(
     request_headers: Optional[Dict[str, str]] = None,
     client_ip: Optional[str] = None
@@ -444,20 +495,10 @@ def check_authentication(
                     logger.debug("OAuth token valid")
                     return True
     
-    # Fall back to API key authentication
-    env_key = get_api_key_from_env()
-    if env_key and verify_api_key(env_key):
+    api_key = _extract_api_key_from_headers(request_headers)
+    if api_key and _api_key_is_valid(api_key):
         return True
-    
-    if request_headers:
-        api_key = (
-            request_headers.get("x-api-key") or
-            request_headers.get("X-API-Key")
-        )
-        
-        if api_key and verify_api_key(api_key):
-            return True
-    
+
     logger.warning("Authentication failed - no valid credentials provided")
     return False
 
@@ -1152,11 +1193,14 @@ async def oauth_authorize_http(
             "error_description": "OAuth client not configured"
         }, status_code=500)
     
-    # Allow any HTTPS redirect URI or registered URIs for flexibility with ChatGPT
-    if not (redirect_uri in client.redirect_uris or redirect_uri.startswith("https://")):
+    if not _is_redirect_uri_allowed(
+        redirect_uri,
+        client.redirect_uris,
+        config.oauth_redirect_allow_list,
+    ):
         return JSONResponse({
             "error": "invalid_request",
-            "error_description": "Redirect URI must be HTTPS or registered"
+            "error_description": "Redirect URI must be registered or in allow list"
         }, status_code=400)
     
     # Check if this is a consent approval (POST with approve=true)
@@ -1528,10 +1572,15 @@ def oauth_authorize(
     
     # Verify redirect_uri
     client = oauth_manager.get_client()
-    if not client or redirect_uri not in client.redirect_uris:
+    allowed_redirects = config.oauth_redirect_allow_list
+    if not client or not _is_redirect_uri_allowed(
+        redirect_uri or "",
+        client.redirect_uris,
+        allowed_redirects,
+    ):
         return {
             "error": "invalid_request",
-            "error_description": "Redirect URI not registered for this client"
+            "error_description": "Redirect URI not registered or allowed for this client"
         }
     
     # Auto-approve (for trusted clients)

@@ -1,3 +1,9 @@
+<!--
+Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+Commercial licenses are available. Contact: davetmire85@gmail.com
+-->
+
 # Sigil MCP Admin UI
 
 A modern React-based admin interface for managing the Sigil MCP Server.
@@ -45,9 +51,34 @@ The built files will be in the `dist/` directory.
 The Admin UI connects to the Admin API at `http://127.0.0.1:8765` by default. This is configured in `src/utils/api.ts`.
 
 If your Admin API requires an API key, you can set it in the browser's localStorage:
+
 ```javascript
 localStorage.setItem('admin_api_key', 'your-api-key')
 ```
+
+Set a custom Admin API base URL through Vite env variables:
+
+```bash
+# .env.local
+VITE_ADMIN_API_BASE_URL=https://sigil.example.com/admin
+```
+
+During development, the Vite dev server proxies `/admin/*` calls to `http://127.0.0.1:8000` (the MCP server). For standalone deployments, build the UI and serve it behind the same hostname as the MCP server or configure a reverse proxy to rewrite `/admin` requests.
+
+## Testing & Coverage
+
+The Admin UI ships with Vitest + Testing Library suites that exercise all critical flows (Status, Index, Vector, Logs, Config pages; API utilities; shared dialogs). To keep the UI reliable alongside the server:
+
+1. Install deps and run the suite:
+   ```bash
+   npm install
+   npm run test -- --coverage
+   ```
+2. Maintain overall coverage ≥70%.
+3. Keep the critical flows (Status/Index/Vector/Logs/Config pages and `src/utils/api.ts`) at 100% line coverage.
+4. When adding timers or async UI, prefer deterministic patterns (e.g., storing interval IDs, guarding browser-only APIs) so tests stay stable without fake timers.
+
+See [../docs/adr-014-admin-ui-testing.md](../docs/adr-014-admin-ui-testing.md) for the rationale behind these guardrails.
 
 ## Tech Stack
 

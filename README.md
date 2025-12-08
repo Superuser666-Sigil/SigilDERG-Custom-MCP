@@ -13,7 +13,7 @@ A Model Context Protocol (MCP) server that provides IDE-like code navigation and
 **Hybrid Code Search**
 - Fast text search using trigram indexing (inspired by GitHub's Blackbird)
 - Symbol-based search for functions, classes, methods, and variables
-- Semantic code search with vector embeddings (optional)
+- Semantic code search with vector embeddings backed by LanceDB (ANN queries, per-repo vector stores)
 - File structure view showing code outlines
 - Automatic index updates with file watching (optional)
 
@@ -291,7 +291,17 @@ npm run dev
 
 Then open `http://localhost:5173` in your browser.
 
-See [docs/RUNBOOK.md](docs/RUNBOOK.md#admin-api) for complete Admin API documentation.
+See [docs/RUNBOOK.md](docs/RUNBOOK.md#admin-api) for complete Admin API documentation, including backup/migration guidance for the LanceDB vector store.
+
+### Admin UI Testing & Coverage
+
+The React Admin UI ships with a Vitest + Testing Library suite that exercises the Status, Index, Vector, Logs, and Config flows end-to-end (dialog interactions, auto-refresh timers, clipboard handling, error states, etc.). Before merging UI changes:
+
+- Run `npm run test -- --coverage` inside `sigil-admin-ui`.
+- Keep overall coverage ≥70% and critical pages/components (Status/Index/Vector/Logs/Config plus shared API utilities) at 100% line coverage.
+- When adding components, include deterministic timers (use `setInterval` guards) and `data-testid` hooks where necessary to avoid brittle queries.
+
+Refer to [docs/adr-014-admin-ui-testing.md](docs/adr-014-admin-ui-testing.md) for the rationale and guardrails.
 
 ## Usage Examples
 
@@ -330,11 +340,14 @@ ChatGPT: Found 5 relevant code sections (semantic search):
 **Storage**
 ```
 ~/.sigil_index/
-├── repos.db       # SQLite: repos, documents, symbols, embeddings
+├── repos.db       # SQLite: repos, documents, symbols
 ├── trigrams.db    # SQLite: trigram inverted index
+├── lancedb/       # LanceDB vector store (per-repo code_vectors tables + PQ indexes)
 └── blobs/         # Compressed content
 ``` blobs/         # Compressed content
 ```
+
+> 📦 **Backups:** Include the `lancedb/` directory when snapshotting your index path. The SQLite databases no longer contain embeddings after the LanceDB migration described in [ADR-013](docs/adr-013-lancedb-vector-store.md).
 
 **Performance**
 

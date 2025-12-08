@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+# Commercial licenses are available. Contact: davetmire85@gmail.com
+
 from __future__ import annotations
 
 import asyncio
@@ -36,6 +40,7 @@ def _get_admin_cfg() -> Dict[str, Any]:
         "host": _config.admin_host,
         "port": _config.admin_port,
         "api_key": _config.admin_api_key,
+        "require_api_key": _config.admin_require_api_key,
         "allowed_ips": _config.admin_allowed_ips,
     }
 
@@ -70,14 +75,31 @@ async def require_admin(request: Request) -> Optional[JSONResponse]:
             status_code=403,
         )
 
-    api_key = cfg["api_key"]
-    if api_key:
-        header_key = (
-            request.headers.get("x-admin-key")
-            or request.headers.get("X-Admin-Key")
-        )
+    api_key = cfg.get("api_key")
+    require_api_key = cfg.get("require_api_key", True)
+    header_key = (
+        request.headers.get("x-admin-key")
+        or request.headers.get("X-Admin-Key")
+    )
+
+    if require_api_key:
+        if not api_key:
+            logger.error(
+                "Admin API misconfigured: require_api_key=true but no api_key set"
+            )
+            return JSONResponse(
+                {
+                    "error": "configuration_error",
+                    "reason": "admin_api_key_missing",
+                },
+                status_code=503,
+            )
         if header_key != api_key:
-            logger.warning("Admin access denied due to invalid API key")
+            logger.warning("Admin access denied due to missing/invalid API key")
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+    else:
+        if api_key and header_key and header_key != api_key:
+            logger.warning("Admin access denied due to invalid optional API key")
             return JSONResponse({"error": "unauthorized"}, status_code=401)
 
     return None

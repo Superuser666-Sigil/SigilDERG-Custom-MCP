@@ -18,11 +18,28 @@
             "mcp.yourdomain.com"
         ]
     },
+    "admin": {
+        "enabled": true,
+        "host": "127.0.0.1",
+        "port": 8765,
+        "require_api_key": true,
+        "api_key": null,
+        "allowed_ips": [
+            "127.0.0.1",
+            "::1"
+        ]
+    },
     "authentication": {
         "enabled": true,
         "oauth_enabled": true,
         "allow_local_bypass": true,
-        "allowed_ips": []
+        "allowed_ips": [],
+        "redirect_allow_list": [
+            "https://chat.openai.com",
+            "https://chatgpt.com",
+            "https://chat.openai.com/aip/oauth/callback",
+            "https://chatgpt.com/aip/oauth/callback"
+        ]
     },
     "watch": {
         "_comment": "File watching for automatic index updates (requires watchdog)",

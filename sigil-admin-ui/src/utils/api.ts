@@ -1,3 +1,7 @@
+// Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+// Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+// Commercial licenses are available. Contact: davetmire85@gmail.com
+
 import axios, { AxiosError } from 'axios'
 import type {
   AdminStatusResponse,
@@ -23,7 +27,7 @@ const getApiKey = (): string | null => {
 }
 
 // Create axios instance with default config
-const apiClient = axios.create({
+export const apiClient = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
