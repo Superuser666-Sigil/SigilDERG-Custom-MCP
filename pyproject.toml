@@ -4,7 +4,7 @@
 
 [project]
 name = "sigil-mcp-server"
-version = "0.5.0"
+version = "0.6.0"
 description = "Model Context Protocol server for IDE-like code navigation and semantic search"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -86,6 +86,7 @@ Issues = "https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP/issues"
 [project.scripts]
 sigil-mcp = "sigil_mcp.server:main"
 sigil-manage-auth = "sigil_mcp.manage_auth:main"
+sigil-rebuild-indexes = "sigil_mcp.scripts.rebuild_indexes:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sigil_mcp"]

@@ -349,7 +349,6 @@ class TestFileWatchingIntegrationWithIndexing:
     ):
         """Deleting a file via watcher should remove it from the index."""
         from sigil_mcp.watcher import FileWatchManager
-        from sigil_mcp.server import _on_file_change
         import time
 
         index = indexed_repo["index"]
@@ -366,16 +365,14 @@ class TestFileWatchingIntegrationWithIndexing:
         results = index.search_code(unique_marker, repo=repo_name)
         assert any(r.path.endswith("main.py") for r in results)
 
-        # Inject fixture index into server globals so _on_file_change uses it
-        import sigil_mcp.server as _server
-        # Save previous state so we can restore it after the test
-        prev_index = getattr(_server, "_INDEX", None)
-        prev_repos = dict(getattr(_server, "REPOS", {}))
-        _server._INDEX = index
-        _server.REPOS[repo_name] = test_repo_path
+        # Wire watcher to a local on_change that uses the fixture index directly
+        def on_change(repo_name_arg, file_path_arg, event_type_arg):
+            if event_type_arg == "deleted":
+                index.remove_file(repo_name_arg, test_repo_path, file_path_arg)
+            else:
+                index.index_file(repo_name_arg, test_repo_path, file_path_arg)
 
-        # Set up watcher wired to real _on_file_change
-        manager = FileWatchManager(on_change=_on_file_change)
+        manager = FileWatchManager(on_change=on_change)
         manager.start()
 
         try:
@@ -395,10 +392,6 @@ class TestFileWatchingIntegrationWithIndexing:
             assert all(not r.path.endswith("main.py") for r in results_after)
         finally:
             manager.stop()
-            # Restore server globals regardless of test outcome
-            _server._INDEX = prev_index
-            _server.REPOS.clear()
-            _server.REPOS.update(prev_repos)
     
     def test_granular_reindex_faster_than_full(
         self, watchdog_available, indexed_repo, test_repo_path

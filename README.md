@@ -71,6 +71,9 @@ pip install -e .[embeddings-llamacpp-metal]    # Apple Silicon (Metal)
 pip install -e .[embeddings-all]
 ```
 
+Default embedding runtime: `llamacpp` with Jina v2 code embeddings (768-dim) at `/home/dave/models/jina/jina-embeddings-v2-base-code-Q4_K_M.gguf`.
+Ensure the model file exists, or override `embeddings.provider`/`embeddings.model` in `config.json` if you prefer a different backend.
+
 Install Universal Ctags for symbol extraction (optional but recommended):
 
 **macOS:** `brew install universal-ctags`

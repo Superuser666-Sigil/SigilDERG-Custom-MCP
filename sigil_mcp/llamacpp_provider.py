@@ -18,8 +18,8 @@ try:
     from llama_cpp import Llama
     LLAMACPP_AVAILABLE = True
 except ImportError:
-    LLAMACPP_AVAILABLE = False
     Llama = None  # type: ignore
+    LLAMACPP_AVAILABLE = False
 
 
 class LlamaCppEmbeddingProvider:
@@ -50,7 +50,7 @@ class LlamaCppEmbeddingProvider:
             embedding: Enable embedding mode
             **kwargs: Additional arguments passed to Llama constructor
         """
-        if not LLAMACPP_AVAILABLE:
+        if not LLAMACPP_AVAILABLE and Llama is None:
             raise ImportError(
                 "llama-cpp-python is required for LlamaCppEmbeddingProvider. "
                 "Install it with: pip install llama-cpp-python"

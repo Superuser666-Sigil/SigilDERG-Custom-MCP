@@ -6,9 +6,9 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 # Sigil MCP Server Operations Runbook
 
-**Version:** 1.2  
-**Last Updated:** 2025-12-04  
-**Recommended Server Version:** v0.4.0 or later
+**Version:** 1.3  
+**Last Updated:** 2025-12-09  
+**Recommended Server Version:** v0.6.0 or later
 
 This runbook provides operational procedures for running, troubleshooting, and maintaining the Sigil MCP Server in production and development environments.
 
@@ -709,6 +709,7 @@ This script:
 
 - Deletes the entire index directory (default `~/.sigil_index`, or `index.path` from `config.json`)
 - Recreates the index (including `lancedb/` for embeddings)
+- Uses the default llama.cpp Jina model at `/home/dave/models/jina/jina-embeddings-v2-base-code-Q4_K_M.gguf` (768-dim) unless you override `embeddings.provider`/`embeddings.model`; ensure the file and llama.cpp runtime are available before running.
 - Rebuilds all repositories defined in your current configuration
 
 Use this when:

@@ -8,6 +8,10 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 This guide explains how to set up and use llama.cpp with Meta Llama 3.1 8B Instruct (or other models) for local embeddings in Sigil MCP Server.
 
+**Default (v0.6.0+):** Sigil ships with `llamacpp` as the default provider and expects the Jina code embeddings model at
+`/home/dave/models/jina/jina-embeddings-v2-base-code-Q4_K_M.gguf` (768-dim). If your environment differs, set
+`embeddings.provider`/`embeddings.model` in `config.json` to point to your GGUF.
+
 ## Why Llama.cpp?
 
 **Advantages:**

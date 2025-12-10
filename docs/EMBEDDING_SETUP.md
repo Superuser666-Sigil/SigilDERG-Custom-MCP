@@ -15,6 +15,10 @@ All embeddings are stored in a **LanceDB vector store** under your index directo
 recommendation is a **768-dimension model** to balance recall and storage size; the examples below use that dimension unless
 otherwise noted.
 
+**Default** (v0.6.0+): `llamacpp` with Jina v2 code embeddings at
+`/home/dave/models/jina/jina-embeddings-v2-base-code-Q4_K_M.gguf` (768-dim). Override `embeddings.provider`/`embeddings.model` if your
+environment uses a different backend or model path.
+
 **Choose sentence-transformers if:**
 - [YES] You have an NVIDIA GPU
 - [YES] You want the simplest setup

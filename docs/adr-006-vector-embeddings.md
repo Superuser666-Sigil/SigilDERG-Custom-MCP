@@ -10,6 +10,8 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 Accepted
 
+> Note: Default provider/model selection is superseded by ADR-015 (llamacpp + Jina GGUF). This ADR still governs the embedding architecture and provider options.
+
 ## Context
 
 While trigram-based text search (ADR-002) and symbol search (ADR-003) work well for exact substring matching and navigating to definitions, they cannot handle semantic queries where users describe what code does rather than exact text to match:

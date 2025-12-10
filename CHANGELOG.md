@@ -13,8 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2025-12-09
+
 ### Added
-- Added `scripts/restart_servers.sh` - Main entrypoint script for starting/stopping all server processes
+- ADR-015 documenting the new default embedding backend (llama.cpp + Jina v2 GGUF) and operational requirements.
+- `scripts/restart_servers.sh` - Main entrypoint script for starting/stopping all server processes
   - Automatically stops any running MCP Server or Frontend processes
   - Starts MCP Server with `nohup` (port 8000, logs to `/tmp/sigil_server.log`)
   - Starts Admin UI frontend with `nohup` (port 5173, logs to `/tmp/frontend.log`)
@@ -23,8 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Use `./scripts/restart_servers.sh --stop` to stop all servers
 
 ### Changed
-- Embeddings now default to a LanceDB-backed vector store located at `index_dir/lancedb/` with a recommended 768-dimension model;
-  documentation includes rebuild steps and guidance for dropping the legacy SQLite `embeddings` table after migration.
+- Default embeddings now use llama.cpp with the Jina embeddings v2 base code GGUF at `/home/dave/models/jina/jina-embeddings-v2-base-code-Q4_K_M.gguf`
+  and a 768-dimension LanceDB schema; docs updated with setup and rebuild steps.
+- Embeddings remain LanceDB-backed at `index_dir/lancedb/`; legacy SQLite `embeddings` table remains removed.
 - **Admin API Integration**: Admin API now runs integrated into the main MCP server process (port 8000, `/admin/*` endpoints)
   - No longer requires separate service or port
   - Shares the same index instance (eliminates database lock conflicts)

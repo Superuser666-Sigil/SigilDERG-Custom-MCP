@@ -2,34 +2,32 @@
 # Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
-# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
-# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
-# Commercial licenses are available. Contact: davetmire85@gmail.com
-
 import logging
-import secrets
-import time
-import uuid
 from pathlib import Path
-from typing import List, Dict, Optional, Union, Sequence
-from urllib.parse import urlencode, urlparse
+from typing import Dict, List, Optional, Sequence, Union, cast
+from urllib.parse import urlencode
 import numpy as np
 import os
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
 from starlette.datastructures import UploadFile
 from starlette.applications import Starlette
 from starlette.routing import Mount
-from starlette.types import ASGIApp, Scope, Receive, Send
 from .indexer import SigilIndex
-from .auth import initialize_api_key, verify_api_key, get_api_key_from_env
+from .auth import initialize_api_key
 from .oauth import get_oauth_manager
 from .config import get_config
 from .watcher import FileWatchManager
-from .logging_setup import setup_logging, get_log_file_path
+from .app_factory import build_mcp_app
+from .security import (
+    AuthSettings,
+    check_authentication as _security_check_authentication,
+    check_ip_whitelist as _security_check_ip_whitelist,
+    is_local_connection as _security_is_local_connection,
+    is_redirect_uri_allowed as _security_is_redirect_uri_allowed,
+)
+from .middleware.header_logging import HeaderLoggingASGIMiddleware
 
 # Import Admin API app (conditional to avoid circular imports)
 _admin_app = None
@@ -42,151 +40,6 @@ def _get_admin_app():
         from .admin_api import app
         _admin_app = app
     return _admin_app
-
-
-# --------------------------------------------------------------------
-# Header Logging Middleware
-# --------------------------------------------------------------------
-
-SENSITIVE_HEADERS = {
-    "authorization",
-    "cookie",
-    "x-api-key",
-    "x-admin-key",
-    "x-openai-session",
-    "x-openai-session-token",
-}
-
-
-def _redact_headers(headers: Dict[str, str]) -> Dict[str, str]:
-    """Redact sensitive headers for logging."""
-    redacted: Dict[str, str] = {}
-    for k, v in headers.items():
-        lk = k.lower()
-        if lk in SENSITIVE_HEADERS:
-            redacted[k] = "<redacted>"
-        else:
-            redacted[k] = v
-    return redacted
-
-
-class HeaderLoggingASGIMiddleware:
-    """
-    ASGI middleware that logs incoming request headers and outgoing status codes.
-
-    This sits underneath FastMCP and sees everything:
-      - MCP streamable-http traffic
-      - /oauth/* endpoints
-      - /healthz
-      - Admin API endpoints (if mounted on FastMCP)
-      - anything else hitting the server.
-    """
-
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            # Let non-HTTP traffic pass through (websockets, etc.)
-            await self.app(scope, receive, send)
-            return
-
-        start_time = time.time()
-        request_id = str(uuid.uuid4())
-
-        # Extract headers into a dict[str, str]
-        headers_dict: Dict[str, str] = {}
-        for raw_name, raw_value in scope.get("headers", []):
-            name = raw_name.decode("latin-1")
-            value = raw_value.decode("latin-1")
-            headers_dict[name] = value
-
-        path = scope.get("path", "")
-        method = scope.get("method", "UNKNOWN")
-
-        # Client IP from X-Forwarded-For or client addr
-        client_ip = headers_dict.get("x-forwarded-for")
-        if client_ip:
-            # Use first hop if multiple are present
-            client_ip = client_ip.split(",")[0].strip()
-        else:
-            client = scope.get("client")
-            if client and isinstance(client, (tuple, list)) and len(client) >= 1:
-                client_ip = client[0]
-            else:
-                client_ip = None
-
-        # Extract cf-ray for Cloudflare correlation
-        cf_ray = headers_dict.get("cf-ray")
-
-        safe_headers = _redact_headers(headers_dict)
-
-        logger.info(
-            "Incoming MCP HTTP request",
-            extra={
-                "request_id": request_id,
-                "method": method,
-                "path": path,
-                "client_ip": client_ip,
-                "cf_ray": cf_ray,
-                "headers": safe_headers,
-            },
-        )
-
-        status_code_holder = {"value": None}
-        response_body_parts = []
-
-        async def send_wrapper(message):
-            if message["type"] == "http.response.start":
-                status_code_holder["value"] = message.get("status", None)
-                # Add headers to prevent Cloudflare/Nginx buffering
-                # This is critical for preventing 502 Bad Gateway errors
-                headers = list(message.get("headers", []))
-                headers.append((b"x-accel-buffering", b"no"))
-                headers.append((b"cache-control", b"no-cache, no-store, must-revalidate"))
-                headers.append((b"connection", b"keep-alive"))
-                message["headers"] = headers
-            elif message["type"] == "http.response.body":
-                # Capture response body for logging
-                body = message.get("body", b"")
-                if body:
-                    response_body_parts.append(body)
-            await send(message)
-
-        try:
-            await self.app(scope, receive, send_wrapper)
-        except Exception:
-            duration_ms = int((time.time() - start_time) * 1000)
-            logger.exception(
-                "Error handling MCP request",
-                extra={
-                    "request_id": request_id,
-                    "duration_ms": duration_ms,
-                    "path": path,
-                    "method": method,
-                },
-            )
-            raise
-
-        duration_ms = int((time.time() - start_time) * 1000)
-        
-        # Log response body for MCP requests (but limit size to avoid log spam)
-        response_body = b"".join(response_body_parts).decode("utf-8", errors="replace")
-        if response_body and len(response_body) > 500:
-            response_body = response_body[:500] + "... [truncated]"
-        
-        # Only log body for MCP protocol requests (path == "/")
-        log_extra = {
-            "request_id": request_id,
-            "status_code": status_code_holder["value"],
-            "duration_ms": duration_ms,
-            "path": path,
-            "method": method,
-        }
-        if path == "/" and response_body:
-            log_extra["response_body"] = response_body
-        
-        logger.info("Outgoing MCP HTTP response", extra=log_extra)
 
 
 # --------------------------------------------------------------------
@@ -218,24 +71,8 @@ def get_form_value(value: Union[str, UploadFile, None]) -> Optional[str]:
 
 config = get_config()
 
-# --------------------------------------------------------------------
-# Logging
-# --------------------------------------------------------------------
-
-# Set up logging with file and console output
-log_file_path = get_log_file_path(config.log_file)
-setup_logging(
-    log_file=str(log_file_path) if log_file_path else None,
-    log_level=config.log_level,
-    console_output=True,  # Always log to console for development
-)
-
 logger = logging.getLogger("sigil_repos_mcp")
-
-if log_file_path:
-    logger.info(f"Logging to file: {log_file_path}")
-else:
-    logger.info("Logging to console only (no log file configured)")
+mcp = build_mcp_app(config)
 
 # --------------------------------------------------------------------
 # Security Configuration
@@ -251,75 +88,6 @@ ALLOWED_IPS = config.allowed_ips
 # MCP server
 # --------------------------------------------------------------------
 
-
-class ChatGPTComplianceMiddleware:
-    """
-    Normalizes ChatGPT's non-compliant requests to standard JSON-RPC.
-    Handles: Content-Type: application/octet-stream -> application/json
-    """
-
-    def __init__(self, app: ASGIApp):
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send):
-        if scope["type"] == "http" and scope["method"] == "POST":
-            headers = dict(scope.get("headers", []))
-
-            # Fix ChatGPT sending binary content-type for JSON
-            ct = headers.get(b"content-type", b"")
-            if b"application/octet-stream" in ct:
-                # Rewrite header to application/json so FastMCP accepts it
-                new_headers = [
-                    (k, v)
-                    if k.lower() != b"content-type"
-                    else (b"content-type", b"application/json")
-                    for k, v in scope["headers"]
-                ]
-                scope["headers"] = new_headers
-
-        await self.app(scope, receive, send)
-
-
-def _wrap_mcp_app_for_chatgpt(mcp_server: FastMCP) -> None:
-    """Ensure the MCP ASGI app is wrapped with ChatGPT compliance middleware."""
-
-    underlying_app = getattr(mcp_server, "app", None)
-    if underlying_app is not None and not isinstance(
-        underlying_app, ChatGPTComplianceMiddleware
-    ):
-        mcp_server.app = ChatGPTComplianceMiddleware(underlying_app)  # type: ignore[attr-defined]
-        return
-
-    underlying_asgi_app = getattr(mcp_server, "asgi_app", None)
-    if underlying_asgi_app is not None and not isinstance(
-        underlying_asgi_app, ChatGPTComplianceMiddleware
-    ):
-        # asgi_app isn't part of FastMCP's type hints, so set dynamically
-        setattr(
-            mcp_server,
-            "asgi_app",
-            ChatGPTComplianceMiddleware(underlying_asgi_app),
-        )
-
-
-# Disable ALL transport security for ChatGPT compatibility
-# ChatGPT's MCP connector sends:
-# 1. Content-Type: application/octet-stream (invalid, should be application/json)
-# 2. Host headers that don't match localhost (ngrok domains)
-# We must explicitly disable DNS rebinding protection to accept these requests
-transport_security = TransportSecuritySettings(
-    enable_dns_rebinding_protection=False
-)
-
-mcp = FastMCP(
-    name=config.server_name,
-    json_response=True,
-    streamable_http_path="/",
-    transport_security=transport_security
-)
-
-# Wrap the internal Starlette app to normalize ChatGPT requests
-_wrap_mcp_app_for_chatgpt(mcp)
 # Helper: safe decorator wrapper for attaching metadata to MCP tools.
 
 # We try to call `mcp.tool` with the provided kwargs; if the installed
@@ -361,101 +129,34 @@ def _safe_tool_decorator(**meta_kwargs):
     return _decorator
 
 
-# Install ASGI middleware for header logging if we can access the underlying app
-# NOTE: When admin_enabled=True, we'll apply middleware to the parent app instead
-# to avoid double-wrapping issues. This middleware is only applied when running
-# FastMCP standalone (admin_enabled=False).
-try:
-    # Only apply middleware if admin is disabled (we'll apply it to parent app if enabled)
-    if not config.admin_enabled:
-        underlying_app = getattr(mcp, "app", None) or getattr(mcp, "asgi_app", None)
-        if underlying_app is not None:
-            wrapped_app = HeaderLoggingASGIMiddleware(underlying_app)
-            # Replace the app on the MCP server so run() uses the wrapped version
-            if hasattr(mcp, "app"):
-                mcp.app = wrapped_app  # type: ignore[attr-defined]
-            elif hasattr(mcp, "asgi_app"):
-                mcp.asgi_app = wrapped_app  # type: ignore[attr-defined]
-            logger.info("HeaderLoggingASGIMiddleware installed on FastMCP app")
-        else:
-            logger.warning(
-                "Could not locate underlying ASGI app on FastMCP; "
-                "header logging middleware not installed. "
-                "Check FastMCP API for correct attribute name."
-            )
-    else:
-        logger.info(
-            "Admin API enabled - header logging middleware will be applied to parent app"
-        )
-except Exception as exc:
-    logger.exception("Failed to install HeaderLoggingASGIMiddleware: %s", exc)
-
-
 # --------------------------------------------------------------------
 # Authentication Middleware
 # --------------------------------------------------------------------
 
-def is_local_connection(client_ip: Optional[str] = None) -> bool:
+def _get_auth_settings_override() -> AuthSettings:
     """
-    Check if connection is from localhost.
-    
-    Args:
-        client_ip: Client IP address
-    
-    Returns:
-        True if localhost, False otherwise
+    Construct an AuthSettings object from the server-level configuration flags.
+
+    Tests often monkeypatch AUTH_ENABLED/OAUTH_ENABLED/etc., so we read the globals
+    each time rather than caching the object.
     """
-    if not client_ip:
-        return False
-    
-    local_ips = {"127.0.0.1", "::1", "localhost"}
-    return client_ip in local_ips
 
-
-def _is_redirect_uri_allowed(
-    redirect_uri: str,
-    registered_redirects: Sequence[str],
-    allow_list: Sequence[str],
-) -> bool:
-    """Validate redirect URI against registered URIs and configured allow-list."""
-    if redirect_uri in registered_redirects:
-        return True
-
-    parsed = urlparse(redirect_uri)
-    if parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}:
-        return True
-
-    for allowed in allow_list:
-        if not allowed:
-            continue
-        if redirect_uri.startswith(allowed):
-            return True
-    return False
-
-
-def _extract_api_key_from_headers(
-    request_headers: Optional[Dict[str, str]],
-) -> Optional[str]:
-    """Return API key from headers, handling common capitalizations."""
-    if not request_headers:
-        return None
-    return (
-        request_headers.get("x-api-key")
-        or request_headers.get("X-API-Key")
-        or request_headers.get("X-Api-Key")
+    allowed_ips: Sequence[str] = tuple(ALLOWED_IPS or [])
+    return AuthSettings(
+        auth_enabled=AUTH_ENABLED,
+        oauth_enabled=OAUTH_ENABLED,
+        allow_local_bypass=ALLOW_LOCAL_BYPASS,
+        allowed_ips=allowed_ips,
     )
 
 
-def _api_key_is_valid(provided_key: str) -> bool:
-    """Validate provided API key against env override or stored hash."""
-    env_key = get_api_key_from_env()
-    if env_key:
-        try:
-            if secrets.compare_digest(env_key, provided_key):
-                return True
-        except Exception:
-            logger.exception("Failed to compare env API key value securely")
-    return verify_api_key(provided_key)
+def is_local_connection(client_ip: Optional[str] = None) -> bool:
+    """Compatibility wrapper around sigil_mcp.security.is_local_connection."""
+
+    return _security_is_local_connection(client_ip)
+
+
+
 
 
 def check_authentication(
@@ -472,35 +173,12 @@ def check_authentication(
     Returns:
         True if authenticated or auth disabled, False otherwise
     """
-    # Allow local connections without auth if enabled
-    if ALLOW_LOCAL_BYPASS and is_local_connection(client_ip):
-        logger.debug("Local connection - bypassing authentication")
-        return True
-    
-    if not AUTH_ENABLED:
-        return True
-    
-    # Check for OAuth token first (preferred)
-    if OAUTH_ENABLED and request_headers:
-        auth_header = (
-            request_headers.get("Authorization")
-            or request_headers.get("authorization")
-        )
-        if auth_header:
-            parts = auth_header.split()
-            if len(parts) == 2 and parts[0].lower() == "bearer":
-                token = parts[1]
-                oauth_manager = get_oauth_manager()
-                if oauth_manager.verify_token(token):
-                    logger.debug("OAuth token valid")
-                    return True
-    
-    api_key = _extract_api_key_from_headers(request_headers)
-    if api_key and _api_key_is_valid(api_key):
-        return True
 
-    logger.warning("Authentication failed - no valid credentials provided")
-    return False
+    return _security_check_authentication(
+        request_headers=request_headers,
+        client_ip=client_ip,
+        settings=_get_auth_settings_override(),
+    )
 
 
 def check_ip_whitelist(client_ip: Optional[str] = None) -> bool:
@@ -513,14 +191,11 @@ def check_ip_whitelist(client_ip: Optional[str] = None) -> bool:
     Returns:
         True if IP is allowed or whitelist is empty, False otherwise
     """
-    if not ALLOWED_IPS or not ALLOWED_IPS[0]:
-        return True
-    
-    if client_ip in ALLOWED_IPS:
-        return True
-    
-    logger.warning(f"IP {client_ip} not in whitelist")
-    return False
+
+    return _security_check_ip_whitelist(
+        client_ip,
+        settings=_get_auth_settings_override(),
+    )
 
 # --------------------------------------------------------------------
 # Repo configuration
@@ -629,7 +304,7 @@ def rebuild_index_op(
 
     if repo is not None:
         # Per-repo rebuild: use script's single-repo logic
-        from rebuild_indexes import rebuild_single_repo_index
+        from sigil_mcp.scripts.rebuild_indexes import rebuild_single_repo_index
         repo_path = _get_repo_root(repo)
         return rebuild_single_repo_index(
             index=index,
@@ -639,7 +314,7 @@ def rebuild_index_op(
         )
 
     # Complete rebuild: use script's rebuild_all_indexes logic
-    from rebuild_indexes import rebuild_all_indexes
+    from sigil_mcp.scripts.rebuild_indexes import rebuild_all_indexes
     return rebuild_all_indexes(
         index=index,
         wipe_index=False,  # Don't wipe - we're using existing index
@@ -705,7 +380,7 @@ def build_vector_index_op(
         if not repo_path.exists():
             raise ValueError(f"Repository path does not exist: {repo_path}")
 
-        embedding_stats = index.build_vector_index(
+        repo_stats = index.build_vector_index(
             repo=repo,
             embed_fn=index.embed_fn,
             model=index.embed_model,
@@ -718,14 +393,14 @@ def build_vector_index_op(
             "model": index.embed_model,
             "message": f"Successfully rebuilt vector index for {repo}",
             "stats": {
-                "documents": embedding_stats.get("documents_processed", 0),
+                "documents": repo_stats.get("documents_processed", 0),
                 "symbols": 0,  # Vector index doesn't track symbols
-                "files": embedding_stats.get("documents_processed", 0),
+                "files": repo_stats.get("documents_processed", 0),
             },
-            **embedding_stats,
+            **repo_stats,
         }
 
-    embedding_stats: Dict[str, Dict[str, int]] = {}
+    embedding_stats: Dict[str, Dict[str, object]] = {}
     total_docs = 0
     for repo_name in REPOS.keys():
         try:
@@ -739,7 +414,7 @@ def build_vector_index_op(
             logger.exception("Failed to rebuild vector index for %s", repo_name)
             raise
 
-        embedding_stats[repo_name] = stats
+        embedding_stats[repo_name] = {k: cast(object, v) for k, v in stats.items()}
         total_docs += stats.get("documents_processed", 0)
 
     return {
@@ -1193,7 +868,7 @@ async def oauth_authorize_http(
             "error_description": "OAuth client not configured"
         }, status_code=500)
     
-    if not _is_redirect_uri_allowed(
+    if not _security_is_redirect_uri_allowed(
         redirect_uri,
         client.redirect_uris,
         config.oauth_redirect_allow_list,
@@ -1573,7 +1248,7 @@ def oauth_authorize(
     # Verify redirect_uri
     client = oauth_manager.get_client()
     allowed_redirects = config.oauth_redirect_allow_list
-    if not client or not _is_redirect_uri_allowed(
+    if not client or not _security_is_redirect_uri_allowed(
         redirect_uri or "",
         client.redirect_uris,
         allowed_redirects,
@@ -2897,9 +2572,6 @@ def _create_parent_app_with_admin():
     logger.info("Both MCP and Admin API share the same index instance")
     logger.info("Admin endpoints available at /admin/*")
     logger.info("")
-    # Ensure the MCP ASGI app is normalized for ChatGPT compatibility
-    _wrap_mcp_app_for_chatgpt(mcp)
-    
     # Get FastMCP's ASGI app
     # NOTE: We get the raw app here, not the wrapped one, because we'll
     # wrap the parent app instead to avoid double-wrapping issues
@@ -2988,7 +2660,6 @@ def _run_server_with_admin():
 
 def _run_server_simple():
     """Run the server without Admin API."""
-    _wrap_mcp_app_for_chatgpt(mcp)
     try:
         mcp.run(transport="streamable-http")
     finally:

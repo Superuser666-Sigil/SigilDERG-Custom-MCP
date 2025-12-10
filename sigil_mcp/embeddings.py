@@ -72,7 +72,8 @@ def create_embedding_provider(  # noqa: C901
         ImportError: If required dependencies are not installed
     """
     if provider == "sentence-transformers":
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
+        st_available = SENTENCE_TRANSFORMERS_AVAILABLE or SentenceTransformer is not None
+        if not st_available:
             raise ImportError(
                 "sentence-transformers is required for this provider. "
                 "Install it with: pip install sentence-transformers"
@@ -104,7 +105,8 @@ def create_embedding_provider(  # noqa: C901
         return STProvider(model_obj, dimension)
 
     elif provider == "openai":
-        if not OPENAI_AVAILABLE:
+        openai_available = OPENAI_AVAILABLE or OpenAI is not None
+        if not openai_available:
             raise ImportError(
                 "openai is required for this provider. "
                 "Install it with: pip install openai"

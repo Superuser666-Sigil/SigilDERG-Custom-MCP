@@ -13,7 +13,7 @@ def _base_cfg():
         "host": "127.0.0.1",
         "port": 8765,
         "api_key": None,
-        "require_api_key": True,
+        "require_api_key": False,
         "allowed_ips": ["127.0.0.1", "testclient"],
     }
 
@@ -43,6 +43,7 @@ def test_admin_api_auth_required():
     with patch("sigil_mcp.admin_api._get_admin_cfg") as mock_cfg:
         cfg = _base_cfg()
         cfg["api_key"] = "secret"
+        cfg["require_api_key"] = True
         mock_cfg.return_value = cfg
         client = TestClient(app)
         

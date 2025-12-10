@@ -2,10 +2,6 @@
 # Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
-# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
-# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
-# Commercial licenses are available. Contact: davetmire85@gmail.com
-
 """
 Hybrid code indexing for Sigil MCP Server.
 
@@ -82,6 +78,8 @@ class SigilIndex:
         else:
             self.lance_db_path = self.index_path / "lancedb"
         self.lance_db = None
+        self.lance = None
+        self.vector_table_name = "code_vectors"
         self.vectors = None
 
         self._embeddings_active = config.embeddings_enabled or self.embed_fn is not None
@@ -94,14 +92,21 @@ class SigilIndex:
         if self._embeddings_active:
             self._ensure_lance_dir_permissions()
             self.lance_db = lancedb.connect(self.lance_db_path)
-            code_chunk_model = get_code_chunk_model(self.embedding_dimension)
-            self._code_chunk_model = code_chunk_model
-            if "code_chunks" in self.lance_db.table_names():
-                self.vectors = self.lance_db.open_table("code_chunks")
+            self.lance = self.lance_db
+            self._code_chunk_model = get_code_chunk_model(self.embedding_dimension)
+            table_names = set(self.lance_db.table_names())
+            target_table = self.vector_table_name
+            if target_table in table_names:
+                self.vectors = self.lance_db.open_table(target_table)
+            elif "code_chunks" in table_names:
+                target_table = "code_chunks"
+                self.vector_table_name = target_table
+                self.vectors = self.lance_db.open_table(target_table)
             else:
                 self.vectors = self.lance_db.create_table(
-                    "code_chunks", schema=code_chunk_model
+                    target_table, schema=self._code_chunk_model
                 )
+            self._sync_embedding_dimension_from_lance()
             self._log_embedding_startup()
             self._warn_on_vector_schema_mismatch()
         else:
@@ -177,6 +182,32 @@ class SigilIndex:
                 "LanceDB initialized but no embedding function configured; "
                 "vector indexing calls will fail until embeddings are set."
             )
+
+    def _sync_embedding_dimension_from_lance(self) -> None:
+        """Align configured embedding dimension with existing LanceDB schema."""
+
+        if self.vectors is None:
+            return
+
+        try:
+            vector_field = self.vectors.schema.field("vector")
+            vector_type = vector_field.type
+            actual_dim = None
+            if isinstance(vector_type, pa.FixedSizeListType):
+                actual_dim = vector_type.list_size
+        except Exception:
+            logger.debug("Could not inspect LanceDB vector schema", exc_info=True)
+            return
+
+        if actual_dim and actual_dim != self.embedding_dimension:
+            logger.warning(
+                "Configured embedding dimension %s does not match LanceDB table "
+                "dimension %s, using table dimension.",
+                self.embedding_dimension,
+                actual_dim,
+            )
+            self.embedding_dimension = actual_dim
+            self._code_chunk_model = get_code_chunk_model(actual_dim)
 
     def _warn_on_vector_schema_mismatch(self) -> None:
         """Warn if the LanceDB schema does not match configured dimensions."""
@@ -262,17 +293,17 @@ class SigilIndex:
         except Exception:
             logger.debug("Skipping removal of legacy embeddings table", exc_info=True)
 
-        self.trigrams_db.execute(
-            """
+        # Keep 'repos' table
+        # Replace 'file_content_fts' creation with:
+        self.trigrams_db.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts 
             USING fts5(
                 path UNINDEXED, 
                 repo_id UNINDEXED, 
                 content, 
                 tokenize='trigram'
-             )
-        """
-        )
+            )
+        """)
 
         # Trigram inverted index for fast text search
         self.trigrams_db.execute("""
@@ -844,6 +875,7 @@ class SigilIndex:
         Returns:
             List of search results with context
         """
+        # The database connection is thread-safe for reads in WAL mode.
         query_lower = query.lower()
         query_trigrams = self._extract_trigrams(query_lower)
         logger.warning(
@@ -1227,6 +1259,22 @@ class SigilIndex:
                 rel_path,
                 self.embedding_dimension,
             )
+            new_dim = int(embeddings.shape[1])
+            self.embedding_dimension = new_dim
+            self._code_chunk_model = get_code_chunk_model(new_dim)
+            try:
+                self.vectors = self.lance_db.create_table(
+                    self.vector_table_name,
+                    schema=self._code_chunk_model,
+                    mode="overwrite",
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to recreate vector table with dimension %s for %s",
+                    new_dim,
+                    rel_path,
+                )
+                return
 
         timestamp = datetime.now()
 

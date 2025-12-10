@@ -12,15 +12,11 @@ Tests for header logging middleware.
 
 import pytest
 import logging
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
-from sigil_mcp.server import (
+from sigil_mcp.middleware.header_logging import (
     HeaderLoggingASGIMiddleware,
-    _redact_headers,
+    redact_headers,
     SENSITIVE_HEADERS,
 )
-
-# Use anyio for async tests (already installed via pytest-anyio plugin)
-import asyncio
 
 
 class TestHeaderRedaction:
@@ -39,7 +35,7 @@ class TestHeaderRedaction:
             "user-agent": "test-client",
         }
 
-        redacted = _redact_headers(headers)
+        redacted = redact_headers(headers)
 
         # Sensitive headers should be redacted
         assert redacted["authorization"] == "<redacted>"
@@ -61,7 +57,7 @@ class TestHeaderRedaction:
             "X-API-Key": "key-value",
         }
 
-        redacted = _redact_headers(headers)
+        redacted = redact_headers(headers)
 
         assert redacted["Authorization"] == "<redacted>"
         assert redacted["AUTHORIZATION"] == "<redacted>"
@@ -69,7 +65,7 @@ class TestHeaderRedaction:
 
     def test_redact_empty_headers(self):
         """Test redaction with empty headers dict."""
-        redacted = _redact_headers({})
+        redacted = redact_headers({})
         assert redacted == {}
 
 
@@ -234,7 +230,7 @@ class TestHeaderLoggingMiddleware:
         call_count_before = 0
         try:
             call_count_before = len([c for c in mock_app.__call__.mock_calls if c])
-        except:
+        except Exception:
             pass
         
         await middleware(scope, receive, send)
