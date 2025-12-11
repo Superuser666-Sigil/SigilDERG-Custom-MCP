@@ -2,10 +2,6 @@
 # Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
-# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
-# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
-# Commercial licenses are available. Contact: davetmire85@gmail.com
-
 """Llama.cpp embedding provider for local LLM embeddings."""
 
 import logging
@@ -50,7 +46,7 @@ class LlamaCppEmbeddingProvider:
             embedding: Enable embedding mode
             **kwargs: Additional arguments passed to Llama constructor
         """
-        if not LLAMACPP_AVAILABLE and Llama is None:
+        if not LLAMACPP_AVAILABLE or Llama is None:
             logger.error(
                 "llama-cpp-python is required for LlamaCppEmbeddingProvider. "
                 "Install it with: pip install llama-cpp-python or pip install .[embeddings-llamacpp-cpu]"
@@ -59,9 +55,6 @@ class LlamaCppEmbeddingProvider:
                 "llama-cpp-python is required for LlamaCppEmbeddingProvider. "
                 "Install it with: pip install llama-cpp-python"
             )
-        
-        if Llama is None:
-            raise ImportError("Llama class not available")
 
         self.model_path = Path(model_path).expanduser()
         if not self.model_path.exists():

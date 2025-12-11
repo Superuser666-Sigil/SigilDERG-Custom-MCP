@@ -10,11 +10,19 @@
 Pytest configuration and shared fixtures for Sigil MCP Server tests.
 """
 
+import os
 import pytest
 import tempfile
 import shutil
 from pathlib import Path
 import numpy as np
+
+# Use the in-memory LanceDB stub during tests to avoid long-running native setup
+os.environ.setdefault("SIGIL_MCP_LANCEDB_STUB", "1")
+# Route OAuth storage to a writable temp directory for tests
+TEST_OAUTH_DIR = Path(tempfile.mkdtemp(prefix="sigil_oauth_"))
+os.environ.setdefault("SIGIL_MCP_OAUTH_DIR", str(TEST_OAUTH_DIR))
+
 from sigil_mcp.indexer import SigilIndex
 from sigil_mcp.auth import API_KEY_FILE
 from sigil_mcp.oauth import CLIENT_FILE, TOKENS_FILE
@@ -219,20 +227,21 @@ def test_config_file(temp_dir):
 @pytest.fixture
 def clean_auth_file():
     """Ensure clean auth state before and after tests."""
-    # Backup existing API key if present
+    from sigil_mcp.auth import get_api_key_path
+
+    path = get_api_key_path()
     backup = None
-    if API_KEY_FILE.exists():
-        backup = API_KEY_FILE.read_text()
-        API_KEY_FILE.unlink()
+    if path.exists():
+        backup = path.read_text()
+        path.unlink()
     
     yield
     
-    # Restore or cleanup
     if backup:
-        API_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        API_KEY_FILE.write_text(backup)
-    elif API_KEY_FILE.exists():
-        API_KEY_FILE.unlink()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(backup)
+    elif path.exists():
+        path.unlink()
 
 
 @pytest.fixture

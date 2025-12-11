@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+# Commercial licenses are available. Contact: davetmire85@gmail.com
+
 import asyncio
 import importlib
 from pathlib import Path
@@ -35,9 +39,12 @@ def test_admin_api_rejects_missing_key_in_prod(monkeypatch):
         "asgi": {"version": "3.0", "spec_version": "2.3"},
     }
     request = Request(scope)
-    response = asyncio.get_event_loop().run_until_complete(
-        admin_module.require_admin(request)
-    )
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    response = loop.run_until_complete(admin_module.require_admin(request))
 
     assert response.status_code == 503
     if server._INDEX:

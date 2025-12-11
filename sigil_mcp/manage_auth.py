@@ -1,7 +1,3 @@
-# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
-# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
-# Commercial licenses are available. Contact: davetmire85@gmail.com
-
 #!/usr/bin/env python3
 # Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
 # Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
@@ -17,13 +13,14 @@ Usage:
 """
 
 import sys
-from .auth import initialize_api_key, API_KEY_FILE
+from .auth import initialize_api_key, get_api_key_path
 
 
 def generate():
     """Generate a new API key."""
-    if API_KEY_FILE.exists():
-        print(f"[NO] API key already exists at {API_KEY_FILE}")
+    path = get_api_key_path()
+    if path.exists():
+        print(f"[NO] API key already exists at {path}")
         print("   Use 'reset' to generate a new key")
         return 1
     
@@ -48,13 +45,14 @@ def generate():
 
 def show():
     """Show current API key status."""
-    if not API_KEY_FILE.exists():
+    path = get_api_key_path()
+    if not path.exists():
         print("[NO] No API key configured")
         print("   Run 'python manage_auth.py generate' to create one")
         return 1
     
     print("[YES] API key is configured")
-    print(f"   Location: {API_KEY_FILE}")
+    print(f"   Location: {path}")
     print()
     print("   To view or use the key:")
     print("   - The plaintext key was shown only once during generation")
@@ -65,7 +63,8 @@ def show():
 
 def reset():
     """Reset API key (delete and regenerate)."""
-    if not API_KEY_FILE.exists():
+    path = get_api_key_path()
+    if not path.exists():
         print("[INFO] No existing API key found, generating new one...")
         return generate()
     
@@ -79,8 +78,8 @@ def reset():
         return 1
     
     # Delete existing key
-    API_KEY_FILE.unlink()
-    print(f"[YES] Deleted old API key from {API_KEY_FILE}")
+    path.unlink()
+    print(f"[YES] Deleted old API key from {path}")
     print()
     
     # Generate new key

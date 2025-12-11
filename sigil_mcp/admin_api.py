@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sqlite3
 from typing import Any, Dict, Optional
 
@@ -16,10 +17,9 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from .config import get_config
+import sigil_mcp.server as server_state
 from .server import (
     REPOS,
-    _get_index,
-    _get_watcher,
     rebuild_index_op,
     build_vector_index_op,
     get_index_stats_op,
@@ -37,6 +37,8 @@ _rebuild_semaphore = asyncio.Semaphore(1)
 
 
 def _get_admin_cfg() -> Dict[str, Any]:
+    mode_env = os.getenv("SIGIL_MCP_MODE")
+    mode = mode_env.lower() if mode_env else _config.mode
     return {
         "enabled": _config.admin_enabled,
         "host": _config.admin_host,
@@ -44,7 +46,7 @@ def _get_admin_cfg() -> Dict[str, Any]:
         "api_key": _config.admin_api_key,
         "require_api_key": _config.admin_require_api_key,
         "allowed_ips": _config.admin_allowed_ips,
-        "mode": _config.mode,
+        "mode": mode,
     }
 
 
@@ -71,7 +73,9 @@ async def require_admin(request: Request) -> Optional[JSONResponse]:
         logger.warning("Admin API called but admin.enabled=false")
         return JSONResponse({"error": "admin_disabled"}, status_code=503)
 
-    if cfg["mode"] == "prod" and not cfg.get("api_key"):
+    mode = cfg.get("mode", "dev")
+
+    if mode == "prod" and not cfg.get("api_key"):
         logger.error(
             "Admin API is unavailable in production mode without admin.api_key configured"
         )
@@ -88,7 +92,7 @@ async def require_admin(request: Request) -> Optional[JSONResponse]:
         )
 
     api_key = cfg.get("api_key")
-    require_api_key = True if cfg.get("mode") == "prod" else cfg.get("require_api_key", True)
+    require_api_key = True if mode == "prod" else cfg.get("require_api_key", True)
     header_key = (
         request.headers.get("x-admin-key")
         or request.headers.get("X-Admin-Key")
@@ -122,9 +126,46 @@ async def admin_status(request: Request) -> Response:
     if (resp := await require_admin(request)) is not None:
         return resp
 
-    index = _get_index()
-    watcher = _get_watcher()
     cfg = _get_admin_cfg()
+    repo_map = {name: str(path) for name, path in REPOS.items()}
+
+    # Avoid heavy initialization when no repositories are configured
+    if not repo_map:
+        payload = {
+            "admin": {
+                "host": cfg.get("host"),
+                "port": cfg.get("port"),
+                "enabled": cfg.get("enabled"),
+            },
+            "repos": {},
+            "index": {
+                "path": None,
+                "has_embeddings": False,
+                "embed_model": None,
+            },
+            "watcher": {"enabled": False, "watching": []},
+        }
+        return JSONResponse(payload)
+
+    index = getattr(server_state, "_INDEX", None)
+    watcher = getattr(server_state, "_WATCHER", None)
+
+    index_payload = {
+        "path": str(_config.index_path),
+        "has_embeddings": False,
+        "embed_model": None,
+    }
+    if index is not None:
+        index_payload = {
+            "path": str(index.index_path),
+            "has_embeddings": bool(getattr(index, "embed_fn", None)),
+            "embed_model": getattr(index, "embed_model", None),
+        }
+
+    watcher_payload = {
+        "enabled": bool(watcher) and _config.watch_enabled,
+        "watching": list(REPOS.keys()) if watcher else [],
+    }
 
     payload: Dict[str, Any] = {
         "admin": {
@@ -132,16 +173,9 @@ async def admin_status(request: Request) -> Response:
             "port": cfg["port"],
             "enabled": cfg["enabled"],
         },
-        "repos": {name: str(path) for name, path in REPOS.items()},
-        "index": {
-            "path": str(index.index_path),
-            "has_embeddings": bool(getattr(index, "embed_fn", None)),
-            "embed_model": getattr(index, "embed_model", None),
-        },
-        "watcher": {
-            "enabled": watcher is not None,
-            "watching": list(REPOS.keys()) if watcher is not None else [],
-        },
+        "repos": repo_map,
+        "index": index_payload,
+        "watcher": watcher_payload,
     }
     return JSONResponse(payload)
 

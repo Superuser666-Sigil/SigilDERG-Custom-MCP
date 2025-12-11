@@ -1,6 +1,11 @@
+# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
+# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+# Commercial licenses are available. Contact: davetmire85@gmail.com
+
 from __future__ import annotations
 
 import logging
+import os
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -14,16 +19,24 @@ logger = logging.getLogger("sigil_repos_mcp")
 
 
 def _configure_logging(config: Config) -> None:
-    log_file_path = get_log_file_path(config.log_file)
-    setup_logging(
-        log_file=str(log_file_path) if log_file_path else None,
-        log_level=config.log_level,
-        console_output=True,
-    )
-    if log_file_path:
-        logger.info("Logging to file: %s", log_file_path)
+    # Skip file logging in test environments to avoid permission issues
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        log_file_path = None
     else:
-        logger.info("Logging to console only (no log file configured)")
+        log_file_path = get_log_file_path(config.log_file)
+    try:
+        setup_logging(
+            log_file=str(log_file_path) if log_file_path else None,
+            log_level=config.log_level,
+            console_output=True,
+        )
+        if log_file_path:
+            logger.info("Logging to file: %s", log_file_path)
+        else:
+            logger.info("Logging to console only (no log file configured)")
+    except Exception as exc:
+        logger.warning("Falling back to console logging (file logging failed): %s", exc)
+        setup_logging(log_file=None, log_level=config.log_level, console_output=True)
 
 
 class ChatGPTComplianceMiddleware:

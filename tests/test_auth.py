@@ -2,10 +2,6 @@
 # Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
-# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
-# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
-# Commercial licenses are available. Contact: davetmire85@gmail.com
-
 """
 Tests for authentication module (auth.py).
 """
@@ -16,8 +12,12 @@ from sigil_mcp.auth import (
     initialize_api_key,
     verify_api_key,
     get_api_key_from_env,
-    API_KEY_FILE
+    get_api_key_path,
 )
+
+
+def _api_key_file():
+    return get_api_key_path()
 
 
 class TestAPIKeyGeneration:
@@ -62,14 +62,14 @@ class TestAPIKeyInitialization:
         """Test that initialization creates the API key file."""
         api_key = initialize_api_key()
         assert api_key is not None
-        assert API_KEY_FILE.exists()
+        assert _api_key_file().exists()
         assert len(api_key) >= 32
     
     def test_initialize_api_key_stores_hash(self, clean_auth_file):
         """Test that only the hash is stored, not plaintext."""
         api_key = initialize_api_key()
         assert api_key is not None
-        stored_hash = API_KEY_FILE.read_text().strip()
+        stored_hash = _api_key_file().read_text().strip()
         
         # Verify stored value is a hash
         assert len(stored_hash) == 64
@@ -80,7 +80,7 @@ class TestAPIKeyInitialization:
         """Test that API key file has restrictive permissions."""
         initialize_api_key()
         import stat
-        mode = API_KEY_FILE.stat().st_mode
+        mode = _api_key_file().stat().st_mode
         # Check that file is readable/writable only by owner
         assert stat.S_IMODE(mode) == 0o600
     

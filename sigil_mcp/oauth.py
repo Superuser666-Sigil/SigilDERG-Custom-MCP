@@ -17,6 +17,7 @@ import secrets
 import hashlib
 import json
 import time
+import os
 from pathlib import Path
 from typing import Optional, Dict, Tuple
 from dataclasses import dataclass, asdict
@@ -24,8 +25,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# OAuth configuration directory
-OAUTH_DIR = Path.home() / ".sigil_mcp_server" / "oauth"
+# OAuth configuration directory (override with SIGIL_MCP_OAUTH_DIR for tests)
+def _resolve_oauth_dir() -> Path:
+    base = os.getenv("SIGIL_MCP_OAUTH_DIR")
+    if base:
+        return Path(base).expanduser()
+    return Path.home() / ".sigil_mcp_server" / "oauth"
+
+
+OAUTH_DIR = _resolve_oauth_dir()
 OAUTH_DIR.mkdir(parents=True, exist_ok=True)
 
 # OAuth files

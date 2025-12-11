@@ -130,7 +130,7 @@ export function StatusPage() {
                 <span className="text-sm font-medium">Watching Repositories</span>
                 <div className="mt-2 space-y-1">
                   {status.watcher.watching.length > 0 ? (
-                    status.watcher.watching.map((repo) => (
+                    status.watcher.watching.map((repo: string) => (
                       <Badge key={repo} variant="secondary" className="mr-2">
                         {repo}
                       </Badge>
@@ -150,7 +150,7 @@ export function StatusPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
-                {Object.entries(status.repos).map(([name, path]) => (
+                {Object.entries(status.repos).map(([name, path]: [string, string]) => (
                   <div key={name} className="flex items-start justify-between border-b pb-2 last:border-0">
                     <div className="flex-1">
                       <div className="font-medium">{name}</div>

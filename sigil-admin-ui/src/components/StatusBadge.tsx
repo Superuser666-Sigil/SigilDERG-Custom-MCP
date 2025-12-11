@@ -3,7 +3,7 @@
 // Commercial licenses are available. Contact: davetmire85@gmail.com
 
 import { Badge } from './ui/badge'
-import { CheckCircle2, XCircle, AlertCircle } from 'lucide-react'
+import { CheckCircle2, XCircle } from 'lucide-react'
 
 interface StatusBadgeProps {
   status: boolean | 'enabled' | 'disabled' | 'active' | 'inactive'

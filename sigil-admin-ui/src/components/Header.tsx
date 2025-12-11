@@ -4,7 +4,6 @@
 
 import { Link, useLocation } from 'react-router-dom'
 import { Activity } from 'lucide-react'
-import { Badge } from './ui/badge'
 import { ThemePicker } from './ThemePicker'
 
 export function Header() {

@@ -14,9 +14,10 @@ import zlib
 import json
 import subprocess
 import os
+import re
 import sqlite3
 from pathlib import Path
-from typing import List, Optional, Set, Callable, Sequence
+from typing import List, Optional, Set, Callable, Sequence, Dict
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -41,6 +42,195 @@ logger = logging.getLogger(__name__)
 # Type alias for embedding function: takes sequence of texts, returns (N, dim) array
 EmbeddingFn = Callable[[Sequence[str]], np.ndarray]
 
+USE_LANCEDB_STUB = os.getenv("SIGIL_MCP_LANCEDB_STUB", "").lower() == "1"
+
+
+class _StubVectorType:
+    def __init__(self, list_size: int):
+        self.list_size = list_size
+
+
+class _StubField:
+    def __init__(self, dimension: int):
+        self.type = _StubVectorType(dimension)
+
+
+class _StubSchema:
+    def __init__(self, dimension: int):
+        self._dimension = dimension
+
+    def field(self, name: str):
+        return _StubField(self._dimension)
+
+
+class _InMemoryArrowTable:
+    """Minimal Arrow-like table wrapper for tests."""
+
+    def __init__(self, rows: list[dict]):
+        self._rows = list(rows)
+
+    def to_pylist(self) -> list[dict]:
+        return list(self._rows)
+
+
+class _InMemoryQuery:
+    """Simple query builder to mimic LanceDB search API in tests."""
+
+    def __init__(self, rows: list[dict], query_vec: np.ndarray):
+        self._rows = rows
+        self._query_vec = query_vec.astype("float32") if query_vec is not None else None
+        self._where = None
+        self._limit: Optional[int] = None
+
+    def where(self, expression: str):
+        self._where = expression
+        return self
+
+    def limit(self, k: int):
+        self._limit = k
+        return self
+
+    def _apply_filter(self) -> list[dict]:
+        rows = list(self._rows)
+        if not self._where:
+            return rows
+
+        def _extract(key: str) -> Optional[str]:
+            match = re.search(rf"{key}\s*==\s*'([^']+)'", self._where or "")
+            return match.group(1) if match else None
+
+        repo_id = _extract("repo_id")
+        file_path = _extract("file_path")
+        doc_id = _extract("doc_id")
+
+        filtered = []
+        for row in rows:
+            if repo_id is not None and str(row.get("repo_id")) != str(repo_id):
+                continue
+            if file_path is not None and str(row.get("file_path")) != str(file_path):
+                continue
+            if doc_id is not None and str(row.get("doc_id")) != str(doc_id):
+                continue
+            filtered.append(row)
+        return filtered
+
+    def to_list(self) -> list[dict]:
+        rows = self._apply_filter()
+        scored: list[tuple[float, dict]] = []
+        for row in rows:
+            vec = np.asarray(row.get("vector", []), dtype="float32")
+            if self._query_vec is not None and vec.shape == self._query_vec.shape:
+                score = float(np.dot(vec, self._query_vec))
+            else:
+                score = 0.0
+            scored.append((score, row))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        results = [row for _, row in scored]
+        if self._limit is not None:
+            results = results[: self._limit]
+        return results
+
+
+class InMemoryLanceTable:
+    """Lightweight in-memory stand-in for LanceDB tables when real LanceDB is unavailable."""
+
+    def __init__(self, name: str, dimension: int):
+        self.name = name
+        self.dimension = dimension
+        self.rows: list[dict] = []
+        self.schema = _StubSchema(dimension)
+
+    def _normalize_record(self, record: object) -> dict:
+        if hasattr(record, "model_dump"):
+            data = record.model_dump()
+        elif hasattr(record, "dict"):
+            data = record.dict()  # type: ignore[attr-defined]
+        else:
+            data = dict(record)  # type: ignore[arg-type]
+
+        vec = data.get("vector")
+        if hasattr(vec, "tolist"):
+            vec = vec.tolist()
+        data["vector"] = vec
+        return data
+
+    def count_rows(self) -> int:
+        return len(self.rows)
+
+    def to_arrow(self):
+        return _InMemoryArrowTable(self.rows)
+
+    def to_list(self, limit: Optional[int] = None) -> list[dict]:
+        if limit is None:
+            return list(self.rows)
+        return list(self.rows[:limit])
+
+    def head(self, limit: int):
+        return _InMemoryArrowTable(self.rows[:limit])
+
+    def delete(self, clause: str):
+        repo_match = re.search(r"repo_id\s*==\s*'([^']+)'", clause or "")
+        file_match = re.search(r"file_path\s*==\s*'([^']+)'", clause or "")
+        doc_match = re.search(r"doc_id\s*==\s*'([^']+)'", clause or "")
+
+        def _keep(row: dict) -> bool:
+            if repo_match and str(row.get("repo_id")) != repo_match.group(1):
+                return True
+            if file_match and str(row.get("file_path")) != file_match.group(1):
+                return True
+            if doc_match and str(row.get("doc_id")) != doc_match.group(1):
+                return True
+            # If any clause matched and row satisfied, drop it
+            if repo_match or file_match or doc_match:
+                return False
+            return True
+
+        self.rows = [r for r in self.rows if _keep(r)]
+
+    def add(self, records: list[object]):
+        for rec in records:
+            self.rows.append(self._normalize_record(rec))
+
+    def update(self, where: str, values: dict):
+        doc_match = re.search(r"doc_id\\s*==\\s*'([^']+)'", where or "")
+        target_doc = doc_match.group(1) if doc_match else None
+        for row in self.rows:
+            if target_doc is None or str(row.get("doc_id")) == str(target_doc):
+                row.update(values)
+
+    def search(self, query_vec: np.ndarray) -> _InMemoryQuery:
+        return _InMemoryQuery(self.rows, query_vec)
+
+
+class InMemoryLanceDB:
+    """Minimal LanceDB-like interface storing vectors in memory for tests."""
+
+    def __init__(self, default_dimension: int = 768):
+        self.default_dimension = default_dimension
+        self.tables: dict[str, InMemoryLanceTable] = {}
+
+    def table_names(self) -> list[str]:
+        return list(self.tables.keys())
+
+    def open_table(self, name: str) -> InMemoryLanceTable:
+        return self.tables[name]
+
+    def create_table(self, name: str, schema=None, mode: Optional[str] = None, **_kwargs) -> InMemoryLanceTable:
+        if mode == "overwrite" or name not in self.tables:
+            dimension = self.default_dimension
+            if schema is not None and hasattr(schema, "__name__"):
+                try:
+                    vector_field = getattr(schema, "model_fields", {}).get("vector")
+                    if vector_field and getattr(vector_field.annotation, "size", None):
+                        dimension = int(vector_field.annotation.size)
+                except Exception:
+                    dimension = self.default_dimension
+            self.tables[name] = InMemoryLanceTable(name, dimension)
+        return self.tables[name]
+
+
+_STUB_LANCEDB_REGISTRY: Dict[str, InMemoryLanceDB] = {}
 
 @dataclass
 class Symbol:
@@ -78,6 +268,7 @@ class SigilIndex:
         self.embed_fn = embed_fn
         self.embed_model = embed_model
         self._embedding_init_failed = False
+        self.use_lancedb_stub = USE_LANCEDB_STUB
 
         config = get_config()
         self.embedding_dimension = config.embeddings_dimension
@@ -91,7 +282,7 @@ class SigilIndex:
         self.lance = None
         self.vector_table_name = "code_vectors"
         self.vectors = None
-        self.lancedb_available = LANCEDB_AVAILABLE
+        self.lancedb_available = LANCEDB_AVAILABLE or self.use_lancedb_stub
         self._vector_index_stale = False
 
         # If embeddings are enabled via config but no embed_fn was provided,
@@ -115,7 +306,24 @@ class SigilIndex:
 
         if self._embeddings_active:
             self._ensure_lance_dir_permissions()
-            self.lance_db = lancedb.connect(self.lance_db_path) if lancedb else None
+            try:
+                if self.use_lancedb_stub:
+                    stub_key = str(self.lance_db_path)
+                    if stub_key in _STUB_LANCEDB_REGISTRY:
+                        self.lance_db = _STUB_LANCEDB_REGISTRY[stub_key]
+                    else:
+                        self.lance_db = InMemoryLanceDB(self.embedding_dimension)
+                        _STUB_LANCEDB_REGISTRY[stub_key] = self.lance_db
+                else:
+                    self.lance_db = lancedb.connect(str(self.lance_db_path)) if lancedb else None
+            except Exception as exc:
+                logger.error(
+                    "Failed to initialize LanceDB at %s: %s. Falling back to trigram-only search.",
+                    self.lance_db_path,
+                    exc,
+                )
+                self.lance_db = None
+                self._embeddings_active = False
             self.lance = self.lance_db
             self._code_chunk_model = get_code_chunk_model(self.embedding_dimension)
             if self.lance_db is not None:

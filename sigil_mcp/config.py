@@ -2,10 +2,6 @@
 # Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
-# Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
-# Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
-# Commercial licenses are available. Contact: davetmire85@gmail.com
-
 """
 Configuration loader for Sigil MCP Server.
 
@@ -69,6 +65,7 @@ class Config:
         admin_cfg = self.config_data.setdefault("admin", {})
         mcp_cfg = self.config_data.setdefault("mcp_server", {})
         admin_ui_cfg = self.config_data.setdefault("admin_ui", {})
+        embeddings_cfg = self.config_data.setdefault("embeddings", {})
         self.config_data.setdefault("external_mcp_servers", [])
         self.config_data.setdefault("external_mcp_auto_install", False)
 
@@ -108,6 +105,7 @@ class Config:
         admin_ui_cfg.setdefault("command", "npm")
         admin_ui_cfg.setdefault("args", ["run", "dev"])
         admin_ui_cfg.setdefault("port", 5173)
+        embeddings_cfg.setdefault("enabled", False)
 
     def _warn_if_insecure_prod(self) -> None:
         """Log warnings when production mode uses insecure overrides."""
@@ -150,8 +148,6 @@ class Config:
                 self._load_from_file(config_path)
                 return
             else:
-                # Explicit path provided but doesn't exist - skip file-based loading
-                # and fall back to environment variables
                 logger.info(
                     f"Config path {config_path} does not exist, "
                     "using environment variables"
@@ -670,18 +666,46 @@ class Config:
 
 # Global config instance
 _config: Optional[Config] = None
+_config_env_signature: Optional[tuple[str, ...]] = None
+_ENV_SENSITIVE_KEYS = [
+    "SIGIL_MCP_MODE",
+    "SIGIL_INDEX_PATH",
+    "SIGIL_MCP_WATCH_ENABLED",
+    "SIGIL_MCP_LOG_FILE",
+    "SIGIL_MCP_ADMIN_API_KEY",
+    "SIGIL_MCP_ADMIN_REQUIRE_API_KEY",
+    "SIGIL_MCP_ADMIN_ALLOWED_IPS",
+    "SIGIL_MCP_EMBEDDINGS_ENABLED",
+    "SIGIL_MCP_EMBEDDINGS_PROVIDER",
+    "SIGIL_MCP_EMBEDDINGS_MODEL",
+]
+
+
+def _capture_env_signature() -> tuple[str, ...]:
+    """Capture relevant environment values to detect changes in tests."""
+    return tuple(os.getenv(key, "") or "" for key in _ENV_SENSITIVE_KEYS)
 
 
 def get_config() -> Config:
     """Get or create global configuration instance."""
-    global _config
+    global _config, _config_env_signature
     if _config is None:
         _config = Config()
+        _config_env_signature = _capture_env_signature()
+        return _config
+
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        current_sig = _capture_env_signature()
+        if current_sig != _config_env_signature:
+            _config = Config()
+            _config_env_signature = current_sig
+
     return _config
 
 
 def load_config(config_path: Optional[Path] = None):
     """Load configuration from specified path."""
-    global _config
+    global _config, _config_env_signature
     _config = Config(config_path)
+    _config_env_signature = _capture_env_signature()
     return _config

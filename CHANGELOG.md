@@ -13,6 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2025-12-11
+
+### Added
+- Comprehensive coverage expansion for admin API/UI, app factory, embeddings, LanceDB integration, OAuth flows, auth/security, MCP client/installer, and scripts; added in-memory LanceDB stub for fast, deterministic testing (opt-in via `SIGIL_MCP_LANCEDB_STUB`).
+- Test fixtures now isolate OAuth storage via `SIGIL_MCP_OAUTH_DIR` to avoid permission issues in CI.
+- New admin API/regression suites for rebuild/status/logs, MCP client manager tests, rebuild-index script tests, and logging setup coverage.
+
+### Changed
+- Config defaults now treat embeddings as disabled unless explicitly set; `get_config` refreshes when env changes during tests to keep isolation safe.
+- OAuth module supports configurable storage root (`SIGIL_MCP_OAUTH_DIR`) for secure, test-friendly credentials handling.
+- File watcher/indexer cleanup hardened to remove LanceDB rows and persist vectors across reopen; LanceDB stub registry preserves state between instances in tests.
+- Packaging: PyPI build verified; temp build artifacts removed from package discovery.
+
+### Fixed
+- Ready/admin tests now pass with production gating and embeddings toggles; index removal clears vectors and trigrams reliably.
+- PyPI build now succeeds after cleaning temporary index dirs and installing `build` tooling.
+
 ## [0.8.0] - 2025-12-11
 
 ### Added
