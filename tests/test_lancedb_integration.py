@@ -87,11 +87,11 @@ def test_embeddings_disabled_paths_raise_errors(temp_dir, test_repo_path):
     index.index_repository("test_repo", test_repo_path, force=True)
 
     try:
-        with pytest.raises(RuntimeError, match="No embedding function configured"):
-            index.build_vector_index("test_repo")
+        stats = index.build_vector_index("test_repo")
+        assert stats["documents_processed"] == 0
 
-        with pytest.raises(RuntimeError, match="No embedding function configured"):
-            index.semantic_search("test", repo="test_repo")
+        results = index.semantic_search("test", repo="test_repo")
+        assert results == []
     finally:
         index.repos_db.close()
         index.trigrams_db.close()

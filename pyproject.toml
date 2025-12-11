@@ -4,7 +4,7 @@
 
 [project]
 name = "sigil-mcp-server"
-version = "0.6.0"
+version = "0.7.0"
 description = "Model Context Protocol server for IDE-like code navigation and semantic search"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -69,11 +69,21 @@ embeddings-llamacpp-rocm = [
 embeddings-llamacpp-metal = [
     "llama-cpp-python[metal]>=0.3.0",
 ]
+lancedb = [
+    "lancedb>=0.5.0",
+    "pyarrow>=14.0.0",
+]
 # Convenience groups
 embeddings-all = [
     "sentence-transformers>=2.2.0",
     "torch>=2.0.0",
     "openai>=1.0.0",
+    "llama-cpp-python>=0.3.0",
+]
+server-full = [
+    "watchdog>=3.0.0",
+    "lancedb>=0.5.0",
+    "pyarrow>=14.0.0",
     "llama-cpp-python>=0.3.0",
 ]
 

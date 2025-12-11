@@ -6,9 +6,9 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 # Sigil MCP Server Operations Runbook
 
-**Version:** 1.3  
-**Last Updated:** 2025-12-09  
-**Recommended Server Version:** v0.6.0 or later
+**Version:** 1.4  
+**Last Updated:** 2025-12-10  
+**Recommended Server Version:** v0.7.0 or later
 
 This runbook provides operational procedures for running, troubleshooting, and maintaining the Sigil MCP Server in production and development environments.
 
@@ -42,8 +42,8 @@ This runbook provides operational procedures for running, troubleshooting, and m
 git clone https://github.com/Superuser666-Sigil/SigilDERG-Custom-MCP.git
 cd SigilDERG-Custom-MCP
 
-# 2. Install dependencies
-pip install -r requirements.txt
+# 2. Install dependencies (default stack: watcher + LanceDB + llama.cpp embeddings)
+pip install -e .[server-full]
 
 # 3. Configure repositories
 cp config.example.json config.json
@@ -182,6 +182,14 @@ Default search order:
 1. `./config.json` (current directory)
 2. `~/.config/sigil-mcp/config.json`
 3. Environment variables
+
+### Run Mode (dev vs prod)
+
+Set `mode` in `config.json` or `SIGIL_MCP_MODE` to control security defaults:
+- `dev` (default): authentication off, local bypass allowed, admin API key optional.
+- `prod`: authentication on, local bypass disabled, admin API requires `admin.api_key` and `admin.allowed_ips`.
+
+The server logs warnings at startup if insecure overrides are present while `mode=prod`.
 
 ### Configuration Schema
 
@@ -437,6 +445,7 @@ The Admin API is enabled by default and integrated into the main server. Configu
 
 Or via environment variables:
 - `SIGIL_MCP_ADMIN_ENABLED` (default: "true")
+- `SIGIL_MCP_ADMIN_REQUIRE_API_KEY` (default: "true" in prod mode, "true"/"false" respected in dev)
 - `SIGIL_MCP_ADMIN_API_KEY` (optional, for additional security)
 - `SIGIL_MCP_ADMIN_ALLOWED_IPS` (comma-separated list, default: "127.0.0.1,::1")
 
@@ -446,6 +455,8 @@ The Admin API uses two layers of security:
 
 1. **IP Whitelist**: Only allows connections from configured IPs (default: localhost only)
 2. **Optional API Key**: If `admin.api_key` is set, requires `X-Admin-Key` header
+
+In **production mode**, the Admin API refuses requests unless `admin.api_key` is configured and the client IP is in `admin.allowed_ips`. CORS is limited to the shipped Admin UI origins; wildcard origins are never permitted.
 
 **Example with API key:**
 ```bash
@@ -674,6 +685,12 @@ Contents:
 - `vectors/` - Legacy vector embeddings (pre-LanceDB, if still present)
 
 **Note:** WAL mode (Write-Ahead Logging) is enabled by default since v0.3.3 to support concurrent access from HTTP handlers, file watcher, and vector indexing operations. The `-wal` and `-shm` files are automatically managed by SQLite.
+
+### Embeddings & LanceDB
+
+- Install LanceDB support with `pip install -e .[lancedb]` or the bundled `.[server-full]` extra. If LanceDB is missing or `embeddings.enabled` is false, the server automatically falls back to trigram-only search and logs the reason.
+- On startup and after rebuilds, the server logs whether the vector index is ready and how many chunks are indexed.
+- `embeddings.provider` defaults to `llamacpp` with the Jina v2 code model; if a provider/model fails to load, embeddings are disabled and trigram search remains available.
 
 ### Thread Safety
 
@@ -1125,12 +1142,10 @@ When reporting issues, include:
 
 ## Monitoring & Health Checks
 
-### Health Check Endpoint
+### Health & Readiness Endpoints
 
-```bash
-curl http://localhost:8000/health
-# {"status": "ok"}
-```
+- Liveness: `curl http://localhost:8000/healthz` returns `{"status": "ok"}` without touching indexes.
+- Readiness: `curl http://localhost:8000/readyz` returns 200 only after config loads, indexes open, and embeddings initialize (when enabled); otherwise 503 with component flags.
 
 ### MCP Ping Tool
 

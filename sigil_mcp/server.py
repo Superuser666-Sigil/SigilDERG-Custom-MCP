@@ -70,9 +70,47 @@ def get_form_value(value: Union[str, UploadFile, None]) -> Optional[str]:
 # --------------------------------------------------------------------
 
 config = get_config()
+RUN_MODE = config.mode
 
 logger = logging.getLogger("sigil_repos_mcp")
 mcp = build_mcp_app(config)
+
+# Track readiness across subsystems
+READINESS: Dict[str, bool] = {
+    "config": True,
+    "index": False,
+    "embeddings": not config.embeddings_enabled,  # ready when disabled
+}
+
+
+def _log_configuration_summary() -> None:
+    """Emit a concise configuration summary at startup for operators."""
+
+    logger.info(
+        "Sigil MCP starting (mode=%s, auth_enabled=%s, allow_local_bypass=%s, "
+        "oauth_enabled=%s)",
+        RUN_MODE,
+        config.auth_enabled,
+        config.allow_local_bypass,
+        config.oauth_enabled,
+    )
+    logger.info(
+        "Embeddings: enabled=%s provider=%s model=%s lance_dir=%s",
+        config.embeddings_enabled,
+        config.embeddings_provider,
+        config.embeddings_model,
+        config.lance_dir,
+    )
+    logger.info(
+        "Admin API: enabled=%s host=%s port=%s require_api_key=%s",
+        config.admin_enabled,
+        config.admin_host,
+        config.admin_port,
+        config.admin_require_api_key,
+    )
+
+
+_log_configuration_summary()
 
 # --------------------------------------------------------------------
 # Security Configuration
@@ -83,6 +121,11 @@ AUTH_ENABLED = config.auth_enabled
 OAUTH_ENABLED = config.oauth_enabled
 ALLOW_LOCAL_BYPASS = config.allow_local_bypass
 ALLOWED_IPS = config.allowed_ips
+if RUN_MODE == "prod" and ALLOW_LOCAL_BYPASS:
+    logger.warning(
+        "Local authentication bypass is enabled in production mode - disable "
+        "authentication.allow_local_bypass for secure deployments."
+    )
 
 # --------------------------------------------------------------------
 # MCP server
@@ -147,6 +190,7 @@ def _get_auth_settings_override() -> AuthSettings:
         oauth_enabled=OAUTH_ENABLED,
         allow_local_bypass=ALLOW_LOCAL_BYPASS,
         allowed_ips=allowed_ips,
+        mode=RUN_MODE,
     )
 
 
@@ -331,8 +375,28 @@ def build_vector_index_op(
     Build or refresh the vector index for one or all repositories.
     Uses the same logic as rebuild_indexes.py script.
     """
+    cfg = get_config()
     _ensure_repos_configured()
     index = _get_index()
+    if not cfg.embeddings_enabled:
+        logger.info("Vector rebuild requested but embeddings are disabled.")
+        return {
+            "success": False,
+            "status": "skipped",
+            "reason": "embeddings_disabled",
+            "message": "Embeddings are disabled; trigram search only.",
+        }
+    if not getattr(index, "lancedb_available", True):
+        logger.warning(
+            "Vector rebuild requested but LanceDB is unavailable. "
+            "Install optional dependency group 'lancedb'."
+        )
+        return {
+            "success": False,
+            "status": "skipped",
+            "reason": "lancedb_missing",
+            "message": "Install lancedb optional dependencies to enable vector indexing.",
+        }
     
     # Wait a moment for any active file watcher operations to complete
     # This helps prevent database lock conflicts
@@ -341,32 +405,42 @@ def build_vector_index_op(
 
     # Ensure embeddings are configured
     if index.embed_fn is None:
-        from .config import get_config
         from .embeddings import create_embedding_provider
         import numpy as np
         
-        config = get_config()
-        if not config.embeddings_enabled:
+        if not cfg.embeddings_enabled:
             raise RuntimeError("Embeddings not enabled in configuration")
         
-        provider = config.embeddings_provider
-        model_name = config.embeddings_model or model
+        provider = cfg.embeddings_provider
+        model_name = cfg.embeddings_model or model
         
         if not provider or not model_name:
             raise RuntimeError("Embedding provider/model not configured")
         
-        kwargs = dict(config.embeddings_kwargs)
-        if config.embeddings_cache_dir:
-            kwargs["cache_dir"] = config.embeddings_cache_dir
-        if provider == "openai" and config.embeddings_api_key:
-            kwargs["api_key"] = config.embeddings_api_key
+        kwargs = dict(cfg.embeddings_kwargs)
+        if cfg.embeddings_cache_dir:
+            kwargs["cache_dir"] = cfg.embeddings_cache_dir
+        if provider == "openai" and cfg.embeddings_api_key:
+            kwargs["api_key"] = cfg.embeddings_api_key
         
-        embedding_provider = create_embedding_provider(
-            provider=provider,
-            model=model_name,
-            dimension=config.embeddings_dimension,
-            **kwargs
-        )
+        try:
+            embedding_provider = create_embedding_provider(
+                provider=provider,
+                model=model_name,
+                dimension=cfg.embeddings_dimension,
+                **kwargs
+            )
+        except (ImportError, FileNotFoundError) as exc:
+            logger.error(
+                "Cannot rebuild vector index - embedding backend unavailable: %s",
+                exc,
+            )
+            return {
+                "success": False,
+                "status": "skipped",
+                "reason": "embeddings_unavailable",
+                "message": str(exc),
+            }
         
         def embed_fn(texts):
             embeddings_list = embedding_provider.embed_documents(list(texts))
@@ -548,8 +622,11 @@ def _create_embedding_function():
     Returns:
         Tuple of (embed_fn, model_name) or (None, None) if embeddings disabled
     """
+    global READINESS
+
     if not config.embeddings_enabled:
         logger.info("Embeddings disabled in config")
+        READINESS["embeddings"] = True
         return None, None
     
     provider = config.embeddings_provider
@@ -595,6 +672,7 @@ def _create_embedding_function():
         
         model_name = f"{provider}:{model}"
         logger.info(f"Embeddings initialized: {model_name} (dim={dimension})")
+        READINESS["embeddings"] = True
         return embed_fn, model_name
         
     except ImportError as e:
@@ -603,12 +681,23 @@ def _create_embedding_function():
             "Install required dependencies. See docs/EMBEDDING_SETUP.md. "
             "Embeddings disabled."
         )
+        READINESS["embeddings"] = False
+        return None, None
+    except FileNotFoundError as e:
+        logger.error(
+            "Embedding model not found: %s. "
+            "Download the configured model (e.g., Jina GGUF) into ./models "
+            "or set embeddings.model to the correct path. Falling back to trigram search.",
+            e,
+        )
+        READINESS["embeddings"] = False
         return None, None
     except Exception as e:
         logger.error(
             f"Failed to initialize embedding provider '{provider}': {e}. "
             "Embeddings disabled."
         )
+        READINESS["embeddings"] = False
         return None, None
 
 
@@ -624,6 +713,7 @@ def _get_index() -> SigilIndex:
             embed_fn=embed_fn,
             embed_model=embed_model if embed_model else "none"
         )
+        READINESS["index"] = True
         logger.info(f"Initialized index at {index_path}")
     return _INDEX
 
@@ -808,6 +898,27 @@ async def healthz(request: Request) -> JSONResponse:
     tunnel and backend availability.
     """
     return JSONResponse({"status": "ok"}, status_code=200)
+
+
+def _is_ready() -> Dict[str, bool]:
+    """Return readiness flags and attempt lazy initialization if needed."""
+
+    if not READINESS.get("index"):
+        try:
+            _get_index()
+        except Exception as exc:  # pragma: no cover - logged for operators
+            logger.exception("Readiness check failed to initialize index: %s", exc)
+    return dict(READINESS)
+
+
+@mcp.custom_route("/readyz", methods=["GET"])
+async def readyz(request: Request) -> JSONResponse:
+    """Readiness endpoint for orchestration systems (returns 503 until ready)."""
+
+    readiness = _is_ready()
+    ready = all(readiness.values())
+    status_code = 200 if ready else 503
+    return JSONResponse({"ready": ready, "components": readiness}, status_code=status_code)
 
 
 @mcp.custom_route("/oauth/authorize", methods=["GET", "POST"])
@@ -1182,7 +1293,6 @@ async def oauth_revoke_http(request: Request) -> JSONResponse:
 # --------------------------------------------------------------------
 
 
-@mcp.tool()
 def oauth_authorize(
     client_id: str,
     redirect_uri: str,
@@ -1285,7 +1395,6 @@ def oauth_authorize(
     return result
 
 
-@mcp.tool()
 def oauth_token(
     grant_type: str,
     code: Optional[str] = None,
@@ -1412,7 +1521,6 @@ def oauth_token(
         }
 
 
-@mcp.tool()
 def oauth_revoke(
     token: str,
     client_id: str,
@@ -1462,7 +1570,6 @@ def oauth_revoke(
         return {"status": "not_found"}
 
 
-@mcp.tool()
 def oauth_client_info() -> Dict[str, object]:
     """
     Get OAuth client configuration.
@@ -1522,7 +1629,6 @@ def oauth_client_info() -> Dict[str, object]:
         "audience": ["assistant", "user"],
     },
 )
-@mcp.tool()
 def ping() -> Dict[str, object]:
     """
     Healthcheck endpoint.
@@ -1556,7 +1662,6 @@ def ping() -> Dict[str, object]:
         "audience": ["assistant", "user"],
     },
 )
-@mcp.tool()
 def list_repos() -> List[Dict[str, str]]:
     """
     List all configured repositories.
@@ -1635,7 +1740,6 @@ def _collect_file_entries(
     return entries, truncated
 
 
-@mcp.tool()
 def list_repo_files(
     repo: str,
     subdir: str = ".",
@@ -1730,7 +1834,6 @@ def list_repo_files(
         "required": ["repo", "path"]
     },
 )
-@mcp.tool()
 def read_repo_file(
     repo: str,
     path: str,
@@ -1796,7 +1899,6 @@ def read_repo_file(
         "required": ["query"]
     },
 )
-@mcp.tool()
 def search_repo(
     query: str,
     repo: Optional[str] = None,
@@ -1900,7 +2002,6 @@ def search_repo(
         "required": ["query"]
     },
 )
-@mcp.tool()
 def search(
     query: str,
     repo: Optional[str] = None,
@@ -1950,7 +2051,6 @@ def search(
     return {"results": results}
 
 
-@mcp.tool()
 def fetch(doc_id: str) -> Dict[str, object]:
     """
     Deep Research-compatible fetch tool.
@@ -1997,7 +2097,6 @@ def fetch(doc_id: str) -> Dict[str, object]:
 # --------------------------------------------------------------------
 
 
-@mcp.tool()
 def index_repository(
     repo: str,
     force_rebuild: bool = False
@@ -2071,7 +2170,6 @@ def index_repository(
         "required": ["query"]
     },
 )
-@mcp.tool()
 def search_code(
     query: str,
     repo: Optional[str] = None,
@@ -2126,7 +2224,6 @@ def search_code(
     ]
 
 
-@mcp.tool()
 def goto_definition(
     symbol_name: str,
     repo: Optional[str] = None,
@@ -2189,7 +2286,6 @@ def goto_definition(
     ]
 
 
-@mcp.tool()
 def list_symbols(
     repo: str,
     file_path: Optional[str] = None,
@@ -2251,7 +2347,6 @@ def list_symbols(
     ]
 
 
-@mcp.tool()
 def get_index_stats(repo: Optional[str] = None) -> Dict[str, object]:
     """
     Get statistics about the code index.
@@ -2292,7 +2387,6 @@ def get_index_stats(repo: Optional[str] = None) -> Dict[str, object]:
     return {k: v for k, v in stats.items()}
 
 
-@mcp.tool()
 def build_vector_index(
     repo: str,
     force_rebuild: bool = False,
@@ -2378,7 +2472,6 @@ def build_vector_index(
         "required": ["query"]
     },
 )
-@mcp.tool()
 def semantic_search(
     query: str,
     repo: Optional[str] = None,

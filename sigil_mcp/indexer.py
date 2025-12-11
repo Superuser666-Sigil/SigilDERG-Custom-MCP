@@ -22,8 +22,15 @@ from dataclasses import dataclass
 from datetime import datetime
 import numpy as np
 import threading
-import lancedb
-import pyarrow as pa
+
+try:
+    import lancedb  # type: ignore
+    import pyarrow as pa  # type: ignore
+    LANCEDB_AVAILABLE = True
+except ImportError:
+    lancedb = None  # type: ignore
+    pa = None  # type: ignore
+    LANCEDB_AVAILABLE = False
 
 from .config import get_config
 from .schema import get_code_chunk_model
@@ -81,36 +88,49 @@ class SigilIndex:
         self.lance = None
         self.vector_table_name = "code_vectors"
         self.vectors = None
+        self.lancedb_available = LANCEDB_AVAILABLE
 
-        self._embeddings_active = config.embeddings_enabled or self.embed_fn is not None
+        self._embeddings_requested = config.embeddings_enabled or self.embed_fn is not None
+        self._embeddings_active = self._embeddings_requested and self.lancedb_available
         if self.embed_fn is not None and not config.embeddings_enabled:
             logger.warning(
                 "Embedding function provided but embeddings.enabled is False; "
                 "LanceDB will still be initialized for vector storage."
             )
+        if self._embeddings_requested and not self.lancedb_available:
+            logger.warning(
+                "Embeddings requested but LanceDB/pyarrow are not installed. "
+                "Install with `pip install .[lancedb]` or disable embeddings to use "
+                "trigram-only search."
+            )
 
         if self._embeddings_active:
             self._ensure_lance_dir_permissions()
-            self.lance_db = lancedb.connect(self.lance_db_path)
+            self.lance_db = lancedb.connect(self.lance_db_path) if lancedb else None
             self.lance = self.lance_db
             self._code_chunk_model = get_code_chunk_model(self.embedding_dimension)
-            table_names = set(self.lance_db.table_names())
-            target_table = self.vector_table_name
-            if target_table in table_names:
-                self.vectors = self.lance_db.open_table(target_table)
-            elif "code_chunks" in table_names:
-                target_table = "code_chunks"
-                self.vector_table_name = target_table
-                self.vectors = self.lance_db.open_table(target_table)
-            else:
-                self.vectors = self.lance_db.create_table(
-                    target_table, schema=self._code_chunk_model
-                )
+            if self.lance_db is not None:
+                table_names = set(self.lance_db.table_names())
+                target_table = self.vector_table_name
+                if target_table in table_names:
+                    self.vectors = self.lance_db.open_table(target_table)
+                elif "code_chunks" in table_names:
+                    target_table = "code_chunks"
+                    self.vector_table_name = target_table
+                    self.vectors = self.lance_db.open_table(target_table)
+                else:
+                    self.vectors = self.lance_db.create_table(
+                        target_table, schema=self._code_chunk_model
+                    )
             self._sync_embedding_dimension_from_lance()
             self._log_embedding_startup()
             self._warn_on_vector_schema_mismatch()
         else:
             self._code_chunk_model = None
+            self.vectors = None
+
+        self._vector_index_enabled = self._embeddings_active and self.vectors is not None
+        self._log_vector_index_status()
 
         # Global lock to serialize DB access across threads
         # (HTTP handlers + file watcher + vector indexing)
@@ -167,6 +187,12 @@ class SigilIndex:
         """Log embedding provider configuration for visibility at startup."""
 
         if self.vectors is None:
+            logger.info(
+                "Vector index inactive at startup: embeddings_requested=%s, "
+                "lancedb_available=%s",
+                self._embeddings_requested,
+                self.lancedb_available,
+            )
             return
 
         logger.info(
@@ -186,7 +212,7 @@ class SigilIndex:
     def _sync_embedding_dimension_from_lance(self) -> None:
         """Align configured embedding dimension with existing LanceDB schema."""
 
-        if self.vectors is None:
+        if self.vectors is None or pa is None:
             return
 
         try:
@@ -212,7 +238,7 @@ class SigilIndex:
     def _warn_on_vector_schema_mismatch(self) -> None:
         """Warn if the LanceDB schema does not match configured dimensions."""
 
-        if self.vectors is None:
+        if self.vectors is None or pa is None:
             return
 
         try:
@@ -232,6 +258,33 @@ class SigilIndex:
                 self.embedding_dimension,
                 actual_dim,
             )
+    
+    def _log_vector_index_status(self, context: str = "startup") -> None:
+        """Log current vector index availability and size."""
+
+        if self.vectors is None:
+            logger.info(
+                "Vector index unavailable (%s); trigram search will be used.",
+                context,
+            )
+            return
+
+        try:
+            row_count = int(self.vectors.count_rows())
+        except Exception:
+            logger.debug(
+                "Failed to count vector rows during %s status check",
+                context,
+                exc_info=True,
+            )
+            row_count = -1
+
+        logger.info(
+            "Vector index ready (%s): %s indexed chunks at %s",
+            context,
+            row_count,
+            self.lance_db_path,
+        )
     
     def _init_schema(self):
         """Initialize database schema."""
@@ -1328,10 +1381,21 @@ class SigilIndex:
             Statistics about indexing operation
         """
         with self._lock:
+            if not self._embeddings_active or not self.lancedb_available:
+                logger.info(
+                    "Embeddings disabled or LanceDB unavailable; skipping vector index build for %s",
+                    repo,
+                )
+                return {"chunks_indexed": 0, "documents_processed": 0}
+
             if embed_fn is None:
                 embed_fn = self.embed_fn
             if embed_fn is None:
-                raise RuntimeError("No embedding function configured for SigilIndex")
+                logger.warning(
+                    "No embedding function configured for SigilIndex; skipping vector build for %s",
+                    repo,
+                )
+                return {"chunks_indexed": 0, "documents_processed": 0}
             
             model = model or self.embed_model
             
@@ -1391,6 +1455,7 @@ class SigilIndex:
                 stats['documents_processed'],
                 stats['chunks_indexed'],
             )
+            self._log_vector_index_status(context=f"rebuild:{repo}")
             return stats
     
     def semantic_search(
@@ -1417,11 +1482,12 @@ class SigilIndex:
         with self._lock:
             if embed_fn is None:
                 embed_fn = self.embed_fn
-            if embed_fn is None:
-                raise RuntimeError("No embedding function configured")
-
-            if self.vectors is None:
-                raise RuntimeError("Vector index is not available")
+            if embed_fn is None or self.vectors is None:
+                logger.info(
+                    "Semantic search requested but embeddings are unavailable; "
+                    "returning no results."
+                )
+                return []
 
             model = model or self.embed_model
 

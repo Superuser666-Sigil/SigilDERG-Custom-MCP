@@ -13,6 +13,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2025-12-10
+
+### Added
+- Deployment `mode` (dev/prod) with secure defaults, environment override, and startup warnings when production is misconfigured.
+- Readiness endpoint `/readyz` that reports component readiness (config, indexes, embeddings) for orchestrators.
+- Admin API hardening in production: API key required, IP whitelist enforced, and CORS restricted to known Admin UI origins.
+- Optional dependency groups for LanceDB (`.[lancedb]`) and a bundled default stack (`.[server-full]`); Dockerfile installs the default extras.
+- Tests covering mode defaults, readiness, admin API gating, LanceDB handling, and authentication IP whitelist behavior.
+
+### Changed
+- Authentication now enforces IP whitelist checks before local bypass, and authentication failures log explicit reasons.
+- Embedding providers emit clearer install/model error messages and disable embeddings gracefully when a backend/model is missing; `llama.cpp` embeddings now chunk large documents before embedding.
+- Indexer guards LanceDB imports, falls back to trigram search when embeddings/LanceDB are unavailable, and logs vector index status (path and chunk counts) at startup/rebuild.
+- Admin API endpoints return structured errors for locked or misconfigured vector builds; admin endpoints now run inline with the main server process and share a single index instance.
+- Runbook/README updated with dev vs prod guidance, default stack install, and readiness/admin security notes; Dockerfile exposes a model volume mount.
+
+### Fixed
+- Vector rebuild path no longer raises `config` scoping errors (affecting Admin UI vector page).
+- Duplicate MCP tool registration warnings removed by centralizing tool registration.
+
 ## [0.6.0] - 2025-12-09
 
 ### Added

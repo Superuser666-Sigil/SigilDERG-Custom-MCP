@@ -43,8 +43,86 @@ class Config:
         """
         self.config_data: Dict[str, Any] = {}
         self._load_config(config_path)
+        self._mode = self._resolve_mode()
+        self._apply_mode_defaults()
         self._validate_embeddings_dimension()
+        self._warn_if_insecure_prod()
     
+    def _resolve_mode(self) -> str:
+        """Resolve deployment mode from env or config with a safe default."""
+
+        raw_mode = os.getenv("SIGIL_MCP_MODE") or self.config_data.get("mode") or "dev"
+        mode = str(raw_mode).strip().lower()
+        if mode not in {"dev", "prod"}:
+            logger.warning(
+                "Invalid SIGIL_MCP_MODE '%s'; defaulting to 'dev'", raw_mode
+            )
+            mode = "dev"
+        # Persist the normalized mode back to config_data for downstream consumers
+        self.config_data["mode"] = mode
+        return mode
+
+    def _apply_mode_defaults(self) -> None:
+        """Apply security-sensitive defaults based on deployment mode."""
+
+        auth_cfg = self.config_data.setdefault("authentication", {})
+        admin_cfg = self.config_data.setdefault("admin", {})
+
+        dev_defaults = {
+            "allow_local_bypass": True,
+            "enabled": False,
+            "oauth_enabled": True,
+            "require_api_key": False,
+        }
+        prod_defaults = {
+            "allow_local_bypass": False,
+            "enabled": True,
+            "oauth_enabled": True,
+            "require_api_key": True,
+        }
+        defaults = dev_defaults if self._mode == "dev" else prod_defaults
+
+        auth_cfg.setdefault("allow_local_bypass", defaults["allow_local_bypass"])
+        auth_cfg.setdefault("enabled", defaults["enabled"])
+        auth_cfg.setdefault("oauth_enabled", defaults["oauth_enabled"])
+        auth_cfg.setdefault("allowed_ips", auth_cfg.get("allowed_ips", []))
+
+        admin_cfg.setdefault("require_api_key", defaults["require_api_key"])
+        admin_cfg.setdefault("allowed_ips", admin_cfg.get("allowed_ips", ["127.0.0.1", "::1"]))
+
+    def _warn_if_insecure_prod(self) -> None:
+        """Log warnings when production mode uses insecure overrides."""
+
+        if self._mode != "prod":
+            return
+
+        if self.allow_local_bypass:
+            logger.warning(
+                "Production mode with authentication.allow_local_bypass enabled - "
+                "local requests will skip authentication."
+            )
+
+        if not self.auth_enabled:
+            logger.warning(
+                "Production mode with authentication disabled - all requests will bypass auth."
+            )
+
+        if not self.admin_require_api_key:
+            logger.warning(
+                "Production mode with admin.require_api_key disabled - admin endpoints allow unauthenticated access."
+            )
+
+        if not self.admin_api_key:
+            logger.warning(
+                "Production mode without admin.api_key configured - admin API will be unavailable or insecure."
+            )
+
+        if not self.allowed_ips:
+            logger.warning(
+                "Production mode without authentication.allowed_ips configured - "
+                "all client IPs are permitted."
+            )
+
     def _load_config(self, config_path: Optional[Path] = None):
         """Load configuration from file or environment."""
         # Try specified path first
@@ -119,11 +197,20 @@ class Config:
     def _load_from_env(self):
         """Load configuration from environment variables (backward compatibility)."""
         self.config_data = {
+            "mode": os.getenv("SIGIL_MCP_MODE", "dev"),
             "server": {
                 "name": os.getenv("SIGIL_MCP_NAME", "sigil_repos"),
                 "host": os.getenv("SIGIL_MCP_HOST", "127.0.0.1"),
                 "port": int(os.getenv("SIGIL_MCP_PORT", "8000")),
-                "log_level": os.getenv("SIGIL_MCP_LOG_LEVEL", "INFO")
+                "log_level": os.getenv("SIGIL_MCP_LOG_LEVEL", "INFO"),
+                "chatgpt_compliance_enabled": (
+                    os.getenv("SIGIL_MCP_CHATGPT_COMPLIANCE_ENABLED", "true").lower()
+                    == "true"
+                ),
+                "header_logging_enabled": (
+                    os.getenv("SIGIL_MCP_HEADER_LOGGING_ENABLED", "true").lower()
+                    == "true"
+                ),
             },
             "authentication": {
                 "enabled": os.getenv("SIGIL_MCP_AUTH_ENABLED", "true").lower() == "true",
@@ -214,6 +301,14 @@ class Config:
     @property
     def log_level(self) -> str:
         return self.get("server.log_level", "INFO")
+
+    @property
+    def chatgpt_compliance_enabled(self) -> bool:
+        return bool(self.get("server.chatgpt_compliance_enabled", True))
+
+    @property
+    def header_logging_enabled(self) -> bool:
+        return bool(self.get("server.header_logging_enabled", True))
     
     @property
     def log_file(self) -> Optional[str]:
@@ -229,18 +324,25 @@ class Config:
     def allowed_hosts(self) -> list[str]:
         """Get allowed Host header values for DNS rebinding protection."""
         return self.get("server.allowed_hosts", ["*"])
+
+    @property
+    def mode(self) -> str:
+        return self._mode
     
     @property
     def auth_enabled(self) -> bool:
-        return self.get("authentication.enabled", True)
+        default = False if self._mode == "dev" else True
+        return bool(self.get("authentication.enabled", default))
     
     @property
     def oauth_enabled(self) -> bool:
-        return self.get("authentication.oauth_enabled", True)
+        default = True
+        return bool(self.get("authentication.oauth_enabled", default))
     
     @property
     def allow_local_bypass(self) -> bool:
-        return self.get("authentication.allow_local_bypass", True)
+        default = True if self._mode == "dev" else False
+        return bool(self.get("authentication.allow_local_bypass", default))
     
     @property
     def allowed_ips(self) -> list:
@@ -422,7 +524,8 @@ class Config:
 
     @property
     def admin_require_api_key(self) -> bool:
-        return self.get("admin.require_api_key", True)
+        default = False if self._mode == "dev" else True
+        return bool(self.get("admin.require_api_key", default))
 
 
 # Global config instance

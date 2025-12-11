@@ -69,6 +69,9 @@ pip install -e .[embeddings-llamacpp-metal]    # Apple Silicon (Metal)
 
 # Or install all embedding providers (not recommended)
 pip install -e .[embeddings-all]
+
+# Everything for the default stack (Llama.cpp + LanceDB + watcher)
+pip install -e .[server-full]
 ```
 
 Default embedding runtime: `llamacpp` with Jina v2 code embeddings (768-dim) at `/home/dave/models/jina/jina-embeddings-v2-base-code-Q4_K_M.gguf`.
@@ -79,6 +82,70 @@ Install Universal Ctags for symbol extraction (optional but recommended):
 **macOS:** `brew install universal-ctags`
 **Ubuntu/Debian:** `sudo apt install universal-ctags`
 **Arch Linux:** `sudo pacman -S ctags`
+
+### Default stack (Llama.cpp + Jina + LanceDB)
+
+1. Install dependencies: `pip install -e .[server-full]`.
+2. Download the Jina code embedding model (e.g., `jina-embeddings-v2-base-code-Q4_K_M.gguf`) into `./models/` (or set `SIGIL_MCP_MODELS`/`embeddings.model` to your path).
+3. Enable embeddings in `config.json`:
+
+```json
+{
+  "mode": "dev",
+  "embeddings": {
+    "enabled": true,
+    "provider": "llamacpp",
+    "model": "./models/jina-embeddings-v2-base-code-Q4_K_M.gguf"
+  },
+  "authentication": {
+    "enabled": false,
+    "allow_local_bypass": true
+  }
+}
+```
+
+4. Start the server: `SIGIL_MCP_MODE=dev sigil-mcp`. Check `/readyz` for a 200 once indexes and models are ready.
+
+When embeddings are disabled or LanceDB is missing, the server falls back to trigram search and logs the reason so you can fix it later.
+
+### Dev vs Prod
+
+Set `SIGIL_MCP_MODE` (or `mode` in `config.json`) to switch security defaults:
+
+- `dev` (default): authentication disabled, local bypass allowed, admin API key optional.
+- `prod`: authentication enabled, local bypass disabled, admin API requires an API key and IP whitelist. Insecure overrides log warnings at startup.
+
+Recommended production snippet:
+
+```json
+{
+  "mode": "prod",
+  "authentication": {
+    "enabled": true,
+    "allow_local_bypass": false
+  },
+  "admin": {
+    "enabled": true,
+    "require_api_key": true,
+    "api_key": "generate-and-set-this",
+    "allowed_ips": ["127.0.0.1"]
+  }
+}
+```
+
+### Admin API and readiness
+
+- `/readyz` returns 200 only when config is loaded, indexes are open, and embeddings are initialized (when enabled); otherwise 503.
+- In production, the Admin API returns 503 unless `admin.api_key` is set and the request comes from an allowed IP. CORS is limited to known admin UI hosts (no wildcards).
+
+### Hardware guidance
+
+- CPU-only works for trigram search and small Llama.cpp models; vector indexing benefits from fast SSDs and >8GB RAM.
+- GPU (CUDA/ROCm/Metal) improves embedding throughput; install the matching `embeddings-llamacpp-*` extra.
+
+### Contributing & licensing
+
+Contributions are welcome, but submitting code means agreeing to the CLA in `CLA.md` and licensing changes under AGPLv3. See `CONTRIBUTING.md` for the full process and links.
 
 ### Configuration
 

@@ -71,96 +71,114 @@ def create_embedding_provider(  # noqa: C901
         ValueError: If provider is unknown or configuration is invalid
         ImportError: If required dependencies are not installed
     """
-    if provider == "sentence-transformers":
-        st_available = SENTENCE_TRANSFORMERS_AVAILABLE or SentenceTransformer is not None
-        if not st_available:
-            raise ImportError(
-                "sentence-transformers is required for this provider. "
-                "Install it with: pip install sentence-transformers"
+    try:
+        if provider == "sentence-transformers":
+            st_available = SENTENCE_TRANSFORMERS_AVAILABLE or SentenceTransformer is not None
+            if not st_available:
+                raise ImportError(
+                    "sentence-transformers is required for this provider. "
+                    "Install it with: pip install sentence-transformers"
+                )
+
+            cache_dir = kwargs.get("cache_dir")
+            logger.info(f"Loading sentence-transformers model: {model}")
+            # Pylance/static analysis can't infer that SentenceTransformer is non-None
+            # after the ImportError guard. Explicitly assert to help type-checkers.
+            assert SentenceTransformer is not None, "sentence-transformers not installed"
+            model_obj = SentenceTransformer(model, cache_folder=cache_dir)
+
+            class STProvider:
+                def __init__(self, model: "SentenceTransformerType", dim: int) -> None:
+                    self.model = model
+                    self.dimension = dim
+
+                def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                    embeddings = self.model.encode(texts, convert_to_numpy=True)
+                    return embeddings.tolist()
+
+                def embed_query(self, text: str) -> list[float]:
+                    embedding = self.model.encode([text], convert_to_numpy=True)
+                    return embedding[0].tolist()
+
+                def get_dimension(self) -> int:
+                    return self.dimension
+
+            return STProvider(model_obj, dimension)
+
+        elif provider == "openai":
+            openai_available = OPENAI_AVAILABLE or OpenAI is not None
+            if not openai_available:
+                raise ImportError(
+                    "openai is required for this provider. "
+                    "Install it with: pip install openai"
+                )
+
+            api_key = kwargs.get("api_key")
+            if not api_key:
+                raise ValueError("OpenAI API key is required")
+
+            # Pylance/static analysis can't infer OpenAI is non-None after the guard.
+            assert OpenAI is not None, "openai package not installed"
+            client = OpenAI(api_key=api_key)
+
+            class OpenAIProvider:
+                def __init__(
+                    self, client: "OpenAIType", model: str, dim: int
+                ) -> None:
+                    self.client = client
+                    self.model = model
+                    self.dimension = dim
+
+                def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                    response = self.client.embeddings.create(
+                        input=texts, model=self.model
+                    )
+                    return [item.embedding for item in response.data]
+
+                def embed_query(self, text: str) -> list[float]:
+                    response = self.client.embeddings.create(
+                        input=[text], model=self.model
+                    )
+                    return response.data[0].embedding
+
+                def get_dimension(self) -> int:
+                    return self.dimension
+
+            return OpenAIProvider(client, model, dimension)
+
+        elif provider == "llamacpp":
+            from .llamacpp_provider import LlamaCppEmbeddingProvider
+
+            # model is the path to the GGUF file
+            model_path = Path(model).expanduser()
+            return LlamaCppEmbeddingProvider(
+                model_path=model_path,
+                dimension=dimension,
+                **kwargs,
             )
 
-        cache_dir = kwargs.get("cache_dir")
-        logger.info(f"Loading sentence-transformers model: {model}")
-        # Pylance/static analysis can't infer that SentenceTransformer is non-None
-        # after the ImportError guard. Explicitly assert to help type-checkers.
-        assert SentenceTransformer is not None, "sentence-transformers not installed"
-        model_obj = SentenceTransformer(model, cache_folder=cache_dir)
-
-        class STProvider:
-            def __init__(self, model: "SentenceTransformerType", dim: int) -> None:
-                self.model = model
-                self.dimension = dim
-
-            def embed_documents(self, texts: list[str]) -> list[list[float]]:
-                embeddings = self.model.encode(texts, convert_to_numpy=True)
-                return embeddings.tolist()
-
-            def embed_query(self, text: str) -> list[float]:
-                embedding = self.model.encode([text], convert_to_numpy=True)
-                return embedding[0].tolist()
-
-            def get_dimension(self) -> int:
-                return self.dimension
-
-        return STProvider(model_obj, dimension)
-
-    elif provider == "openai":
-        openai_available = OPENAI_AVAILABLE or OpenAI is not None
-        if not openai_available:
-            raise ImportError(
-                "openai is required for this provider. "
-                "Install it with: pip install openai"
+        else:
+            raise ValueError(
+                f"Unknown embedding provider: {provider}. "
+                "Supported providers: sentence-transformers, openai, llamacpp"
             )
-
-        api_key = kwargs.get("api_key")
-        if not api_key:
-            raise ValueError("OpenAI API key is required")
-
-        # Pylance/static analysis can't infer OpenAI is non-None after the guard.
-        assert OpenAI is not None, "openai package not installed"
-        client = OpenAI(api_key=api_key)
-
-        class OpenAIProvider:
-            def __init__(
-                self, client: "OpenAIType", model: str, dim: int
-            ) -> None:
-                self.client = client
-                self.model = model
-                self.dimension = dim
-
-            def embed_documents(self, texts: list[str]) -> list[list[float]]:
-                response = self.client.embeddings.create(
-                    input=texts, model=self.model
-                )
-                return [item.embedding for item in response.data]
-
-            def embed_query(self, text: str) -> list[float]:
-                response = self.client.embeddings.create(
-                    input=[text], model=self.model
-                )
-                return response.data[0].embedding
-
-            def get_dimension(self) -> int:
-                return self.dimension
-
-        return OpenAIProvider(client, model, dimension)
-
-    elif provider == "llamacpp":
-        from .llamacpp_provider import LlamaCppEmbeddingProvider
-
-        # model is the path to the GGUF file
-        model_path = Path(model).expanduser()
-        return LlamaCppEmbeddingProvider(
-            model_path=model_path,
-            dimension=dimension,
-            **kwargs,
+    except ImportError as exc:
+        logger.error(
+            "Embedding provider '%s' missing dependencies: %s. "
+            "Install the appropriate optional extras (e.g., pip install .[embeddings-llamacpp-cpu] "
+            "or .[embeddings-sentencetransformers]).",
+            provider,
+            exc,
         )
-
-    else:
-        raise ValueError(
-            f"Unknown embedding provider: {provider}. "
-            "Supported providers: sentence-transformers, openai, llamacpp"
+        raise
+    except FileNotFoundError as exc:
+        logger.error(
+            "Embedding model file not found: %s. Place the model under ./models or "
+            "set embeddings.model to a valid path. Default Jina GGUF instructions are "
+            "documented in README.",
+            exc,
         )
+        raise
 
 
 __all__ = ["EmbeddingProvider", "create_embedding_provider"]

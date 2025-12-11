@@ -42,6 +42,7 @@ def _get_admin_cfg() -> Dict[str, Any]:
         "api_key": _config.admin_api_key,
         "require_api_key": _config.admin_require_api_key,
         "allowed_ips": _config.admin_allowed_ips,
+        "mode": _config.mode,
     }
 
 
@@ -68,6 +69,15 @@ async def require_admin(request: Request) -> Optional[JSONResponse]:
         logger.warning("Admin API called but admin.enabled=false")
         return JSONResponse({"error": "admin_disabled"}, status_code=503)
 
+    if cfg["mode"] == "prod" and not cfg.get("api_key"):
+        logger.error(
+            "Admin API is unavailable in production mode without admin.api_key configured"
+        )
+        return JSONResponse(
+            {"error": "admin_api_key_required", "detail": "Configure admin.api_key"},
+            status_code=503,
+        )
+
     if not _is_allowed_ip(client_ip):
         logger.warning("Admin access denied from IP %r", client_ip)
         return JSONResponse(
@@ -76,7 +86,7 @@ async def require_admin(request: Request) -> Optional[JSONResponse]:
         )
 
     api_key = cfg.get("api_key")
-    require_api_key = cfg.get("require_api_key", True)
+    require_api_key = True if cfg.get("mode") == "prod" else cfg.get("require_api_key", True)
     header_key = (
         request.headers.get("x-admin-key")
         or request.headers.get("X-Admin-Key")
@@ -106,6 +116,7 @@ async def require_admin(request: Request) -> Optional[JSONResponse]:
 
 
 async def admin_status(request: Request) -> Response:
+    """Return server/admin/index status or error if admin gate fails."""
     if (resp := await require_admin(request)) is not None:
         return resp
 
@@ -134,6 +145,7 @@ async def admin_status(request: Request) -> Response:
 
 
 async def admin_index_rebuild(request: Request) -> Response:
+    """Trigger trigram/symbol rebuild via admin API with lock+retry semantics."""
     if (resp := await require_admin(request)) is not None:
         return resp
 
@@ -204,6 +216,7 @@ async def admin_index_rebuild(request: Request) -> Response:
 
 
 async def admin_index_stats(request: Request) -> Response:
+    """Return index statistics for all repos or a specific repo."""
     if (resp := await require_admin(request)) is not None:
         return resp
 
@@ -246,6 +259,7 @@ async def admin_index_stats(request: Request) -> Response:
 
 
 async def admin_vector_rebuild(request: Request) -> Response:
+    """Trigger embedding rebuild for one/all repos with retry on database locks."""
     if (resp := await require_admin(request)) is not None:
         return resp
 
@@ -346,6 +360,7 @@ async def admin_vector_rebuild(request: Request) -> Response:
 
 
 async def admin_logs_tail(request: Request) -> Response:
+    """Tail the configured log file (or return guidance when not configured)."""
     if (resp := await require_admin(request)) is not None:
         return resp
 
@@ -412,6 +427,7 @@ async def admin_logs_tail(request: Request) -> Response:
 
 
 async def admin_config_view(request: Request) -> Response:
+    """Expose the raw config (read-only) for debugging."""
     if (resp := await require_admin(request)) is not None:
         return resp
 
@@ -451,12 +467,18 @@ routes = [
 app = Starlette(debug=False, routes=routes)
 
 # CORS for local development (needed before Stage 2 UI will work)
+# Never permit wildcard origins; tighten defaults for production.
+_base_admin_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+_prod_admin_origins = [
+    origin for origin in _base_admin_origins if "localhost" not in origin
+] or _base_admin_origins
+_allowed_origins = _base_admin_origins if _config.mode == "dev" else _prod_admin_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=_allowed_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],

@@ -69,9 +69,27 @@ def _wrap_for_chatgpt(mcp_server: FastMCP) -> None:
         )
 
 
-def build_mcp_app(config: Config | None = None) -> FastMCP:
+def build_mcp_app(
+    config: Config | None = None,
+    *,
+    enable_chatgpt_compliance: bool | None = None,
+    enable_header_logging: bool | None = None,
+) -> FastMCP:
+    """Construct the FastMCP app with optional middleware toggles."""
+
     config = config or get_config()
     _configure_logging(config)
+
+    apply_chatgpt_mw = (
+        config.chatgpt_compliance_enabled
+        if enable_chatgpt_compliance is None
+        else enable_chatgpt_compliance
+    )
+    apply_header_logging = (
+        config.header_logging_enabled
+        if enable_header_logging is None
+        else enable_header_logging
+    )
 
     transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
@@ -82,9 +100,12 @@ def build_mcp_app(config: Config | None = None) -> FastMCP:
         transport_security=transport_security,
     )
 
-    _wrap_for_chatgpt(mcp)
+    if apply_chatgpt_mw:
+        _wrap_for_chatgpt(mcp)
+    else:
+        logger.info("ChatGPTComplianceMiddleware disabled by configuration")
 
-    if not config.admin_enabled:
+    if apply_header_logging and not config.admin_enabled:
         underlying_app = getattr(mcp, "app", None) or getattr(mcp, "asgi_app", None)
         if underlying_app is not None:
             wrapped_app = HeaderLoggingASGIMiddleware(underlying_app)
@@ -101,7 +122,7 @@ def build_mcp_app(config: Config | None = None) -> FastMCP:
             )
     else:
         logger.info(
-            "Admin API enabled - header logging middleware will be applied to parent app"
+            "Header logging middleware disabled or admin API enabled - skipping"
         )
 
     return mcp

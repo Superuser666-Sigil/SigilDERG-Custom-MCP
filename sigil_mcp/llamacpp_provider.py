@@ -10,7 +10,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, List
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,10 @@ class LlamaCppEmbeddingProvider:
             **kwargs: Additional arguments passed to Llama constructor
         """
         if not LLAMACPP_AVAILABLE and Llama is None:
+            logger.error(
+                "llama-cpp-python is required for LlamaCppEmbeddingProvider. "
+                "Install it with: pip install llama-cpp-python or pip install .[embeddings-llamacpp-cpu]"
+            )
             raise ImportError(
                 "llama-cpp-python is required for LlamaCppEmbeddingProvider. "
                 "Install it with: pip install llama-cpp-python"
@@ -61,6 +65,12 @@ class LlamaCppEmbeddingProvider:
 
         self.model_path = Path(model_path).expanduser()
         if not self.model_path.exists():
+            logger.error(
+                "Llama.cpp model not found at %s. "
+                "Place the Jina GGUF (or configured model) under ./models "
+                "or update embeddings.model.",
+                self.model_path,
+            )
             raise FileNotFoundError(f"Model file not found: {model_path}")
 
         self.dimension = dimension
@@ -79,6 +89,27 @@ class LlamaCppEmbeddingProvider:
 
         logger.info("Llama.cpp model loaded successfully")
 
+    def _combine_embeddings(self, vectors: List[Iterable[float]]) -> list[float]:
+        """Average multiple embedding vectors to keep output size consistent."""
+
+        if not vectors:
+            return []
+        vectors_list = [list(v) for v in vectors]
+        length = len(vectors_list[0])
+        totals = [0.0] * length
+        for vec in vectors_list:
+            if len(vec) != length:
+                logger.warning(
+                    "Embedding length mismatch while combining segments; "
+                    "skipping inconsistent vector"
+                )
+                continue
+            for idx, val in enumerate(vec):
+                totals[idx] += float(val)
+
+        count = max(1, len(vectors_list))
+        return [val / count for val in totals]
+
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for a list of documents.
         
@@ -90,20 +121,32 @@ class LlamaCppEmbeddingProvider:
         """
         embeddings = []
         for i, text in enumerate(texts):
-            # Truncate text to avoid context overflow
-            # Reserve some tokens for prompt formatting
             max_chars = self.llm.n_ctx() * 3  # Rough estimate: ~3 chars per token
-            if len(text) > max_chars:
-                text = text[:max_chars]
-                logger.debug(f"Truncated text {i+1}/{len(texts)} to {max_chars} characters")
+            segments = [text[j : j + max_chars] for j in range(0, len(text), max_chars)] or [text]
+            segment_vectors: List[list[float]] = []
+            for segment in segments:
+                try:
+                    result = self.llm.embed(segment)
+                except Exception:
+                    logger.exception("Failed to embed segment %s/%s", i + 1, len(texts))
+                    continue
+                if isinstance(result, tuple):
+                    segment_vectors.append(list(result[0]))  # type: ignore
+                else:
+                    segment_vectors.append(list(result))  # type: ignore
 
-            # Generate embedding
-            result = self.llm.embed(text)
-            # Handle different return types from llama.cpp
-            if isinstance(result, tuple):
-                embeddings.append(result[0])  # type: ignore
+            if not segment_vectors:
+                logger.warning("No embeddings produced for document %s", i + 1)
+                embeddings.append([])
+            elif len(segment_vectors) == 1:
+                embeddings.append(segment_vectors[0])
             else:
-                embeddings.append(result)  # type: ignore
+                logger.debug(
+                    "Combined %s embedding segments for document %s",
+                    len(segment_vectors),
+                    i + 1,
+                )
+                embeddings.append(self._combine_embeddings(segment_vectors))
             
             if (i + 1) % 10 == 0:
                 logger.info(f"Generated embeddings for {i+1}/{len(texts)} documents")
@@ -119,17 +162,24 @@ class LlamaCppEmbeddingProvider:
         Returns:
             Embedding vector
         """
-        # Truncate if needed
         max_chars = self.llm.n_ctx() * 3
-        if len(text) > max_chars:
-            text = text[:max_chars]
-            logger.debug(f"Truncated query to {max_chars} characters")
+        segments = [text[j : j + max_chars] for j in range(0, len(text), max_chars)] or [text]
+        vectors: List[list[float]] = []
+        for segment in segments:
+            result = self.llm.embed(segment)
+            if isinstance(result, tuple):
+                vectors.append(list(result[0]))  # type: ignore
+            else:
+                vectors.append(list(result))  # type: ignore
 
-        result = self.llm.embed(text)
-        # Handle different return types from llama.cpp
-        if isinstance(result, tuple):
-            return result[0]  # type: ignore
-        return result  # type: ignore
+        if not vectors:
+            return []
+
+        if len(vectors) == 1:
+            return vectors[0]
+
+        logger.debug("Combined %s query segments into averaged embedding", len(vectors))
+        return self._combine_embeddings(vectors)
 
     def get_dimension(self) -> int:
         """Get the embedding dimension."""

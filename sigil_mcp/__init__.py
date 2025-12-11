@@ -16,7 +16,7 @@ Provides IDE-like code search and navigation capabilities via MCP, including:
 - OAuth 2.0 authentication for remote access
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 __author__ = "Sigil DERG"
 
 from sigil_mcp.indexer import SigilIndex, Symbol, SearchResult

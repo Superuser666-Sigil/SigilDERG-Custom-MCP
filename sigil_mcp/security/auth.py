@@ -18,6 +18,7 @@ class AuthSettings:
     oauth_enabled: bool
     allow_local_bypass: bool
     allowed_ips: Sequence[str]
+    mode: str = "dev"
 
 
 def get_auth_settings(config=None) -> AuthSettings:
@@ -35,6 +36,7 @@ def get_auth_settings(config=None) -> AuthSettings:
         oauth_enabled=config.oauth_enabled,
         allow_local_bypass=config.allow_local_bypass,
         allowed_ips=allowed_ips,
+        mode=config.mode,
     )
 
 
@@ -110,11 +112,35 @@ def check_authentication(
 
     settings = settings or get_auth_settings()
 
+    allowed_ips = [ip for ip in settings.allowed_ips if ip]
+    if allowed_ips:
+        if not client_ip:
+            logger.warning(
+                "Authentication failed - client IP missing while whitelist enforced"
+            )
+            return False
+        if client_ip not in allowed_ips:
+            logger.warning("Authentication failed - IP %s not allowed", client_ip)
+            return False
+
     if settings.allow_local_bypass and is_local_connection(client_ip):
-        logger.debug("Local connection - bypassing authentication")
+        if settings.mode == "prod":
+            logger.warning(
+                "Local authentication bypass accepted while mode=prod for IP %s",
+                client_ip,
+            )
+        else:
+            logger.info("Local connection - bypassing authentication for %s", client_ip)
         return True
 
     if not settings.auth_enabled:
+        if settings.mode == "prod":
+            logger.warning(
+                "Authentication disabled while running in production mode; "
+                "all requests will be accepted."
+            )
+        else:
+            logger.debug("Authentication disabled by configuration")
         return True
 
     if settings.oauth_enabled and request_headers:
@@ -131,10 +157,15 @@ def check_authentication(
                 if oauth_manager.verify_token(token):
                     logger.debug("OAuth token valid")
                     return True
+                logger.warning("Authentication failed - invalid bearer token")
+        else:
+            logger.debug("Authentication: no Authorization header present")
 
     api_key = extract_api_key_from_headers(request_headers)
     if api_key and api_key_is_valid(api_key):
         return True
+    elif api_key:
+        logger.warning("Authentication failed - provided API key is invalid")
 
     logger.warning("Authentication failed - no valid credentials provided")
     return False
@@ -151,8 +182,8 @@ def check_ip_whitelist(
 
     settings = settings or get_auth_settings()
 
-    allowed_ips = settings.allowed_ips
-    if not allowed_ips or not allowed_ips[0]:
+    allowed_ips = [ip for ip in settings.allowed_ips if ip]
+    if not allowed_ips:
         return True
 
     if client_ip in allowed_ips:
