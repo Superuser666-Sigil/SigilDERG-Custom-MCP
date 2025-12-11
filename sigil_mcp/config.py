@@ -481,7 +481,22 @@ class Config:
             "cache_dir",
             "api_key",
         }
-        return {k: v for k, v in embeddings_config.items() if k not in known_keys}
+        kwargs = {k: v for k, v in embeddings_config.items() if k not in known_keys}
+        # Provide a sane default for llama.cpp GPU offload if not explicitly set
+        kwargs.setdefault("n_gpu_layers", self.embeddings_n_gpu_layers)
+        return kwargs
+
+    @property
+    def embeddings_n_gpu_layers(self) -> int:
+        """Default GPU offload layers for llama.cpp embeddings."""
+        raw = self.get("embeddings.n_gpu_layers", 999)
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid embeddings.n_gpu_layers '%s', defaulting to 999", raw
+            )
+            return 999
     
     @property
     def repositories(self) -> Dict[str, str]:
@@ -499,6 +514,11 @@ class Config:
         if path_str:
             return Path(path_str).expanduser().resolve()
         return self.index_path / "lancedb"
+
+    @property
+    def index_allow_vector_schema_overwrite(self) -> bool:
+        """Allow overwriting the vector table on embedding dimension mismatch."""
+        return bool(self.get("index.allow_vector_schema_overwrite", True))
     
     # --- Admin API configuration ---
 

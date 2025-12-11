@@ -20,6 +20,7 @@ from typing import List, Optional, Set, Callable, Sequence
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from time import perf_counter
 import numpy as np
 import threading
 
@@ -76,10 +77,12 @@ class SigilIndex:
         self.index_path.mkdir(parents=True, exist_ok=True)
         self.embed_fn = embed_fn
         self.embed_model = embed_model
+        self._embedding_init_failed = False
 
         config = get_config()
         self.embedding_dimension = config.embeddings_dimension
         self.embedding_provider = config.embeddings_provider
+        self.allow_vector_schema_overwrite = config.index_allow_vector_schema_overwrite
         if config.index_path == self.index_path:
             self.lance_db_path = config.lance_dir
         else:
@@ -89,6 +92,12 @@ class SigilIndex:
         self.vector_table_name = "code_vectors"
         self.vectors = None
         self.lancedb_available = LANCEDB_AVAILABLE
+        self._vector_index_stale = False
+
+        # If embeddings are enabled via config but no embed_fn was provided,
+        # try to initialize one automatically so semantic search works out-of-the-box.
+        if self.embed_fn is None and config.embeddings_enabled:
+            self._auto_initialize_embed_fn_from_config(config)
 
         self._embeddings_requested = config.embeddings_enabled or self.embed_fn is not None
         self._embeddings_active = self._embeddings_requested and self.lancedb_available
@@ -162,6 +171,62 @@ class SigilIndex:
         )  # 60 seconds in milliseconds
         
         self._init_schema()
+        self._check_vector_repo_alignment()
+
+    def _auto_initialize_embed_fn_from_config(self, config) -> None:
+        """Initialize an embedding function from config when none is provided."""
+
+        provider = config.embeddings_provider
+        model = config.embeddings_model
+
+        if not provider or not model:
+            logger.info(
+                "Embeddings enabled but provider/model not configured; "
+                "semantic search will remain disabled until configured."
+            )
+            return
+
+        # Ensure we reflect the configured model in logs even if initialization fails
+        if self.embed_model in {"none", "local"}:
+            self.embed_model = f"{provider}:{model}"
+
+        try:
+            # Import lazily so we only pull heavy deps when needed
+            from .embeddings import create_embedding_provider
+
+            kwargs = dict(config.embeddings_kwargs)
+            if config.embeddings_cache_dir:
+                kwargs["cache_dir"] = config.embeddings_cache_dir
+            if provider == "openai" and config.embeddings_api_key:
+                kwargs["api_key"] = config.embeddings_api_key
+
+            provider_impl = create_embedding_provider(
+                provider=provider,
+                model=model,
+                dimension=self.embedding_dimension,
+                **kwargs,
+            )
+
+            def _embed(texts: Sequence[str]) -> np.ndarray:
+                embeddings_list = provider_impl.embed_documents(list(texts))
+                return np.asarray(embeddings_list, dtype="float32")
+
+            self.embed_fn = _embed
+            self.embed_model = f"{provider}:{model}"
+            logger.info(
+                "Initialized embedding provider from config: provider=%s model=%s dim=%s",
+                provider,
+                model,
+                self.embedding_dimension,
+            )
+        except Exception:
+            self._embedding_init_failed = True
+            logger.exception(
+                "Failed to initialize embedding provider (provider=%s, model=%s); "
+                "semantic search will be unavailable until an embed_fn is provided.",
+                provider,
+                model,
+            )
 
     def _ensure_lance_dir_permissions(self) -> None:
         """Create the LanceDB path and align its permissions to the index dir."""
@@ -285,6 +350,61 @@ class SigilIndex:
             row_count,
             self.lance_db_path,
         )
+
+    def _sample_vector_repo_ids(self, limit: int = 200) -> Set[str]:
+        """Read a small sample of repo_ids from LanceDB for sanity checks."""
+
+        if self.vectors is None:
+            return set()
+
+        try:
+            if hasattr(self.vectors, "to_list"):
+                # Older LanceDB versions exposed to_list on LanceTable
+                rows = self.vectors.to_list(limit=limit)
+            else:
+                # Newer versions expose head() on LanceTable and to_list() on queries
+                table = self.vectors.head(limit)
+                rows = table.to_pylist() if table is not None else []
+        except Exception:
+            logger.exception("Failed to sample repo_ids from vector table")
+            return set()
+
+        return {
+            str(r.get("repo_id"))
+            for r in rows
+            if r.get("repo_id") is not None
+        }
+
+    def _check_vector_repo_alignment(self) -> None:
+        """
+        Detect repo-id drift between LanceDB and repos.db.
+
+        If repo IDs in the vector table do not overlap any known repos,
+        semantic search is marked stale to avoid silently returning no results.
+        """
+
+        if not self._vector_index_enabled or self.vectors is None:
+            return
+
+        repo_ids = {
+            str(row[0])
+            for row in self.repos_db.execute("SELECT id FROM repos")
+        }
+        sample_repo_ids = self._sample_vector_repo_ids()
+
+        if not repo_ids or not sample_repo_ids:
+            return
+
+        if sample_repo_ids.isdisjoint(repo_ids):
+            self._vector_index_stale = True
+            logger.warning(
+                "Vector index appears stale: repo_ids in LanceDB=%s do not "
+                "match repos table ids=%s. Semantic search will be disabled "
+                "until the vector index is rebuilt (remove LanceDB dir or "
+                "trigger rebuild_embeddings).",
+                sorted(sample_repo_ids),
+                sorted(repo_ids),
+            )
     
     def _init_schema(self):
         """Initialize database schema."""
@@ -303,7 +423,7 @@ class SigilIndex:
                 id INTEGER PRIMARY KEY,
                 repo_id INTEGER,
                 path TEXT,
-                blob_sha TEXT UNIQUE,
+                blob_sha TEXT,
                 size INTEGER,
                 language TEXT,
                 FOREIGN KEY(repo_id) REFERENCES repos(id)
@@ -313,6 +433,12 @@ class SigilIndex:
         self.repos_db.execute("""
             CREATE INDEX IF NOT EXISTS idx_doc_path 
             ON documents(repo_id, path)
+        """)
+
+        # Ensure blob_sha is indexed (but not unique) for reuse/lookups
+        self.repos_db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_doc_blob_sha
+            ON documents(blob_sha)
         """)
         
         # Symbol index for IDE-like features
@@ -598,24 +724,43 @@ class SigilIndex:
             # Register or update repo
             cursor = self.repos_db.cursor()
             cursor.execute(
-                "INSERT OR REPLACE INTO repos (name, path, indexed_at) "
-                "VALUES (?, ?, ?)",
+                """
+                INSERT INTO repos (name, path, indexed_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    path=excluded.path,
+                    indexed_at=excluded.indexed_at
+                """,
                 (repo_name, str(repo_path), datetime.now().isoformat()),
             )
-            repo_id = cursor.lastrowid
-            if not repo_id:
-                # Repo already exists, get its ID
-                cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
-                repo_id = cursor.fetchone()[0]
+            # Preserve stable repo_id (INSERT ... ON CONFLICT does not replace row)
+            cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
+            repo_id = cursor.fetchone()[0]
             
-            # Clear old trigram data if forcing rebuild
+            # Clear old repo-scoped data if forcing rebuild
             if force:
-                logger.info(f"Force rebuild: clearing old index data for {repo_name}")
+                cursor.execute(
+                    "SELECT id FROM documents WHERE repo_id = ?",
+                    (repo_id,),
+                )
+                old_doc_ids = {row[0] for row in cursor.fetchall()}
+                logger.info(
+                    "Force rebuild: clearing old index data for %s (%s docs)",
+                    repo_name,
+                    len(old_doc_ids),
+                )
+
+                if old_doc_ids:
+                    placeholders = ",".join("?" for _ in old_doc_ids)
+                    cursor.execute(
+                        f"DELETE FROM symbols WHERE doc_id IN ({placeholders})",
+                        tuple(old_doc_ids),
+                    )
                 cursor.execute(
                     "DELETE FROM documents WHERE repo_id = ?", (repo_id,)
                 )
-                # Trigrams will be rebuilt entirely
-                self.trigrams_db.execute("DELETE FROM trigrams")
+                # Remove only this repo's postings from trigram index
+                self._remove_trigrams_for_doc_ids(old_doc_ids)
             
             # Index all files
             file_extensions = {
@@ -672,25 +817,38 @@ class SigilIndex:
             text = content.decode("utf-8", errors="replace")
             blob_sha = hashlib.sha256(content).hexdigest()
             rel_path = file_path.relative_to(repo_root).as_posix()
-            
-            # Check if already indexed
             cursor = self.repos_db.cursor()
+
+            # Check if this repo/path is already indexed
             cursor.execute(
-                "SELECT id FROM documents WHERE blob_sha = ?", (blob_sha,)
+                "SELECT id, blob_sha FROM documents WHERE repo_id = ? AND path = ?",
+                (repo_id, rel_path),
             )
             existing = cursor.fetchone()
-            
+
             if existing:
-                # Update path mapping if needed
-                cursor.execute("""
-                    UPDATE documents SET repo_id = ?, path = ?, language = ?
-                    WHERE blob_sha = ?
-                """, (repo_id, rel_path, language, blob_sha))
-                return None  # Already indexed, skip
-            
-            # Store document metadata
-            # Remove any existing document rows for this repo/path (stale entries)
-            # This avoids returning an old doc_id that points to a previous blob_sha
+                existing_doc_id, existing_blob = existing
+                if existing_blob == blob_sha:
+                    # Already indexed with same content; refresh metadata and skip work
+                    cursor.execute(
+                        "UPDATE documents SET language = ?, size = ? WHERE id = ?",
+                        (language, len(content), existing_doc_id),
+                    )
+                    self._update_vector_metadata_for_doc(
+                        doc_id=existing_doc_id,
+                        repo_id=repo_id,
+                        rel_path=rel_path,
+                    )
+                    return None
+
+                # Path is the same but content changed: clean up old symbols/vectors/doc
+                self._delete_symbols_and_embeddings_for_doc(
+                    existing_doc_id, repo_id, rel_path
+                )
+                cursor.execute("DELETE FROM documents WHERE id = ?", (existing_doc_id,))
+
+            # Store document metadata (repo/path scoped; blob_sha can be reused across repos)
+            # Remove any additional stale rows for this repo/path just in case
             try:
                 cursor.execute(
                     "SELECT id FROM documents WHERE repo_id = ? AND path = ?",
@@ -698,14 +856,11 @@ class SigilIndex:
                 )
                 rows = cursor.fetchall()
                 for (old_doc_id,) in rows:
-                    # remove symbols referencing the old doc and any stale vectors
                     self._delete_symbols_and_embeddings_for_doc(
                         old_doc_id, repo_id, rel_path
                     )
-                    # remove the old document row
                     cursor.execute("DELETE FROM documents WHERE id = ?", (old_doc_id,))
             except Exception:
-                # Be defensive; if cleanup fails, continue (we'll still insert)
                 logger.exception("Failed to cleanup old document rows for %s", rel_path)
 
             cursor.execute("""
@@ -855,6 +1010,67 @@ class SigilIndex:
         
         self.trigrams_db.commit()
         return len(trigram_map)
+
+    def _remove_trigrams_for_doc_ids(self, doc_ids: Set[int]) -> None:
+        """
+        Remove trigram postings that reference the provided document IDs.
+
+        This lets us rebuild a single repo without wiping trigram data for
+        every other repo.
+        """
+        if not doc_ids:
+            return
+
+        cursor = self.trigrams_db.cursor()
+        updates: list[tuple[bytes, str]] = []
+        deletes: list[tuple[str]] = []
+        processed = 0
+
+        for gram, compressed in cursor.execute("SELECT gram, doc_ids FROM trigrams"):
+            try:
+                existing_ids = {
+                    int(x)
+                    for x in zlib.decompress(compressed).decode().split(",")
+                    if x
+                }
+            except Exception:
+                logger.exception("Failed to decode trigram row for %s", gram)
+                continue
+
+            if not existing_ids.intersection(doc_ids):
+                continue
+
+            remaining = existing_ids.difference(doc_ids)
+            if remaining:
+                new_blob = zlib.compress(
+                    ",".join(str(x) for x in sorted(remaining)).encode()
+                )
+                updates.append((new_blob, gram))
+            else:
+                deletes.append((gram,))
+
+            processed += 1
+            if processed % 500 == 0:
+                if updates:
+                    cursor.executemany(
+                        "UPDATE trigrams SET doc_ids = ? WHERE gram = ?",
+                        updates,
+                    )
+                    updates.clear()
+                if deletes:
+                    cursor.executemany(
+                        "DELETE FROM trigrams WHERE gram = ?", deletes
+                    )
+                    deletes.clear()
+
+        if updates:
+            cursor.executemany(
+                "UPDATE trigrams SET doc_ids = ? WHERE gram = ?", updates
+            )
+        if deletes:
+            cursor.executemany("DELETE FROM trigrams WHERE gram = ?", deletes)
+
+        self.trigrams_db.commit()
     
     def _extract_trigrams(self, text: str) -> Set[str]:
         """Extract all trigrams from text."""
@@ -877,6 +1093,7 @@ class SigilIndex:
             'build', 'dist', '.venv', 'venv', '.tox',
             '.mypy_cache', '.pytest_cache', 'coverage'
         }
+        skip_dirs.update({"htmlcov", "coverage_html", ".coverage", "site-packages"})
         
         skip_extensions = {
             '.pyc', '.so', '.o', '.a', '.dylib', '.dll',
@@ -884,6 +1101,7 @@ class SigilIndex:
             '.svg', '.ico', '.woff', '.woff2', '.ttf',
             '.zip', '.tar', '.gz', '.bz2', '.xz', '.mjs'
         }
+        skip_extensions.update({'.html', '.htm'})
         
         # Check if any parent is in skip_dirs
         for parent in path.parents:
@@ -929,13 +1147,10 @@ class SigilIndex:
             List of search results with context
         """
         # The database connection is thread-safe for reads in WAL mode.
+        start = perf_counter()
         query_lower = query.lower()
         query_trigrams = self._extract_trigrams(query_lower)
-        logger.warning(
-            "search_code: query=%s trigrams=%s",
-            query,
-            sorted(query_trigrams),
-        )
+        logger.debug("search_code: query=%s trigrams=%s", query, sorted(query_trigrams))
 
         if not query_trigrams:
             logger.debug("search_code: no trigrams extracted for query %s", query)
@@ -952,11 +1167,7 @@ class SigilIndex:
                 doc_ids = {
                     int(x) for x in zlib.decompress(row[0]).decode().split(',') if x
                 }
-                logger.warning(
-                    "search_code: trigram %s -> doc_ids=%s",
-                    gram,
-                    sorted(doc_ids),
-                )
+                logger.debug("search_code: trigram %s -> doc_ids=%s", gram, sorted(doc_ids))
                 doc_id_sets.append(doc_ids)
             else:
                 logger.debug("search_code: trigram %s not found", gram)
@@ -1004,6 +1215,15 @@ class SigilIndex:
                             ))
                             if len(results) >= max_results:
                                 break
+
+        duration = perf_counter() - start
+        logger.info(
+            "search_code completed repo=%s query=%r results=%s duration=%.3fs",
+            repo or "*",
+            query,
+            len(results),
+            duration,
+        )
 
         return results
     
@@ -1283,6 +1503,33 @@ class SigilIndex:
 
         return chunks
 
+    def _update_vector_metadata_for_doc(
+        self,
+        doc_id: int,
+        repo_id: int,
+        rel_path: str,
+    ) -> None:
+        """Keep vector rows in sync when a blob moves to a different repo/path."""
+
+        if self.vectors is None:
+            return
+
+        try:
+            self.vectors.update(
+                where=f"doc_id == '{doc_id}'",
+                values={
+                    "repo_id": str(repo_id),
+                    "file_path": rel_path,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Failed to update vector metadata for doc %s (repo %s, path %s)",
+                doc_id,
+                repo_id,
+                rel_path,
+            )
+
     def _index_file_vectors(
         self,
         repo_id: int,
@@ -1306,13 +1553,21 @@ class SigilIndex:
             return
 
         if embeddings.shape[1] != self.embedding_dimension:
-            logger.warning(
-                "Unexpected embedding dimension %s for %s (expected %s)",
-                embeddings.shape[1],
-                rel_path,
-                self.embedding_dimension,
-            )
             new_dim = int(embeddings.shape[1])
+            logger.error(
+                "Embedding dimension mismatch for %s: incoming=%s configured=%s "
+                "(will %s the vector table)",
+                rel_path,
+                new_dim,
+                self.embedding_dimension,
+                "overwrite" if self.allow_vector_schema_overwrite else "NOT overwrite",
+            )
+
+            if not self.allow_vector_schema_overwrite:
+                # Mark stale so semantic_search will refuse to run until rebuilt.
+                self._vector_index_stale = True
+                return
+
             self.embedding_dimension = new_dim
             self._code_chunk_model = get_code_chunk_model(new_dim)
             try:
@@ -1488,6 +1743,14 @@ class SigilIndex:
                     "returning no results."
                 )
                 return []
+
+            if self._vector_index_stale:
+                msg = (
+                    "Vector index repo IDs are stale; rebuild embeddings or "
+                    "clear LanceDB to realign (semantic search disabled)."
+                )
+                logger.warning(msg)
+                raise RuntimeError(msg)
 
             model = model or self.embed_model
 

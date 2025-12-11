@@ -10,7 +10,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Iterable, List
+from typing import Any, List, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +33,8 @@ class LlamaCppEmbeddingProvider:
         self,
         model_path: str | Path,
         dimension: int = 4096,
-        context_size: int = 2048,
-        n_gpu_layers: int = 0,
+        context_size: int = 8192,
+        n_gpu_layers: int = 999,
         use_mlock: bool = False,
         embedding: bool = True,
         **kwargs: Any,
@@ -89,7 +89,7 @@ class LlamaCppEmbeddingProvider:
 
         logger.info("Llama.cpp model loaded successfully")
 
-    def _combine_embeddings(self, vectors: List[Iterable[float]]) -> list[float]:
+    def _combine_embeddings(self, vectors: Sequence[Sequence[float]]) -> list[float]:
         """Average multiple embedding vectors to keep output size consistent."""
 
         if not vectors:
