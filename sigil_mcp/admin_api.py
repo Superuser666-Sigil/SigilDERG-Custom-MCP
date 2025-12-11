@@ -23,6 +23,8 @@ from .server import (
     rebuild_index_op,
     build_vector_index_op,
     get_index_stats_op,
+    external_mcp_status_op,
+    refresh_external_mcp_op,
 )
 
 logger = logging.getLogger("sigil_admin")
@@ -435,6 +437,25 @@ async def admin_config_view(request: Request) -> Response:
     return JSONResponse(raw)
 
 
+async def admin_mcp_status(request: Request) -> Response:
+    """Return status of external MCP aggregation."""
+    if (resp := await require_admin(request)) is not None:
+        return resp
+    return JSONResponse(external_mcp_status_op())
+
+
+async def admin_mcp_refresh(request: Request) -> Response:
+    """Force refresh of external MCP servers and tool registration."""
+    if (resp := await require_admin(request)) is not None:
+        return resp
+    try:
+        status = refresh_external_mcp_op()
+        return JSONResponse(status)
+    except Exception as exc:
+        logger.exception("admin_mcp_refresh failed: %s", exc)
+        return JSONResponse({"error": "refresh_failed", "detail": str(exc)}, status_code=500)
+
+
 async def root(request: Request) -> Response:
     """Root endpoint that lists available Admin API endpoints."""
     return JSONResponse({
@@ -449,6 +470,8 @@ async def root(request: Request) -> Response:
             "POST /admin/vector/rebuild": "Rebuild vector embeddings index",
             "GET /admin/logs/tail": "Get last N lines from server log file (query param: ?lines=N)",
             "GET /admin/config": "View current configuration (read-only)",
+            "GET /admin/mcp/status": "External MCP aggregation status",
+            "POST /admin/mcp/refresh": "Refresh/reload external MCP servers and tools",
         },
         "documentation": "See docs/RUNBOOK.md for complete Admin API documentation",
     })
@@ -462,6 +485,8 @@ routes = [
     Route("/admin/vector/rebuild", admin_vector_rebuild, methods=["POST"]),
     Route("/admin/logs/tail", admin_logs_tail, methods=["GET"]),
     Route("/admin/config", admin_config_view, methods=["GET"]),
+    Route("/admin/mcp/status", admin_mcp_status, methods=["GET"]),
+    Route("/admin/mcp/refresh", admin_mcp_refresh, methods=["POST"]),
 ]
 
 app = Starlette(debug=False, routes=routes)

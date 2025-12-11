@@ -4,22 +4,36 @@
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Union, cast
+from typing import Any, Dict, List, Optional, Sequence, Union, cast
 from urllib.parse import urlencode
 import numpy as np
 import os
+import asyncio
+import subprocess
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import UploadFile
 from starlette.applications import Starlette
 from starlette.routing import Mount
+from pathlib import PurePosixPath
+from fastmcp.server.http import create_sse_app
 from .indexer import SigilIndex
 from .auth import initialize_api_key
 from .oauth import get_oauth_manager
 from .config import get_config
 from .watcher import FileWatchManager
 from .app_factory import build_mcp_app
+from .mcp_client import (
+    MCPClientManager,
+    ExternalMCPConfigError,
+    set_global_manager,
+    get_global_manager,
+)
+from .admin_ui import start_admin_ui, stop_admin_ui
+from . import mcp_installer
 from .security import (
     AuthSettings,
     check_authentication as _security_check_authentication,
@@ -74,6 +88,7 @@ RUN_MODE = config.mode
 
 logger = logging.getLogger("sigil_repos_mcp")
 mcp = build_mcp_app(config)
+_MCP_CLIENT_MANAGER: Optional[MCPClientManager] = None
 
 # Track readiness across subsystems
 READINESS: Dict[str, bool] = {
@@ -198,6 +213,90 @@ def is_local_connection(client_ip: Optional[str] = None) -> bool:
     """Compatibility wrapper around sigil_mcp.security.is_local_connection."""
 
     return _security_is_local_connection(client_ip)
+
+def _initialize_external_mcp():
+    """Initialize external MCP servers and register their tools."""
+    global _MCP_CLIENT_MANAGER
+    if _MCP_CLIENT_MANAGER is not None:
+        return
+    servers = config.external_mcp_servers
+    if not servers:
+        return
+    if config.external_mcp_auto_install:
+        mcp_installer.auto_install(servers)
+    try:
+        manager = MCPClientManager(servers, logger=logger)
+    except ExternalMCPConfigError as exc:
+        logger.warning("External MCP configuration invalid: %s", exc)
+        return
+
+    try:
+        asyncio.run(manager.register_with_fastmcp(mcp, tool_decorator=_safe_tool_decorator))
+        _MCP_CLIENT_MANAGER = manager
+        set_global_manager(manager)
+        logger.info(
+            "External MCP servers registered: %d tools", len(manager.list_registered_tools())
+        )
+    except Exception as exc:
+        logger.warning("Failed to initialize external MCP servers: %s", exc)
+
+
+def external_mcp_status_op() -> Dict[str, Any]:
+    mgr = get_global_manager()
+    if mgr is None:
+        return {"enabled": False, "detail": "No external MCP servers configured"}
+    status = mgr.status()
+    status["enabled"] = True
+    return status
+
+
+def refresh_external_mcp_op() -> Dict[str, Any]:
+    mgr = get_global_manager()
+    if mgr is None:
+        raise RuntimeError("External MCP manager not initialized")
+    asyncio.run(mgr.refresh(mcp, tool_decorator=_safe_tool_decorator))
+    return external_mcp_status_op()
+
+
+class MCPBearerAuthMiddleware(BaseHTTPMiddleware):
+    """
+    Lightweight bearer-token gate for MCP transports. Uses the configured MCP server
+    token when require_token is enabled. Local bypass respects the existing auth flag.
+    """
+
+    def __init__(self, app, *, token: Optional[str], require_token: bool, allow_local_bypass: bool):
+        super().__init__(app)
+        self.token = token
+        self.require_token = require_token
+        self.allow_local_bypass = allow_local_bypass
+
+    async def dispatch(self, request: Request, call_next):
+        client_ip = request.client.host if request.client else None
+
+        # Local bypass if explicitly allowed
+        if self.allow_local_bypass and is_local_connection(client_ip):
+            return await call_next(request)
+
+        if not self.require_token:
+            return await call_next(request)
+
+        token = None
+        auth_header = request.headers.get("authorization")
+        api_key_header = request.headers.get("x-api-key")
+
+        if auth_header and auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+        if token is None and api_key_header:
+            token = api_key_header.strip()
+
+        if self.token and token == self.token:
+            return await call_next(request)
+
+        return JSONResponse(
+            {"error": "unauthorized", "detail": "Valid MCP bearer token required"},
+            status_code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 
@@ -516,16 +615,52 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
     _ensure_repos_configured()
     index = _get_index()
 
+    vector_count_failed = False
+
+    def _count_vectors(filter_expr: Optional[str] = None) -> int:
+        """Count vectors without materializing the table."""
+        if index.vectors is None:
+            return 0
+
+        if hasattr(index.vectors, "count_rows"):
+            return int(index.vectors.count_rows(filter=filter_expr))
+
+        # Fallback: best-effort zero when count_rows API missing
+        return 0
+
     def _get_vector_count(repo_name: Optional[str] = None) -> int:
         """Count vectors stored in LanceDB, optionally filtered by repo."""
+        nonlocal vector_count_failed
+
+        def _mark_stale_on_failure() -> None:
+            try:
+                if hasattr(index, "_vector_index_stale"):
+                    index._vector_index_stale = True
+            except Exception:
+                logger.debug(
+                    "Unable to mark vector index stale after count failure",
+                    exc_info=True,
+                )
+
         if index.vectors is None:
             return 0
 
         if repo_name is None:
             try:
-                return int(index.vectors.count_rows())
-            except Exception:
-                logger.exception("Failed to count vectors across all repositories")
+                return _count_vectors()
+            except Exception as exc:
+                if not vector_count_failed:
+                    logger.exception(
+                        "Failed to count vectors across all repositories; "
+                        "marking vector index stale (rebuild may be required)"
+                    )
+                    vector_count_failed = True
+                else:
+                    logger.error(
+                        "Failed to count vectors across all repositories: %s",
+                        exc,
+                    )
+                _mark_stale_on_failure()
                 return 0
 
         cursor = index.repos_db.cursor()
@@ -537,13 +672,18 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
         repo_id = str(row[0])
 
         try:
-            arrow_table = index.vectors.to_arrow()
-            repo_ids = arrow_table.column("repo_id")
-            if repo_ids is None:
-                return 0
-            return sum(1 for value in repo_ids.to_pylist() if str(value) == repo_id)
-        except Exception:
-            logger.exception("Failed to count vectors for repo %s", repo_name)
+            return _count_vectors(f"repo_id == '{repo_id}'")
+        except Exception as exc:
+            if not vector_count_failed:
+                logger.exception(
+                    "Failed to count vectors for repo %s; marking vector index stale "
+                    "(consider rebuild_embeddings or removing LanceDB directory)",
+                    repo_name,
+                )
+                vector_count_failed = True
+            else:
+                logger.error("Failed to count vectors for repo %s: %s", repo_name, exc)
+            _mark_stale_on_failure()
             return 0
 
     stats = index.get_index_stats(repo=repo)
@@ -2656,110 +2796,116 @@ def _setup_file_watching():
         logger.info("")
 
 
-def _create_parent_app_with_admin():
-    """Create parent ASGI app that combines FastMCP and Admin API."""
-    logger.info("=" * 60)
-    logger.info("[INFO] ADMIN API ENABLED")
-    logger.info("=" * 60)
-    logger.info("Admin API integrated into main server process")
-    logger.info("Both MCP and Admin API share the same index instance")
-    logger.info("Admin endpoints available at /admin/*")
-    logger.info("")
-    # Get FastMCP's ASGI app
-    # NOTE: We get the raw app here, not the wrapped one, because we'll
-    # wrap the parent app instead to avoid double-wrapping issues
-    # CRITICAL: Must call streamable_http_app() before accessing session_manager
+def _build_sse_app(*, sse_route_path: str, message_route_path: str):
+    """Construct an SSE transport app for FastMCP with optional bearer gating."""
+    middleware: list[Middleware] = []
+    # Require token only when configured; allow local bypass if enabled globally
+    if config.mcp_require_token or config.mcp_server_token:
+        if config.mcp_require_token and not config.mcp_server_token:
+            logger.warning(
+                "MCP bearer auth required but no token configured; SSE requests will be rejected"
+            )
+        middleware.append(
+            Middleware(
+                MCPBearerAuthMiddleware,
+                token=config.mcp_server_token,
+                require_token=config.mcp_require_token,
+                allow_local_bypass=ALLOW_LOCAL_BYPASS,
+            )
+        )
+
+    auth_provider = getattr(mcp, "_auth_server_provider", None)
+    additional_routes = getattr(mcp, "_additional_http_routes", None)
+    if not hasattr(mcp, "_get_additional_http_routes"):
+        # FastMCP versions prior to exposing _get_additional_http_routes require a shim
+        setattr(mcp, "_get_additional_http_routes", lambda: [])  # type: ignore[attr-defined]
+
+    return create_sse_app(
+        server=mcp,
+        message_path=message_route_path,
+        sse_path=sse_route_path,
+        auth=auth_provider,
+        debug=mcp.settings.debug,
+        routes=additional_routes,
+        middleware=middleware,
+    )
+
+
+def build_parent_app(include_admin: Optional[bool] = None) -> Starlette:
+    """
+    Create parent ASGI app that combines FastMCP, optional Admin API, and SSE transport.
+    """
+    include_admin = config.admin_enabled if include_admin is None else include_admin
+
+    _initialize_external_mcp()
+
+    # Get FastMCP's ASGI app (streamable HTTP) and session manager
     mcp_asgi_app = mcp.streamable_http_app()
-    
-    # CRITICAL: FastMCP's streamable HTTP manager requires a task group to be initialized
-    # The session_manager has a run() context manager that initializes the task group
-    # We need to call this in our lifespan to ensure the task group is ready
     session_manager = mcp.session_manager
-    
-    # Get Admin API app and extract its routes
-    admin_app = _get_admin_app()
-    
-    # Create parent app routes
-    # IMPORTANT: Add Admin API routes BEFORE Mount("/", ...) so they take
-    # precedence. In Starlette, routes are matched in order, so specific
-    # routes must come before catch-all mounts
+
     from starlette.routing import BaseRoute
+
     parent_routes: list[BaseRoute] = []
-    
-    # Add Admin API routes first (they already have /admin prefix)
-    # This ensures Admin API routes are matched before FastMCP's catch-all mount
-    for route in admin_app.routes:
-        parent_routes.append(route)
-    
-    # Mount FastMCP at root - this will handle all other routes (MCP protocol, OAuth, etc.)
-    # NOTE: We use Mount with "/" to pass all unmatched routes to FastMCP
-    # The scope path is preserved, so FastMCP can handle its own routing
-    parent_routes.append(Mount("/", app=mcp_asgi_app))
-    
-    # Create parent Starlette app with lifespan that initializes FastMCP's task group
+
+    if include_admin:
+        logger.info("=" * 60)
+        logger.info("[INFO] ADMIN API ENABLED")
+        logger.info("=" * 60)
+        logger.info("Admin API integrated into main server process")
+        logger.info("Both MCP and Admin API share the same index instance")
+        logger.info("Admin endpoints available at /admin/*")
+        logger.info("")
+        admin_app = _get_admin_app()
+        parent_routes.extend(admin_app.routes)
+
+    # Mount SSE transport at its parent prefix; use relative paths inside the mounted app
+    sse_path = PurePosixPath(config.mcp_sse_path)
+    message_path = PurePosixPath(config.mcp_message_path)
+    mount_prefix = str(sse_path.parent) or "/"
+    if not mount_prefix.startswith("/"):
+        mount_prefix = "/" + mount_prefix
+    try:
+        rel_message_path = "/" + str(message_path.relative_to(mount_prefix)).lstrip("/")
+    except ValueError:
+        rel_message_path = "/" + message_path.name
+    rel_sse_path = "/" + sse_path.name
+
+    sse_app = _build_sse_app(
+        sse_route_path=rel_sse_path,
+        message_route_path=rel_message_path,
+    )
+    parent_routes.append(Mount(mount_prefix, app=sse_app))
+
+    # Mount FastMCP streamable HTTP transport; preserve legacy root mount
+    parent_routes.append(Mount(config.mcp_http_path, app=mcp_asgi_app))
+    if config.mcp_http_path != "/":
+        parent_routes.append(Mount("/", app=mcp_asgi_app))
+
     from contextlib import asynccontextmanager
-    
+
     @asynccontextmanager
     async def combined_lifespan(app: Starlette):
-        # CRITICAL: Initialize FastMCP's session manager task group
-        # The session_manager.run() context manager creates and manages the task group
-        # This is what mcp.run() does internally - we need to do it manually here
         async with session_manager.run():
             yield
-    
-    # Create parent Starlette app with combined lifespan
+
     parent_app = Starlette(routes=parent_routes, lifespan=combined_lifespan)
-    
-    # Add CORS middleware from Admin API to parent app
-    # (Admin API has CORS for frontend, we want that in parent app too)
-    from starlette.middleware.cors import CORSMiddleware
-    parent_app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-        ],
-        allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["*"],
-    )
-    
-    # Wrap parent app with header logging middleware
-    # This single wrapping will handle all requests (MCP, Admin API, OAuth)
-    wrapped_parent = HeaderLoggingASGIMiddleware(parent_app)
-    
-    return wrapped_parent
 
+    if include_admin:
+        from starlette.middleware.cors import CORSMiddleware
 
-def _run_server_with_admin():
-    """Run the server with Admin API enabled."""
-    wrapped_parent = _create_parent_app_with_admin()
-    
-    # Run the parent app using uvicorn (same as FastMCP.run() does internally)
-    import uvicorn
-    try:
-        uvicorn.run(
-            wrapped_parent,
-            host=config.server_host,
-            port=config.server_port,
-            log_level=config.log_level.lower(),
+        parent_app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+            ],
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["*"],
         )
-    finally:
-        # Cleanup on shutdown
-        if _WATCHER:
-            logger.info("Stopping file watcher...")
-            _WATCHER.stop()
 
-
-def _run_server_simple():
-    """Run the server without Admin API."""
-    try:
-        mcp.run(transport="streamable-http")
-    finally:
-        # Cleanup on shutdown
-        if _WATCHER:
-            logger.info("Stopping file watcher...")
-            _WATCHER.stop()
+    wrapped_parent = HeaderLoggingASGIMiddleware(parent_app)
+    return wrapped_parent
 
 
 def main():
@@ -2768,13 +2914,22 @@ def main():
 
     _setup_authentication()
     _setup_file_watching()
-    
-    # Create parent ASGI app that combines FastMCP and Admin API
-    # This ensures both services share the same process and _INDEX instance
-    if config.admin_enabled:
-        _run_server_with_admin()
-    else:
-        _run_server_simple()
+    start_admin_ui()
+
+    import uvicorn
+
+    try:
+        uvicorn.run(
+            build_parent_app(include_admin=config.admin_enabled),
+            host=config.server_host,
+            port=config.server_port,
+            log_level=config.log_level.lower(),
+        )
+    finally:
+        stop_admin_ui()
+        if _WATCHER:
+            logger.info("Stopping file watcher...")
+            _WATCHER.stop()
 
 
 if __name__ == "__main__":

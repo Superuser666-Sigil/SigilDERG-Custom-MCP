@@ -151,6 +151,24 @@ class TestConfigGet:
         assert config.get("missing.key") is None
 
 
+class TestExternalMCPConfig:
+    def test_external_mcp_default_empty(self, monkeypatch):
+        for key in list(os.environ.keys()):
+            if key.startswith("SIGIL_MCP_SERVERS"):
+                monkeypatch.delenv(key, raising=False)
+        config = Config(Path("/nonexistent/config.json"))
+        assert config.external_mcp_servers == []
+
+    def test_external_mcp_env_parse(self, monkeypatch):
+        servers = [
+            {"name": "playwright", "type": "streamable-http", "url": "http://localhost:3001/"},
+            {"name": "local", "type": "stdio", "command": "python", "args": ["tool.py"]},
+        ]
+        monkeypatch.setenv("SIGIL_MCP_SERVERS", json.dumps(servers))
+        config = Config(Path("/nonexistent/config.json"))
+        assert config.external_mcp_servers == servers
+
+
 class TestConfigDefaults:
     """Test default configuration values."""
     

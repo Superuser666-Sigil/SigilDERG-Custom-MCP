@@ -8,7 +8,7 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 **Version:** 1.4  
 **Last Updated:** 2025-12-10  
-**Recommended Server Version:** v0.7.0 or later
+**Recommended Server Version:** v0.8.0 or later
 
 This runbook provides operational procedures for running, troubleshooting, and maintaining the Sigil MCP Server in production and development environments.
 
@@ -30,6 +30,7 @@ This runbook provides operational procedures for running, troubleshooting, and m
 12. [Backup & Recovery](#backup--recovery)
 13. [Performance Tuning](#performance-tuning)
 14. [Common Tasks](#common-tasks)
+15. [External MCP Servers](#external-mcp-servers)
 
 ---
 
@@ -467,6 +468,10 @@ curl -H "X-Admin-Key: your-secret-key" http://127.0.0.1:8000/admin/status
 ```bash
 curl http://127.0.0.1:8000/admin/status
 ```
+
+### MCP Admin Endpoints
+- `GET /admin/mcp/status` — external MCP aggregation status (servers, tools, last error)
+- `POST /admin/mcp/refresh` — re-discover external MCP servers and re-register tools
 
 ### Endpoints
 
@@ -1727,6 +1732,26 @@ sqlite3 ~/.sigil_index/repos.db \
 # 3. Force re-index
 # From ChatGPT: "Force re-index repo_name"
 ```
+
+## External MCP Servers
+
+Sigil can register tools from other MCP servers and expose them with a server prefix (e.g., `playwright.click`, `mindsdb.query`).
+
+1. Configure `external_mcp_servers` in `config.json` (see `config.example.json` and `docs/external_mcp.md`). Include auth headers for secured servers:
+   ```json
+   {
+     "name": "playwright",
+     "type": "streamable-http",
+     "url": "http://127.0.0.1:3001/",
+     "headers": { "authorization": "Bearer <token>" }
+   }
+   ```
+2. Optional dev convenience: set `external_mcp_auto_install` to `true` (or `SIGIL_MCP_AUTO_INSTALL=true`) to run `npx`/`npm`/`bunx` or entries with `"auto_install": true` on startup. Disabled by default.
+3. Tools are discovered at startup; names are prefixed by server. Diagnostics/tools:
+   - `GET /admin/mcp/status` (admin access) for current servers/tools/errors
+   - `POST /admin/mcp/refresh` to re-discover without restart
+   - MCP tools: `list_mcp_tools`, `external_mcp_prompt`
+4. Client preset: `docs/mcp.json` includes Sigil plus sample Playwright/Next.js MCP/MindsDB entries—update URLs/tokens to match your environment.
 
 ### Upgrading Sigil MCP Server
 

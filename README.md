@@ -34,6 +34,7 @@ A Model Context Protocol (MCP) server that provides IDE-like code navigation and
 - `search_code` - Fast substring search across repositories
 - `goto_definition` - Find symbol definitions
 - `list_symbols` - View file/repo structure
+- `list_mcp_tools`, `external_mcp_prompt` - Discover external MCP tools registered into Sigil
 - `build_vector_index` - Generate semantic embeddings for code (optional)
 - `semantic_search` - Natural language code search using embeddings
 - `list_repos`, `read_repo_file`, `list_repo_files`, `search_repo` - Basic operations
@@ -172,6 +173,15 @@ Alternatively, use environment variables:
 ```bash
 export SIGIL_REPO_MAP="my_project:/path/to/project;another:/path/to/another"
 ```
+
+### External MCP servers (Playwright, Next.js MCP, MindsDB, etc.)
+
+Sigil can aggregate external MCP servers and expose their tools with a server prefix (e.g., `playwright.click`, `mindsdb.query`).
+
+1. Add entries to `config.json` under `external_mcp_servers` (see `config.example.json` and `docs/external_mcp.md` for samples and auth header guidance). Use headers for tokens: `"authorization": "Bearer <token>"`.
+2. Optional: set `external_mcp_auto_install` to `true` to run `npx`/`npm`/`bunx` commands defined on startup (disabled by default).
+3. On startup, Sigil registers external tools automatically. Check status via `GET /admin/mcp/status` or call the `list_mcp_tools`/`external_mcp_prompt` tools from your MCP client.
+4. Client preset: `docs/mcp.json` includes Sigil + sample Playwright/Next.js MCP/MindsDB entries—update URLs/tokens to match your environment.
 
 ### Running the Server
 

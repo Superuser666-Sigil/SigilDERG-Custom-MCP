@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "sigil": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:8000/",
+      "headers": {
+        "__comment": "Set Authorization: Bearer <token> if SIGIL_MCP_REQUIRE_TOKEN is true",
+        "Authorization": ""
+      }
+    },
+    "playwright": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:3001/",
+      "headers": {
+        "__comment": "Add your token if required by the Playwright MCP server"
+      }
+    },
+    "nextjs-mcp": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:3002/",
+      "headers": {}
+    },
+    "mindsdb": {
+      "type": "streamable-http",
+      "url": "https://cloud.mindsdb.com/api/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_MINDSDB_API_KEY"
+      }
+    }
+  }
+}

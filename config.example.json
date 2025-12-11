@@ -117,6 +117,47 @@
         ],
         "max_file_size_mb": 1
     },
+    "admin_ui": {
+        "_comment": "Autostart the Admin UI (Vite dev server) alongside the MCP server",
+        "auto_start": true,
+        "path": "./sigil-admin-ui",
+        "command": "npm",
+        "args": ["run", "dev", "--", "--host", "--port", "5173"],
+        "port": 5173
+    },
+    "external_mcp_servers": [
+        {
+            "name": "playwright",
+            "type": "streamable-http",
+            "url": "http://localhost:3001/",
+            "headers": {
+                "authorization": "Bearer your-token"
+            },
+            "init_timeout": 10,
+            "tool_timeout": 120,
+            "verify": true,
+            "disabled": false
+        },
+        {
+            "name": "local-stdio-example",
+            "type": "stdio",
+            "command": "python",
+            "args": ["./path/to/your_mcp_server.py"],
+            "env": {},
+            "encoding": "utf-8",
+            "encoding_error_handler": "strict",
+            "disabled": true
+        }
+    ],
+    "external_mcp_auto_install": false,
+    "mcp_server": {
+        "_comment": "MCP transport configuration (SSE and streamable HTTP)",
+        "sse_path": "/mcp/sse",
+        "http_path": "/",
+        "message_path": "/mcp/messages/",
+        "require_token": false,
+        "token": null
+    },
     "embeddings": {
         "_comment": "Vector embeddings for semantic search (optional)",
         "enabled": true,

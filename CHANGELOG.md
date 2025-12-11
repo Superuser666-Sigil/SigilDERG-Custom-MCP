@@ -13,6 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2025-12-11
+
+### Added
+- External MCP aggregation with server-prefixed tools (`external_mcp_servers` config, env override `SIGIL_MCP_SERVERS`). Diagnostics tools `list_mcp_tools` and `external_mcp_prompt` expose discovered tools.
+- Admin MCP endpoints: `GET /admin/mcp/status` and `POST /admin/mcp/refresh` for external MCP visibility and re-discovery.
+- Optional auto-install for MCP servers (`external_mcp_auto_install` and per-server `auto_install`) to run `npx`/`npm`/`bunx` commands on startup (disabled by default).
+- SSE MCP transport path with optional bearer gating; configurable via `mcp_server` section.
+- Admin UI autostart integrated with the main server (configurable command/args/path/port).
+- Agent presets and docs for external MCP usage (`docs/AGENTS.md`, `docs/CLAUDE.md`, `docs/mcp.json`, `docs/external_mcp.md`).
+- ADR-016 documenting external MCP aggregation decisions.
+
+### Changed
+- README and RUNBOOK updated with external MCP setup, admin MCP endpoints, auto-install option, and client presets.
+- `config.example.json` expanded with external MCP samples, auto-install flag, admin UI autostart settings, and SSE/bearer transport fields.
+- Test suites extended for external MCP config parsing, transport routing, client registration, and installer behavior.
+
 ## [0.7.0] - 2025-12-10
 
 ### Added

@@ -67,18 +67,24 @@ class Config:
 
         auth_cfg = self.config_data.setdefault("authentication", {})
         admin_cfg = self.config_data.setdefault("admin", {})
+        mcp_cfg = self.config_data.setdefault("mcp_server", {})
+        admin_ui_cfg = self.config_data.setdefault("admin_ui", {})
+        self.config_data.setdefault("external_mcp_servers", [])
+        self.config_data.setdefault("external_mcp_auto_install", False)
 
         dev_defaults = {
             "allow_local_bypass": True,
             "enabled": False,
             "oauth_enabled": True,
             "require_api_key": False,
+            "admin_ui_autostart": True,
         }
         prod_defaults = {
             "allow_local_bypass": False,
             "enabled": True,
             "oauth_enabled": True,
             "require_api_key": True,
+            "admin_ui_autostart": False,
         }
         defaults = dev_defaults if self._mode == "dev" else prod_defaults
 
@@ -89,6 +95,19 @@ class Config:
 
         admin_cfg.setdefault("require_api_key", defaults["require_api_key"])
         admin_cfg.setdefault("allowed_ips", admin_cfg.get("allowed_ips", ["127.0.0.1", "::1"]))
+
+        # MCP transport defaults
+        mcp_cfg.setdefault("sse_path", "/mcp/sse")
+        mcp_cfg.setdefault("http_path", "/")
+        mcp_cfg.setdefault("message_path", "/mcp/messages/")
+        mcp_cfg.setdefault("require_token", False)
+        mcp_cfg.setdefault("token", mcp_cfg.get("token"))
+
+        admin_ui_cfg.setdefault("auto_start", defaults["admin_ui_autostart"])
+        admin_ui_cfg.setdefault("path", "./sigil-admin-ui")
+        admin_ui_cfg.setdefault("command", "npm")
+        admin_ui_cfg.setdefault("args", ["run", "dev"])
+        admin_ui_cfg.setdefault("port", 5173)
 
     def _warn_if_insecure_prod(self) -> None:
         """Log warnings when production mode uses insecure overrides."""
@@ -242,6 +261,9 @@ class Config:
             "index": {
                 "path": os.getenv("SIGIL_INDEX_PATH", "~/.sigil_index")
             },
+            "external_mcp_auto_install": os.getenv("SIGIL_MCP_AUTO_INSTALL", "false").lower() == "true",
+            "external_mcp_servers": self._load_external_mcp_servers_from_env(),
+            "mcp_server": self._load_mcp_server_from_env(),
             "admin": self._load_admin_from_env(),
         }
 
@@ -258,6 +280,44 @@ class Config:
             ),
             "allowed_ips": _parse_csv_list(allowed_ips_raw),
         }
+
+    def _load_mcp_server_from_env(self) -> Dict[str, Any]:
+        """Load MCP transport settings from environment variables."""
+        return {
+            "sse_path": os.getenv("SIGIL_MCP_SSE_PATH", "/mcp/sse"),
+            "http_path": os.getenv("SIGIL_MCP_HTTP_PATH", "/"),
+            "message_path": os.getenv("SIGIL_MCP_MESSAGE_PATH", "/mcp/messages/"),
+            "require_token": os.getenv("SIGIL_MCP_REQUIRE_TOKEN", "false").lower() == "true",
+            "token": os.getenv("SIGIL_MCP_SERVER_TOKEN"),
+        }
+
+    def _load_admin_ui_from_env(self) -> Dict[str, Any]:
+        """Load admin UI autostart settings from environment variables."""
+        args_raw = os.getenv("SIGIL_ADMIN_UI_ARGS", "")
+        args = [a for a in args_raw.split() if a] if args_raw else []
+        return {
+            "auto_start": os.getenv("SIGIL_ADMIN_UI_AUTOSTART", "true").lower() == "true",
+            "path": os.getenv("SIGIL_ADMIN_UI_PATH", "./sigil-admin-ui"),
+            "command": os.getenv("SIGIL_ADMIN_UI_COMMAND", "npm"),
+            "args": args or ["run", "dev"],
+            "port": int(os.getenv("SIGIL_ADMIN_UI_PORT", "5173")),
+        }
+
+    def _load_external_mcp_servers_from_env(self) -> list[dict]:
+        """
+        Load external MCP server definitions from SIGIL_MCP_SERVERS (JSON array).
+        """
+        raw = os.getenv("SIGIL_MCP_SERVERS")
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return parsed
+            logger.warning("SIGIL_MCP_SERVERS must be a JSON array; got %s", type(parsed))
+        except Exception as exc:
+            logger.warning("Failed to parse SIGIL_MCP_SERVERS: %s", exc)
+        return []
     
     def _parse_repo_map(self, repo_map_str: str) -> Dict[str, str]:
         """Parse SIGIL_REPO_MAP environment variable format."""
@@ -324,6 +384,66 @@ class Config:
     def allowed_hosts(self) -> list[str]:
         """Get allowed Host header values for DNS rebinding protection."""
         return self.get("server.allowed_hosts", ["*"])
+
+    @property
+    def mcp_sse_path(self) -> str:
+        """Path for SSE MCP transport."""
+        return str(self.get("mcp_server.sse_path", "/mcp/sse"))
+
+    @property
+    def mcp_http_path(self) -> str:
+        """Path for streamable HTTP MCP transport."""
+        return str(self.get("mcp_server.http_path", "/"))
+
+    @property
+    def mcp_message_path(self) -> str:
+        """Path prefix for MCP message routing."""
+        return str(self.get("mcp_server.message_path", "/mcp/messages/"))
+
+    @property
+    def mcp_require_token(self) -> bool:
+        """Whether to require a bearer token for MCP transports."""
+        return bool(self.get("mcp_server.require_token", False))
+
+    @property
+    def mcp_server_token(self) -> Optional[str]:
+        """Bearer token required for MCP transports when enabled."""
+        token = self.get("mcp_server.token")
+        if not token:
+            token = os.getenv("SIGIL_MCP_SERVER_TOKEN")
+        return token
+
+    @property
+    def admin_ui_auto_start(self) -> bool:
+        return bool(self.get("admin_ui.auto_start", True))
+
+    @property
+    def admin_ui_path(self) -> str:
+        return str(self.get("admin_ui.path", "./sigil-admin-ui"))
+
+    @property
+    def admin_ui_command(self) -> str:
+        return str(self.get("admin_ui.command", "npm"))
+
+    @property
+    def admin_ui_args(self) -> list[str]:
+        return list(self.get("admin_ui.args", ["run", "dev"]))
+
+    @property
+    def admin_ui_port(self) -> int:
+        try:
+            return int(self.get("admin_ui.port", 5173))
+        except (TypeError, ValueError):
+            return 5173
+
+    @property
+    def external_mcp_auto_install(self) -> bool:
+        return bool(self.get("external_mcp_auto_install", False))
+
+    @property
+    def external_mcp_servers(self) -> list[dict]:
+        """External MCP servers configuration list."""
+        return self.get("external_mcp_servers", [])
 
     @property
     def mode(self) -> str:
