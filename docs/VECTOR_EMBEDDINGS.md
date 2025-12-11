@@ -317,7 +317,7 @@ index.build_vector_index(repo="my-project", force=True)
 If you're migrating from the old SQLite storage, run a full rebuild once to populate LanceDB and then drop the legacy table:
 
 ```bash
-python rebuild_indexes.py  # or POST /admin/vector/rebuild per repo
+python scripts/rebuild_indexes.py  # or POST /admin/vector/rebuild per repo
 sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"
 ```
 

@@ -152,4 +152,4 @@ These can be customized in `config.json` to match project-specific needs.
 - [watchdog documentation](https://python-watchdog.readthedocs.io/)
 - [ADR 002: Trigram Indexing](adr-002-trigram-indexing.md)
 - [ADR 006: Vector Embeddings](adr-006-vector-embeddings.md)
-- `rebuild_indexes.py` helper script for full index wipe-and-rebuild in operational workflows
+- `scripts/rebuild_indexes.py` helper script for full index wipe-and-rebuild in operational workflows

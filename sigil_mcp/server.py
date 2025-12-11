@@ -434,7 +434,7 @@ def rebuild_index_op(
 ) -> Dict[str, object]:
     """
     Rebuild the trigram/symbol index for one or all repositories.
-    Uses the same logic as rebuild_indexes.py script.
+    Uses the same logic as scripts/rebuild_indexes.py script.
     Used by both MCP tools and the admin API.
     """
     _ensure_repos_configured()
@@ -447,7 +447,7 @@ def rebuild_index_op(
 
     if repo is not None:
         # Per-repo rebuild: use script's single-repo logic
-        from sigil_mcp.scripts.rebuild_indexes import rebuild_single_repo_index
+        from scripts.rebuild_indexes import rebuild_single_repo_index
         repo_path = _get_repo_root(repo)
         return rebuild_single_repo_index(
             index=index,
@@ -457,7 +457,7 @@ def rebuild_index_op(
         )
 
     # Complete rebuild: use script's rebuild_all_indexes logic
-    from sigil_mcp.scripts.rebuild_indexes import rebuild_all_indexes
+    from scripts.rebuild_indexes import rebuild_all_indexes
     return rebuild_all_indexes(
         index=index,
         wipe_index=False,  # Don't wipe - we're using existing index
@@ -472,7 +472,7 @@ def build_vector_index_op(
 ) -> Dict[str, object]:
     """
     Build or refresh the vector index for one or all repositories.
-    Uses the same logic as rebuild_indexes.py script.
+    Uses the same logic as scripts/rebuild_indexes.py script.
     """
     cfg = get_config()
     _ensure_repos_configured()

@@ -116,7 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added `test_client.py` script for end-to-end testing of indexing, search, and embeddings from the command line.
-- Added `rebuild_indexes.py` maintenance script to completely wipe and rebuild all indexes (documents, symbols, trigrams, and embeddings) across all configured repositories.
+- Added `scripts/rebuild_indexes.py` maintenance script to completely wipe and rebuild all indexes (documents, symbols, trigrams, and embeddings) across all configured repositories.
 
 ### Changed
 - Improved CONTRIBUTING.md with clearer dual-licensing strategy

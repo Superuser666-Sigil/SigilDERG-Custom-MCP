@@ -231,7 +231,7 @@ sqlite3 ~/.sigil_index/repos.db "SELECT name FROM sqlite_master WHERE type='tabl
 ```
 
 **Solution:**
-1. Rebuild embeddings into LanceDB: `python rebuild_indexes.py` (or `POST /admin/vector/rebuild` per repo).
+1. Rebuild embeddings into LanceDB: `python scripts/rebuild_indexes.py` (or `POST /admin/vector/rebuild` per repo).
 2. Drop the legacy SQLite table to avoid confusion: `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`.
 3. Confirm per-repo subdirectories exist under `~/.sigil_index/lancedb/`.
 
@@ -324,7 +324,7 @@ mv ~/.sigil_index ~/.sigil_index.corrupt
 
 # 3. From the project root, run the rebuild script
 cd /path/to/sigil-mcp-server
-python rebuild_indexes.py
+python scripts/rebuild_indexes.py
 
 # This will:
 #   - Delete any existing index at the configured path
@@ -431,7 +431,7 @@ pip install sigil-mcp-server[watch]
 
 # For extreme cases (e.g., index corruption or major indexing changes),
 # run the full rebuild script from the project root:
-python rebuild_indexes.py
+python scripts/rebuild_indexes.py
 
 # Be specific with repository name when searching
 "Search for 'function' in exact_repo_name"

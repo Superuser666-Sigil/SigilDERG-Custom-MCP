@@ -252,7 +252,7 @@ watcher = RepositoryWatcher(
 For a **full, clean rebuild** of all repositories (including blobs, trigrams, symbols,
 and embeddings), use the operational helper script introduced alongside this ADR:
 
-- `rebuild_indexes.py` in the project root, which:
+- `scripts/rebuild_indexes.py`, which:
   - Deletes the entire index directory configured in `config.json`
   - Re-initializes the index
   - Rebuilds all configured repositories from scratch

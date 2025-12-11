@@ -724,7 +724,7 @@ For a **100% fresh setup** (all repositories, all blobs, trigrams, symbols, and 
 
 ```bash
 # From the project root, use the helper script
-python rebuild_indexes.py
+python scripts/rebuild_indexes.py
 ```
 
 This script:

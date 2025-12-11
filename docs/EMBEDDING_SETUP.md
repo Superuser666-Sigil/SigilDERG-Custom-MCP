@@ -274,7 +274,7 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, ROCm: {torch
 - New deployments store vectors in LanceDB at `~/.sigil_index/lancedb/`. If you previously relied on the SQLite `embeddings`
   table inside `repos.db`, rebuild so every repository has a LanceDB-backed `code_vectors` table:
   1. Stop the server and back up your index directory.
-  2. Run `python rebuild_indexes.py` (or `POST /admin/vector/rebuild` for individual repos) to regenerate embeddings into
+  2. Run `python scripts/rebuild_indexes.py` (or `POST /admin/vector/rebuild` for individual repos) to regenerate embeddings into
      LanceDB.
   3. Remove the legacy table once you're confident in the new data: `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`.
 - After rebuilding you should see a `lancedb` directory under your index path with per-repo subdirectories and `code_vectors`
