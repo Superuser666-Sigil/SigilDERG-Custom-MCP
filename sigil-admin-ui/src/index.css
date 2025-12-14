@@ -113,3 +113,15 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Ensure native select arrows are hidden across browsers */
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
+/* Hide IE/Edge native dropdown button */
+select::-ms-expand {
+  display: none;
+}

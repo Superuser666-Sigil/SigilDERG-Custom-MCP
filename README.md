@@ -12,6 +12,7 @@ A Model Context Protocol (MCP) server that provides IDE-like code navigation and
 
 **Hybrid Code Search**
 - Fast text search using trigram indexing (inspired by GitHub's Blackbird)
+- Trigram store defaults to RocksDB via `rocksdict` (install with `pip install -e .[trigrams-rocksdb]`); falls back to SQLite when RocksDB is unavailable. Override with `SIGIL_MCP_TRIGRAM_BACKEND=sqlite|rocksdb|auto`.
 - Symbol-based search for functions, classes, methods, and variables
 - Semantic code search with vector embeddings backed by LanceDB (ANN queries, per-repo vector stores)
 - File structure view showing code outlines
@@ -168,8 +169,8 @@ ChatGPT: Found 5 relevant code sections (semantic search):
 **Storage**
 ```
 ~/.sigil_index/
-├── repos.db       # SQLite: repos, documents, symbols
-├── trigrams.db    # SQLite: trigram inverted index
+├── repos.db           # SQLite: repos, documents, symbols
+├── trigrams.rocksdb/  # RocksDB trigram inverted index (default, via rocksdict)
 ├── lancedb/       # LanceDB vector store (per-repo code_vectors tables + PQ indexes)
 └── blobs/         # Compressed content
 ```
@@ -212,7 +213,7 @@ See [docs/SECURITY.md](docs/SECURITY.md) for detailed security documentation.
 
 **Architecture Decision Records (ADRs)**
 - [ADR-001: OAuth 2.0 Authentication](docs/adr-001-oauth2-authentication.md)
-- [ADR-002: Trigram-Based Indexing](docs/adr-002-trigram-indexing.md)
+- [ADR-002: Trigram-Based Indexing](docs/adr-002-trigram-indexing.md) (superseded)
 - [ADR-003: Symbol Extraction with Ctags](docs/adr-003-symbol-search-ctags.md)
 - [ADR-004: JSON Configuration System](docs/adr-004-configuration-system.md)
 - [ADR-005: FastMCP Custom Routes](docs/adr-005-fastmcp-custom-routes.md)
@@ -226,6 +227,8 @@ See [docs/SECURITY.md](docs/SECURITY.md) for detailed security documentation.
 - [ADR-013: LanceDB Vector Store Migration](docs/adr-013-lancedb-vector-store.md)
 - [ADR-014: Admin UI Testing Strategy](docs/adr-014-admin-ui-testing.md)
 - [ADR-015: Default Llama.cpp + Jina Embeddings](docs/adr-015-default-llamacpp-jina.md)
+- [ADR-016: External MCP Aggregation](docs/adr-016-external-mcp-aggregation.md)
+- [ADR-017: RocksDB Trigram Store](docs/adr-017-rocksdb-trigram-store.md)
 
 **Other**
 - [ChatGPT OAuth Configuration](docs/CHATGPT_OAUTH_CONFIG.md)

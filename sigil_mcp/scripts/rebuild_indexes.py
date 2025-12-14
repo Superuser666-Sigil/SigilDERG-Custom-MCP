@@ -14,22 +14,46 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from ..config import get_config
+from ..config import get_config, load_config
 from ..embeddings import create_embedding_provider
 from ..indexer import SigilIndex
 
 logger = logging.getLogger(__name__)
 
 
+def _find_config_path() -> Optional[Path]:
+    """
+    Locate config.json for CLI runs.
+
+    Search order:
+    1) Current working directory or any of its parents
+    2) Any parent of this file (useful when installed)
+    """
+    cwd = Path.cwd()
+    for parent in [cwd, *cwd.parents]:
+        cand = parent / "config.json"
+        if cand.exists():
+            return cand
+
+    for parent in Path(__file__).resolve().parents:
+        cand = parent / "config.json"
+        if cand.exists():
+            return cand
+    return None
+
+
 def delete_all_trigrams(index: SigilIndex) -> int:
     """Delete all trigram postings from the trigrams database."""
     logger.info("Deleting all trigrams...")
-    cursor = index.trigrams_db.cursor()
-    cursor.execute("SELECT COUNT(*) FROM trigrams")
-    count_before = cursor.fetchone()[0]
-
-    cursor.execute("DELETE FROM trigrams")
-    index.trigrams_db.commit()
+    # Use backend-agnostic iteration to delete K/V-backed trigram postings.
+    count_before = 0
+    try:
+        count_before = index._trigram_count()
+        for gram, _ in index._trigram_iter_items():
+            index._trigram_delete(gram)
+    except Exception:
+        logger.exception("Failed to delete trigrams via backend iteration")
+        count_before = 0
 
     logger.info("Deleted %s trigram entries", count_before)
     return count_before
@@ -71,7 +95,8 @@ def rebuild_embeddings_for_repo(
 
 def _setup_index_for_rebuild(index: Optional[SigilIndex], wipe_index: bool) -> SigilIndex:
     """Initialize or prepare index for rebuild."""
-    config = get_config()
+    config_path = _find_config_path()
+    config = load_config(config_path) if config_path else get_config()
 
     index_dir = config.index_path
     lance_dir = config.lance_dir
@@ -166,7 +191,8 @@ def rebuild_all_indexes(
 ) -> Dict[str, Any]:
     """Rebuild all indexes using the same logic as this CLI."""
 
-    config = get_config()
+    config_path = _find_config_path()
+    config = load_config(config_path) if config_path else get_config()
     index = _setup_index_for_rebuild(index, wipe_index)
 
     repos = config.repositories

@@ -11,10 +11,10 @@
 # - MCP Server (Python)
 # - Frontend Dev Server (Vite/Node)
 
-set -euo pipefail
+set -eu
 
 # Get script directory and project root
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
@@ -107,6 +107,34 @@ wait_for_port_free() {
     
     return 1
 }
+
+# Handle --stop flag first
+if [ "${1:-}" = "--stop" ]; then
+    log_info "=========================================="
+    log_info "Stopping all Sigil MCP Server processes"
+    log_info "=========================================="
+    
+    # Kill MCP Server (Python)
+    kill_processes "python.*sigil_mcp\.server|python.*-m sigil_mcp\.server" "MCP Server"
+    
+    # Kill Frontend Dev Server (Vite/Node)
+    kill_processes "vite.*sigil-admin-ui|node.*vite.*sigil-admin-ui" "Frontend Dev Server"
+    
+    # Wait for ports to be free
+    log_info "Waiting for ports to be free..."
+    if check_port 8000; then
+        log_warning "Port 8000 still in use, waiting..."
+        wait_for_port_free 8000 || log_warning "Port 8000 may still be in use"
+    fi
+    
+    if check_port 5173; then
+        log_warning "Port 5173 still in use, waiting..."
+        wait_for_port_free 5173 || log_warning "Port 5173 may still be in use"
+    fi
+    
+    log_success "All processes stopped"
+    exit 0
+fi
 
 # Stop all servers
 log_info "=========================================="
@@ -234,13 +262,3 @@ log_info "  Frontend:     tail -f /tmp/frontend.log"
 echo ""
 log_info "To stop all servers, run:"
 log_info "  $0 --stop"
-echo ""
-
-# Handle --stop flag
-if [ "${1:-}" = "--stop" ]; then
-    log_info "Stopping all servers..."
-    kill_processes "python.*sigil_mcp\.server|python.*-m sigil_mcp\.server" "MCP Server"
-    kill_processes "vite.*sigil-admin-ui|node.*vite.*sigil-admin-ui" "Frontend Dev Server"
-    log_success "All servers stopped"
-    exit 0
-fi

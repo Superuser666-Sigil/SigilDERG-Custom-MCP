@@ -8,7 +8,7 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 ## Status
 
-Accepted
+Superseded by [ADR-013: LanceDB Vector Store](adr-013-lancedb-vector-store.md)
 
 > Note: Default provider/model selection is superseded by ADR-015 (llamacpp + Jina GGUF). This ADR still governs the embedding architecture and provider options.
 

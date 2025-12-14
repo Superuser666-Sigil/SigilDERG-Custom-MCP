@@ -153,13 +153,12 @@ class TestEdgeCases:
         assert stats["files_indexed"] == 0
     
     def test_embedding_without_embed_fn(self, test_index_path):
-        """Test creating index without embedding function."""
+        """When embeddings deps are missing, embed_fn remains None and index stays usable."""
         index = SigilIndex(test_index_path, embed_fn=None, embed_model="none")
-        
         assert index.embed_fn is None
-        
-        index.repos_db.close()
-        index.trigrams_db.close()
+        # Vector index should not be enabled without an embedding function
+        assert getattr(index, "_vector_index_enabled", False) is False
+        index.close()
     
     def test_vector_index_without_embed_fn(self, test_index_path, test_repo_path):
         """Test building vector index without embedding function."""
@@ -175,8 +174,7 @@ class TestEdgeCases:
             # Expected to fail or skip
             pass
         finally:
-            index.repos_db.close()
-            index.trigrams_db.close()
+            index.close()
 
 
 class TestConcurrency:
@@ -302,15 +300,8 @@ class TestRemoveFile:
 
         # Trigram postings should not reference this doc_id anymore
         if symbol_count_before > 0 or embedding_count_before > 0:
-            tri_cursor = index.trigrams_db.cursor()
-            tri_cursor.execute("SELECT doc_ids FROM trigrams")
-            for (blob,) in tri_cursor.fetchall():
-                ids = {
-                    int(x)
-                    for x in zlib.decompress(blob).decode().split(",")
-                    if x
-                }
-                assert doc_id not in ids
+            for gram, doc_ids in index._trigram_iter_items():
+                assert doc_id not in doc_ids
 
     def test_remove_file_with_missing_blob_still_cleans_trigrams(
         self,
@@ -347,15 +338,8 @@ class TestRemoveFile:
         assert removed is True
 
         # And no trigram postings should reference this doc_id anymore
-        tri_cursor = index.trigrams_db.cursor()
-        tri_cursor.execute("SELECT doc_ids FROM trigrams")
-        for (blob,) in tri_cursor.fetchall():
-            ids = {
-                int(x)
-                for x in zlib.decompress(blob).decode().split(",")
-                if x
-            }
-            assert doc_id not in ids
+        for gram, doc_ids in index._trigram_iter_items():
+            assert doc_id not in doc_ids
 
     def test_remove_file_clears_lancedb_rows(
         self, embeddings_enabled_index
@@ -378,7 +362,7 @@ class TestRemoveFile:
         repo_cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
         repo_id = repo_cursor.fetchone()[0]
 
-        existing_rows = index.vectors.to_arrow().to_pylist()
+        existing_rows = index._repo_vectors[repo_name].to_arrow().to_pylist()
         matches = [
             row
             for row in existing_rows
@@ -406,7 +390,7 @@ class TestEmbeddingDimensions:
         index = indexed_repo["index"]
         index.build_vector_index(repo="test_repo", force=True)
 
-        rows = index.vectors.to_arrow().to_pylist()
+        rows = index._repo_vectors["test_repo"].to_arrow().to_pylist()
         dims = {len(row["vector"]) for row in rows}
         assert len(dims) == 1
         assert dims.pop() == index.embedding_dimension
@@ -416,7 +400,7 @@ class TestEmbeddingDimensions:
         index = indexed_repo["index"]
         index.build_vector_index(repo="test_repo", force=True)
 
-        vectors = [row["vector"] for row in index.vectors.to_arrow().to_pylist()[:5]]
+        vectors = [row["vector"] for row in index._repo_vectors["test_repo"].to_arrow().to_pylist()[:5]]
         for vector in vectors:
             norm = np.linalg.norm(np.array(vector, dtype="float32"))
             assert 0.95 <= norm <= 1.05
@@ -441,7 +425,7 @@ class TestPartialReindexingVectors:
         repo_id = repo_cursor.fetchone()[0]
 
         original_chunks = index._chunk_text(target_file.read_text())
-        original_rows = index.vectors.to_arrow().to_pylist()
+        original_rows = index._repo_vectors[repo_name].to_arrow().to_pylist()
         original_matches = [
             row
             for row in original_rows
@@ -459,7 +443,7 @@ class TestPartialReindexingVectors:
         reindexed = index.index_file(repo_name, repo_path, target_file)
         assert reindexed is True
 
-        refreshed_rows = index.vectors.to_arrow().to_pylist()
+        refreshed_rows = index._repo_vectors[repo_name].to_arrow().to_pylist()
         refreshed_matches = [
             row
             for row in refreshed_rows
@@ -475,16 +459,14 @@ class TestCleanup:
         """Test that databases can be closed cleanly."""
         index = SigilIndex(test_index_path, dummy_embed_fn, "test")
         
-        index.repos_db.close()
-        index.trigrams_db.close()
+        index.close()
         
         # Should not raise errors
     
     def test_reopen_after_close(self, test_index_path, dummy_embed_fn):
         """Test reopening databases after close."""
         index1 = SigilIndex(test_index_path, dummy_embed_fn, "test")
-        index1.repos_db.close()
-        index1.trigrams_db.close()
+        index1.close()
         
         # Create new instance with same path
         index2 = SigilIndex(test_index_path, dummy_embed_fn, "test")
@@ -496,5 +478,4 @@ class TestCleanup:
         
         assert count >= 0
         
-        index2.repos_db.close()
-        index2.trigrams_db.close()
+        index2.close()

@@ -295,6 +295,11 @@ pip install -e .[embeddings-llamacpp-metal]   # Apple
 pip install -e .[embeddings-llamacpp-cpu]     # CPU only
 ```
 
+### llama.cpp encoder requires n_ubatch >= n_tokens / hard abort
+- llama.cpp will crash if a single embed call has more tokens than `n_ubatch`. llama-cpp-python also clamps `n_ubatch <= n_batch`.
+- Fix: raise **both** `n_batch` and `n_ubatch` (e.g., `4096` each) so `n_ubatch` covers your largest input, or keep them small and let Sigil chunk input (now enforced by default).
+- If you override via env/config, ensure `n_batch >= n_ubatch`; set both when in doubt to avoid the GGML_ASSERT.
+
 ### Slow embedding generation
 1. Check if GPU is being used (add logging to see device)
 2. Reduce `n_ctx` for llama.cpp (try 256 or 512)

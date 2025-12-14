@@ -27,9 +27,7 @@ def test_readyz_reports_ready_when_embeddings_disabled(monkeypatch):
 
     # Clean up connections to avoid locking temp dirs during test runs
     if getattr(server, "_INDEX", None):
-        if getattr(server._INDEX, "repos_db", None):
-            server._INDEX.repos_db.close()
-        if getattr(server._INDEX, "trigrams_db", None):
-            server._INDEX.trigrams_db.close()
+        if getattr(server._INDEX, "close", None):
+            server._INDEX.close()
     # Optionally, reload server to clear state for other tests
     importlib.reload(server)

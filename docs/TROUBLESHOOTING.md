@@ -379,9 +379,8 @@ cat config.json | jq '.index.skip_files'
 
 **Diagnosis:**
 ```bash
-# Check index size
-sqlite3 ~/.sigil_index/trigrams.db \
-  "SELECT COUNT(*) FROM trigrams"
+# Check index size (approximate)
+ls -la ~/.sigil_index/trigrams.rocksdb/
 
 # Check repository count
 wc -l config.json | jq '.repositories | length'
@@ -398,7 +397,7 @@ wc -l config.json | jq '.repositories | length'
 "Search for 'async' in project_name"
 
 # Rebuild trigram index
-rm ~/.sigil_index/trigrams.db
+rm -rf ~/.sigil_index/trigrams.rocksdb
 # From ChatGPT: "Re-index all repositories"
 
 # Reduce indexed repositories

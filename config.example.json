@@ -52,6 +52,9 @@
             "target",
             "build",
             "dist",
+            ".ruff_cache",
+            ".ruff",
+            ".cache",
             ".venv",
             "venv",
             ".tox",
@@ -59,20 +62,45 @@
             ".pytest_cache",
             "coverage",
             ".coverage",
-            "htmlcov"
+            "htmlcov",
+            "env",
+            ".env",
+            "out",
+            "bin",
+            "obj",
+            "pkg",
+            "vendor",
+            "deps",
+            ".gradle",
+            ".idea",
+            ".vscode",
+            "cmake-build-debug",
+            "cmake-build-release",
+            "dist-newstyle",
+            "_build",
+            "deps/_build"
         ],
         "ignore_extensions": [
             ".pyc",
+            ".pyo",
+            ".pyd",
             ".so",
             ".o",
             ".a",
-            ".dylib",
             ".dll",
+            ".dylib",
+            ".rlib",
+            ".rmeta",
             ".exe",
             ".bin",
+            ".class",
+            ".jar",
+            ".war",
+            ".ear",
             ".pdf",
             ".png",
             ".jpg",
+            ".jpeg",
             ".gif",
             ".svg",
             ".ico",
@@ -83,7 +111,9 @@
             ".tar",
             ".gz",
             ".bz2",
-            ".xz"
+            ".xz",
+            ".hi",
+            ".beam"
         ]
     },
     "repositories": {
@@ -101,6 +131,9 @@
             "target",
             "build",
             "dist",
+            ".ruff_cache",
+            ".ruff",
+            ".cache",
             ".venv",
             "venv"
         ],
@@ -122,7 +155,14 @@
         "auto_start": true,
         "path": "./sigil-admin-ui",
         "command": "npm",
-        "args": ["run", "dev", "--", "--host", "--port", "5173"],
+        "args": [
+            "run",
+            "dev",
+            "--",
+            "--host",
+            "--port",
+            "5173"
+        ],
         "port": 5173
     },
     "external_mcp_servers": [
@@ -142,7 +182,9 @@
             "name": "local-stdio-example",
             "type": "stdio",
             "command": "python",
-            "args": ["./path/to/your_mcp_server.py"],
+            "args": [
+                "./path/to/your_mcp_server.py"
+            ],
             "env": {},
             "encoding": "utf-8",
             "encoding_error_handler": "strict",
@@ -182,9 +224,23 @@
             "provider": "llamacpp",
             "model": "~/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
             "dimension": 4096,
+            "llamacpp_n_batch": 4096,
+            "llamacpp_n_ubatch": 4096,
             "context_size": 2048,
             "n_gpu_layers": 0,
             "use_mlock": false
-        }
+        },
+        "bucket_thresholds": [
+            512,
+            1024,
+            2048
+        ],
+        "target_tokens": 1024,
+        "max_tokens": 2048,
+        "token_overlap": 128,
+        "hard_chars": 12000,
+        "hard_window": 10000,
+        "hard_overlap": 1000,
+        "include_solution": true
     }
 }

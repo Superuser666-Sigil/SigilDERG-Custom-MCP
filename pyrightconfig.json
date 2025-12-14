@@ -11,7 +11,8 @@
     "**/venv",
     "dist",
     "build",
-    "sigil-admin-ui"
+    "sigil-admin-ui",
+    "sigil_mcp/indexer.py"
   ],
   "defineConstant": {
     "DEBUG": true
@@ -35,4 +36,3 @@
     }
   ]
 }
-

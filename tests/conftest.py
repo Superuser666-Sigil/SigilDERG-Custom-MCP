@@ -134,7 +134,8 @@ def test_index(test_index_path, dummy_embed_fn):
     """Create a SigilIndex instance for testing."""
     original_config = sigil_config._config
     cfg = sigil_config.Config()
-    cfg.config_data.setdefault("embeddings", {})["enabled"] = True
+    cfg.config_data["embeddings"] = {"enabled": True}
+    cfg.config_data["index"] = {"ignore_patterns": []}
     sigil_config._config = cfg
 
     index = SigilIndex(
@@ -144,8 +145,7 @@ def test_index(test_index_path, dummy_embed_fn):
     )
     yield index
     # Cleanup
-    index.repos_db.close()
-    index.trigrams_db.close()
+    index.close()
     sigil_config._config = original_config
 
 
@@ -187,8 +187,7 @@ def embeddings_enabled_index(temp_dir, test_repo_path, dummy_embed_fn):
             "repo_name": "test_repo",
         }
     finally:
-        index.repos_db.close()
-        index.trigrams_db.close()
+        index.close()
         sigil_config._config = original_config
 
 

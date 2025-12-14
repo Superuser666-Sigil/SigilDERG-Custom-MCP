@@ -3,7 +3,7 @@
 // Commercial licenses are available. Contact: davetmire85@gmail.com
 
 import { useEffect, useState } from 'react'
-import { getConfig, type ConfigResponse, type ErrorResponse } from '@/utils/api'
+import { getConfig, saveConfig, getStatus, type ConfigResponse, type ErrorResponse } from '@/utils/api'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { LoadingSpinner } from '@/components/LoadingSpinner'
@@ -12,15 +12,20 @@ import { RefreshCw, Copy } from 'lucide-react'
 
 export function ConfigPage() {
   const [config, setConfig] = useState<ConfigResponse | null>(null)
+  const [configText, setConfigText] = useState('')
   const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<ErrorResponse | null>(null)
+  const [status, setStatus] = useState<AdminStatusResponse | null>(null)
 
   const fetchConfig = async () => {
     try {
       setLoading(true)
       setError(null)
-      const data = await getConfig()
-      setConfig(data)
+      const [cfg, stat] = await Promise.all([getConfig(), getStatus()])
+      setConfig(cfg)
+      setConfigText(JSON.stringify(cfg, null, 2))
+      setStatus(stat)
     } catch (err) {
       setError(err as ErrorResponse)
     } finally {
@@ -55,6 +60,24 @@ export function ConfigPage() {
             <Copy className="h-4 w-4 mr-2" />
             Copy JSON
           </Button>
+          {status?.admin?.mode === 'dev' && (
+            <Button onClick={async () => {
+              try {
+                setSaving(true)
+                setError(null)
+                const parsed = JSON.parse(configText)
+                const resp = await saveConfig(parsed)
+                setConfig(resp.config)
+                setConfigText(JSON.stringify(resp.config, null, 2))
+              } catch (err: any) {
+                setError(err as ErrorResponse || { error: 'invalid_json', detail: err?.message })
+              } finally {
+                setSaving(false)
+              }
+            }} disabled={!config || saving}>
+              {saving ? 'Saving...' : 'Save'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -66,19 +89,30 @@ export function ConfigPage() {
         <Card>
           <CardHeader>
             <CardTitle>Configuration</CardTitle>
-            <CardDescription>Full server configuration as JSON</CardDescription>
+            <CardDescription>
+              Full server configuration as JSON {status?.admin?.mode === 'dev' ? '(editable in dev mode)' : '(read-only in prod)'}
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="bg-muted rounded-md p-4 max-h-[600px] overflow-auto">
-              <pre className="text-sm font-mono whitespace-pre-wrap break-words">
-                {JSON.stringify(config, null, 2)}
-              </pre>
-            </div>
+            {status?.admin?.mode === 'dev' ? (
+              <div className="bg-muted rounded-md p-4 max-h-[600px] overflow-auto">
+                <textarea
+                  value={configText}
+                  onChange={(e) => setConfigText(e.target.value)}
+                  className="w-full h-[520px] font-mono text-sm bg-transparent outline-none"
+                  spellCheck={false}
+                />
+              </div>
+            ) : (
+              <div className="bg-muted rounded-md p-4 max-h-[600px] overflow-auto">
+                <pre className="text-sm font-mono whitespace-pre-wrap break-words">
+                  {JSON.stringify(config, null, 2)}
+                </pre>
+              </div>
+            )}
           </CardContent>
         </Card>
       ) : null}
     </div>
   )
 }
-
-

@@ -1,0 +1,9 @@
+from typing import Any, Sequence
+
+class Encoding:
+    def encode(self, s: str) -> Sequence[int]: ...
+
+
+def encoding_for_model(model: str) -> Encoding: ...
+
+def get_encoding(name: str) -> Encoding: ...

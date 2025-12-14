@@ -43,8 +43,7 @@ class TestEndToEndIndexing:
         assert isinstance(docs, int) and docs > 0
         
         # Cleanup
-        index.repos_db.close()
-        index.trigrams_db.close()
+        index.close()
     
     def test_multi_repo_indexing(self, test_index_path, temp_dir, dummy_embed_fn):
         """Test indexing multiple repositories."""
@@ -71,8 +70,7 @@ class TestEndToEndIndexing:
         assert isinstance(stats2, dict)
         
         # Cleanup
-        index.repos_db.close()
-        index.trigrams_db.close()
+        index.close()
     
     def test_incremental_indexing(self, test_index, test_repo_path):
         """Test incremental indexing (adding files to existing repo)."""
@@ -155,8 +153,7 @@ class TestDataPersistence:
         stats1 = index1.get_index_stats(repo="test_repo")
         
         # Close
-        index1.repos_db.close()
-        index1.trigrams_db.close()
+        index1.close()
         
         # Reopen
         index2 = SigilIndex(test_index_path, dummy_embed_fn, "test")
@@ -165,8 +162,7 @@ class TestDataPersistence:
         # Should have same data
         assert stats2["documents"] == stats1["documents"]
         
-        index2.repos_db.close()
-        index2.trigrams_db.close()
+        index2.close()
     
     def test_embeddings_persist(self, test_index_path, test_repo_path, dummy_embed_fn):
         """Test that embeddings persist after close."""
@@ -177,8 +173,7 @@ class TestDataPersistence:
 
         count1 = index1.vectors.count_rows() if index1.vectors else 0
 
-        index1.repos_db.close()
-        index1.trigrams_db.close()
+        index1.close()
 
         # Reopen
         index2 = SigilIndex(test_index_path, dummy_embed_fn, "test")
@@ -187,8 +182,7 @@ class TestDataPersistence:
         # Should have same embeddings
         assert count2 == count1
         
-        index2.repos_db.close()
-        index2.trigrams_db.close()
+        index2.close()
 
 
 class TestErrorRecovery:

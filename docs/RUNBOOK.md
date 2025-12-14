@@ -94,6 +94,9 @@ pip install sigil-mcp-server[watch]
 # For vector embeddings
 pip install sigil-mcp-server[embeddings]
 
+# For RocksDB trigram store (default backend; pulls rocksdict wheels; system RocksDB libs recommended)
+pip install sigil-mcp-server[trigrams-rocksdb]
+
 # For development
 pip install sigil-mcp-server[dev]
 
@@ -682,14 +685,12 @@ Contents:
 - `repos.db` - Repository and document metadata, symbols
 - `repos.db-wal` - Write-Ahead Log for concurrent access (v0.3.3+)
 - `repos.db-shm` - Shared memory file for WAL mode (v0.3.3+)
-- `trigrams.db` - Trigram index for fast text search
-- `trigrams.db-wal` - WAL file for trigrams database (v0.3.3+)
-- `trigrams.db-shm` - Shared memory for trigrams WAL (v0.3.3+)
+- `trigrams.rocksdb/` - RocksDB trigram index
 - `blobs/` - Compressed file contents
 - `lancedb/` - LanceDB vector store (one `code_vectors` table per repo)
 - `vectors/` - Legacy vector embeddings (pre-LanceDB, if still present)
 
-**Note:** WAL mode (Write-Ahead Logging) is enabled by default since v0.3.3 to support concurrent access from HTTP handlers, file watcher, and vector indexing operations. The `-wal` and `-shm` files are automatically managed by SQLite.
+**Note:** RocksDB is used for trigram postings to reduce write contention. The `-wal` and `-shm` files are automatically managed by SQLite for the repos.db.
 
 ### Embeddings & LanceDB
 
@@ -747,7 +748,6 @@ Use this when:
 ```bash
 # IMPORTANT: Checkpoint WAL before backup (v0.3.3+)
 sqlite3 ~/.sigil_index/repos.db "PRAGMA wal_checkpoint(TRUNCATE)"
-sqlite3 ~/.sigil_index/trigrams.db "PRAGMA wal_checkpoint(TRUNCATE)"
 
 # Then backup entire index
 tar -czf sigil-index-backup-$(date +%Y%m%d).tar.gz ~/.sigil_index

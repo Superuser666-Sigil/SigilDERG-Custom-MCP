@@ -18,6 +18,13 @@ import time
 from pathlib import Path
 from typing import Dict, Optional, Callable, TYPE_CHECKING
 from threading import Thread, Lock
+from .ignore_utils import (
+    load_gitignore,
+    is_ignored_by_gitignore,
+    load_include_patterns,
+    should_ignore,
+)
+from .config import get_config
 
 try:
     from watchdog.observers import Observer
@@ -61,6 +68,8 @@ class RepositoryWatcher(FileSystemEventHandler):
         debounce_seconds: float = 2.0,
         ignore_dirs: Optional[list[str]] = None,
         ignore_extensions: Optional[list[str]] = None,
+        honor_gitignore: bool = True,
+        repo_ignore_patterns: Optional[list[str]] = None,
     ):
         """
         Initialize repository watcher.
@@ -78,6 +87,23 @@ class RepositoryWatcher(FileSystemEventHandler):
         self.debounce_seconds = debounce_seconds
         self.ignore_dirs = set(ignore_dirs or [])
         self.ignore_extensions = set(ignore_extensions or [])
+        # Optionally load per-repo .gitignore/include patterns. honor_gitignore
+        # allows disabling repo-level ignores (useful for per-repo overrides).
+        self._honor_gitignore = bool(honor_gitignore)
+        if self._honor_gitignore:
+            try:
+                self._gitignore_patterns = load_gitignore(repo_path)
+            except Exception:
+                self._gitignore_patterns = []
+            try:
+                self._include_patterns = load_include_patterns(repo_path)
+            except Exception:
+                self._include_patterns = []
+        else:
+            self._gitignore_patterns = []
+            self._include_patterns = []
+        # Optional per-repo ignore patterns provided via admin API / config
+        self._repo_ignore_patterns = list(repo_ignore_patterns or [])
         
         # Track pending changes to batch updates
         self.pending_changes: Dict[str, tuple[Path, str, float]] = {}
@@ -122,37 +148,21 @@ class RepositoryWatcher(FileSystemEventHandler):
     
     def _should_ignore(self, path: Path) -> bool:
         """Check if file should be ignored, honoring configured ignore rules."""
-        # Always skip hidden files/dirs (top-level safety)
-        if any(part.startswith('.') for part in path.parts):
-            return True
-        
-        # Check directories from config
-        if self.ignore_dirs:
-            # Normalize: treat ".git" and "git" sensibly
-            normalized_dirs = set()
-            for name in self.ignore_dirs:
-                normalized_dirs.add(name)
-                # also support matching without leading dot
-                if name.startswith('.'):
-                    normalized_dirs.add(name.lstrip('.'))
-            
-            if any(
-                part in normalized_dirs or f".{part}" in normalized_dirs
-                for part in path.parts
-            ):
-                return True
-        
-        # Check extensions from config
-        if self.ignore_extensions:
-            ext = path.suffix.lower()
-            if ext in self.ignore_extensions:
-                return True
-        
-        # Skip Vite temporary build files (e.g., vite.config.ts.timestamp-*.mjs)
-        if '.timestamp-' in path.name:
-            return True
-        
-        return False
+        try:
+            cfg = get_config()
+        except Exception:
+            cfg = None
+
+        return should_ignore(
+            path,
+            self.repo_path,
+            config_ignore_patterns=(cfg.index_ignore_patterns if cfg is not None else None),
+            repo_ignore_patterns=getattr(self, '_repo_ignore_patterns', None),
+            include_patterns=getattr(self, '_include_patterns', None),
+            gitignore_patterns=getattr(self, '_gitignore_patterns', None),
+            ignore_dirs=self.ignore_dirs,
+            ignore_extensions=self.ignore_extensions,
+        )
     
     def _schedule_change(self, path_str: str, event_type: str):
         """Schedule a file change for processing (with debouncing)."""
@@ -170,23 +180,33 @@ class RepositoryWatcher(FileSystemEventHandler):
             should_schedule = False
             if event_type == "deleted":
                 should_schedule = True
+                skip_ignore_check = True
             elif path.is_file():
                 should_schedule = True
+                skip_ignore_check = False
 
-            if should_schedule and not self._should_ignore(path):
+            # For deletions, the file may not exist so avoid stat-based ignore checks
+            if should_schedule and (skip_ignore_check or not self._should_ignore(path)):
                 with self.lock:
                     # Update or add pending change
                     self.pending_changes[str(path)] = (path, event_type, time.time())
-                    logger.debug(
-                        f"Scheduled {event_type} for {path.relative_to(self.repo_path)}"
-                    )
         except Exception as e:
-            logger.debug(f"Error scheduling change for {path_str}: {e}")
+            # Avoid noisy debug logging in hot watcher path; surface only as info
+            logger.info(f"Error scheduling change for {path_str}: {e}")
     
     def _should_ignore_path(self, path_str: str) -> bool:
         """Quick check to ignore paths before any processing."""
         normalized = path_str.replace('\\', '/')
         parts = normalized.split('/')
+        # Fast include check: if explicitly included, do not ignore
+        try:
+            p = Path(normalized)
+            if getattr(self, '_include_patterns', None) and is_ignored_by_gitignore(p, self.repo_path, getattr(self, '_include_patterns')):
+                return False
+            if self._gitignore_patterns and is_ignored_by_gitignore(p, self.repo_path, self._gitignore_patterns):
+                return True
+        except Exception:
+            pass
         
         # Check against configured ignore directories
         # This prevents watchdog from even processing events for these dirs
@@ -282,7 +302,9 @@ class FileWatchManager:
         self,
         repo_name: str,
         repo_path: Path,
-        recursive: bool = True
+        recursive: bool = True,
+        honor_gitignore: bool = True,
+        repo_ignore_patterns: Optional[list[str]] = None,
     ):
         """
         Start watching a repository for changes.
@@ -306,6 +328,8 @@ class FileWatchManager:
                 on_change=self.on_change,
                 ignore_dirs=self.ignore_dirs,
                 ignore_extensions=self.ignore_extensions,
+                honor_gitignore=honor_gitignore,
+                repo_ignore_patterns=repo_ignore_patterns,
             )
             # Ensure server.REPOS knows about this repository so callbacks
             # that rely on server.REPOS (e.g., _on_file_change) can resolve

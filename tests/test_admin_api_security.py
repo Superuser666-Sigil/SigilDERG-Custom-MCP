@@ -48,5 +48,4 @@ def test_admin_api_rejects_missing_key_in_prod(monkeypatch):
 
     assert response.status_code == 503
     if server._INDEX:
-        server._INDEX.repos_db.close()
-        server._INDEX.trigrams_db.close()
+        server._INDEX.close()

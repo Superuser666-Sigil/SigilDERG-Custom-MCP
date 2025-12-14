@@ -106,6 +106,12 @@ class Config:
         admin_ui_cfg.setdefault("args", ["run", "dev"])
         admin_ui_cfg.setdefault("port", 5173)
         embeddings_cfg.setdefault("enabled", False)
+        # Optional llama.cpp tuning parameters for local embedding provider
+        embeddings_cfg.setdefault("llamacpp_threads", None)
+        embeddings_cfg.setdefault("llamacpp_batch_size", None)
+        embeddings_cfg.setdefault("llamacpp_n_batch", None)
+        embeddings_cfg.setdefault("llamacpp_n_ubatch", None)
+        embeddings_cfg.setdefault("llamacpp_threads_batch", None)
 
     def _warn_if_insecure_prod(self) -> None:
         """Log warnings when production mode uses insecure overrides."""
@@ -242,15 +248,32 @@ class Config:
                 "enabled": os.getenv("SIGIL_MCP_WATCH_ENABLED", "true").lower() == "true",
                 "debounce_seconds": float(os.getenv("SIGIL_MCP_WATCH_DEBOUNCE", "2.0")),
                 "ignore_dirs": [
+                    # Common VCS / editor / virtualenv / cache dirs
                     ".git", "__pycache__", "node_modules", "target",
                     "build", "dist", ".venv", "venv", ".tox",
-                    ".mypy_cache", ".pytest_cache", "coverage", ".coverage"
+                    ".mypy_cache", ".pytest_cache", "coverage", ".coverage",
+                    "htmlcov", "env", ".env", "out", "bin", "obj",
+                    "pkg", "vendor", "deps", ".gradle", ".idea", ".vscode",
+                    # Language/tool specific build dirs
+                    "cmake-build-debug", "cmake-build-release", "dist-newstyle",
+                    "_build", "deps/_build"
                 ],
                 "ignore_extensions": [
-                    ".pyc", ".so", ".o", ".a", ".dylib", ".dll",
-                    ".exe", ".bin", ".pdf", ".png", ".jpg", ".gif",
-                    ".svg", ".ico", ".woff", ".woff2", ".ttf",
-                    ".zip", ".tar", ".gz", ".bz2", ".xz"
+                    # Python bytecode / extension modules
+                    ".pyc", ".pyo", ".pyd",
+                    # Native objects / archives
+                    ".so", ".o", ".a", ".dll", ".dylib", ".rlib", ".rmeta",
+                    # Executables / binaries
+                    ".exe", ".bin",
+                    # Java / JVM artifacts
+                    ".class", ".jar", ".war", ".ear",
+                    # Web / image / fonts / assets
+                    ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+                    ".ico", ".woff", ".woff2", ".ttf",
+                    # Archives / compressed
+                    ".zip", ".tar", ".gz", ".bz2", ".xz",
+                    # Other language/tool artifacts
+                    ".hi", ".beam", ".dll", ".so", ".rlib"
                 ],
             },
             "repositories": self._parse_repo_map(os.getenv("SIGIL_REPO_MAP", "")),
@@ -597,10 +620,85 @@ class Config:
             "cache_dir",
             "api_key",
         }
-        kwargs = {k: v for k, v in embeddings_config.items() if k not in known_keys}
+        kwargs = {k: v for k, v in embeddings_config.items() if k not in known_keys and v is not None}
+        # Map convenience keys to llama.cpp arguments and drop the old names
+        if "llamacpp_threads" in kwargs:
+            kwargs.setdefault("n_threads", kwargs.pop("llamacpp_threads"))
+        if "llamacpp_batch_size" in kwargs:
+            kwargs.setdefault("batch_size", kwargs.pop("llamacpp_batch_size"))
+        if "llamacpp_threads_batch" in kwargs:
+            kwargs.setdefault("n_threads_batch", kwargs.pop("llamacpp_threads_batch"))
+        if "llamacpp_n_batch" in kwargs:
+            kwargs.setdefault("n_batch", kwargs.pop("llamacpp_n_batch"))
+        if "llamacpp_n_ubatch" in kwargs:
+            kwargs.setdefault("n_ubatch", kwargs.pop("llamacpp_n_ubatch"))
+        # Strip any remaining None values before passing through
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
         # Provide a sane default for llama.cpp GPU offload if not explicitly set
         kwargs.setdefault("n_gpu_layers", self.embeddings_n_gpu_layers)
         return kwargs
+
+    @property
+    def embeddings_bucket_thresholds(self) -> list[int]:
+        """Get bucketing thresholds (token counts) for embedding batching.
+
+        Returns list of ascending integer thresholds used to partition texts
+        into buckets (e.g. [256,512,1024,2048]).
+        """
+        return list(self.get("embeddings.bucket_thresholds", [512, 1024, 2048]))
+
+    @property
+    def embeddings_target_tokens(self) -> int:
+        """Preferred tokens per chunk when tokenization is available."""
+        try:
+            return int(self.get("embeddings.target_tokens", 1024))
+        except (TypeError, ValueError):
+            return 1024
+
+    @property
+    def embeddings_max_tokens(self) -> int:
+        """Hard maximum tokens per chunk; trigger token-based hard-wrap when exceeded."""
+        try:
+            return int(self.get("embeddings.max_tokens", 2048))
+        except (TypeError, ValueError):
+            return 2048
+
+    @property
+    def embeddings_token_overlap(self) -> int:
+        """Token overlap to use when performing token-based hard wrapping."""
+        try:
+            return int(self.get("embeddings.token_overlap", 128))
+        except (TypeError, ValueError):
+            return 128
+
+    @property
+    def embed_hard_chars(self) -> int:
+        """Maximum characters allowed in a single chunk before applying hard wrap."""
+        try:
+            return int(self.get("embeddings.hard_chars", 12000))
+        except (TypeError, ValueError):
+            return 12000
+
+    @property
+    def embed_hard_window(self) -> int:
+        """Window size (chars) to use when hard-wrapping oversized chunks."""
+        try:
+            return int(self.get("embeddings.hard_window", 10000))
+        except (TypeError, ValueError):
+            return 10000
+
+    @property
+    def embed_hard_overlap(self) -> int:
+        """Overlap (chars) between subsequent hard-wrapped windows."""
+        try:
+            return int(self.get("embeddings.hard_overlap", 1000))
+        except (TypeError, ValueError):
+            return 1000
+
+    @property
+    def embeddings_include_solution(self) -> bool:
+        """Whether to include solution/answer text when building canonical JSONL embeddings."""
+        return bool(self.get("embeddings.include_solution", True))
 
     @property
     def embeddings_n_gpu_layers(self) -> int:
@@ -617,11 +715,114 @@ class Config:
     @property
     def repositories(self) -> Dict[str, str]:
         return self.get("repositories", {})
+
+    @property
+    def repositories_config(self) -> Dict[str, dict]:
+        """Return repositories configured with optional per-repo options.
+
+        Accepts two forms in config.json:
+        1) "repositories": { "name": "/abs/path" }
+        2) "repositories": { "name": { "path": "/abs/path", "respect_gitignore": true } }
+
+        The returned mapping is: name -> {"path": str, "respect_gitignore": bool}
+        """
+        raw = self.get("repositories", {}) or {}
+        parsed: Dict[str, dict] = {}
+        for name, value in raw.items():
+            try:
+                if isinstance(value, str):
+                    parsed[name] = {"path": value, "respect_gitignore": True, "ignore_patterns": []}
+                elif isinstance(value, dict):
+                    path = value.get("path") or value.get("repo_path")
+                    if not path:
+                        continue
+                    parsed[name] = {
+                        "path": path,
+                        "respect_gitignore": bool(value.get("respect_gitignore", True)),
+                        "ignore_patterns": list(value.get("ignore_patterns", []) or []),
+                    }
+                else:
+                    # unknown format; skip
+                    continue
+            except Exception:
+                continue
+        return parsed
     
     @property
     def index_path(self) -> Path:
         path_str = self.get("index.path", "~/.sigil_index")
         return Path(path_str).expanduser().resolve()
+
+    @property
+    def index_ignore_patterns(self) -> list[str]:
+        """Get global ignore patterns used by the indexer.
+
+        This returns the raw list from `index.ignore_patterns` in `config.json`.
+        Patterns may include simple glob expressions (e.g. "*.pyc"),
+        directory suffixes (e.g. ".git/"), and negations beginning with "!"
+        (e.g. "!/sigil-admin-ui/src/lib/") to re-include specific paths.
+        """
+        return list(self.get("index.ignore_patterns", []))
+
+    @property
+    def embeddings_llamacpp_threads(self) -> int | None:
+        """Optional number of threads to pass to llama.cpp provider (None = auto)."""
+        val = self.get("embeddings.llamacpp_threads", None)
+        if val is None:
+            return None
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            logger.warning("Invalid embeddings.llamacpp_threads '%s' in config", val)
+            return None
+
+    @property
+    def embeddings_llamacpp_batch_size(self) -> int | None:
+        """Optional batch size to use when calling llama.cpp embed APIs."""
+        val = self.get("embeddings.llamacpp_batch_size", None)
+        if val is None:
+            return None
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            logger.warning("Invalid embeddings.llamacpp_batch_size '%s' in config", val)
+            return None
+
+    @property
+    def embeddings_llamacpp_threads_batch(self) -> int | None:
+        """Optional n_threads_batch to use for llama.cpp embeddings (None = library default)."""
+        val = self.get("embeddings.llamacpp_threads_batch", None)
+        if val is None:
+            return None
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            logger.warning("Invalid embeddings.llamacpp_threads_batch '%s' in config", val)
+            return None
+
+    @property
+    def embeddings_llamacpp_n_batch(self) -> int | None:
+        """Optional n_batch (tokens per eval) for llama.cpp embeddings."""
+        val = self.get("embeddings.llamacpp_n_batch", None)
+        if val is None:
+            return None
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            logger.warning("Invalid embeddings.llamacpp_n_batch '%s' in config", val)
+            return None
+
+    @property
+    def embeddings_llamacpp_n_ubatch(self) -> int | None:
+        """Optional n_ubatch (micro-batch) for llama.cpp embeddings."""
+        val = self.get("embeddings.llamacpp_n_ubatch", None)
+        if val is None:
+            return None
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            logger.warning("Invalid embeddings.llamacpp_n_ubatch '%s' in config", val)
+            return None
 
     @property
     def lance_dir(self) -> Path:
@@ -709,3 +910,77 @@ def load_config(config_path: Optional[Path] = None):
     _config = Config(config_path)
     _config_env_signature = _capture_env_signature()
     return _config
+
+
+def save_config(cfg: Config, target_path: Optional[Path] = None) -> Path:
+    """Persist the given Config object's data to a JSON file.
+
+    By default, this will write to ./config.json if it exists, otherwise
+    to ./config.json in the current working directory (creating it if needed).
+    Returns the Path written to.
+    """
+    # Determine target path
+    if target_path:
+        out_path = target_path
+    else:
+        # Persist to project config.json in current working directory
+        out_path = Path.cwd() / "config.json"
+        # Ensure parent exists (cwd exists by definition)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _deep_merge(existing: dict, new: dict) -> dict:
+        """Recursively merge new into existing and return existing."""
+        for k, v in new.items():
+            if k in existing and isinstance(existing[k], dict) and isinstance(v, dict):
+                _deep_merge(existing[k], v)
+            else:
+                existing[k] = v
+        return existing
+
+    try:
+        # If file exists, load and merge rather than overwrite
+        if out_path.exists():
+            try:
+                with out_path.open("r", encoding="utf-8") as f:
+                    existing = json.load(f) or {}
+            except Exception:
+                existing = {}
+
+            # Create a timestamped backup before modifying and rotate old backups
+            try:
+                from datetime import datetime
+
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_path = out_path.with_name(f"{out_path.name}.{ts}.bak")
+                with out_path.open("r", encoding="utf-8") as fsrc, backup_path.open("w", encoding="utf-8") as fdst:
+                    fdst.write(fsrc.read())
+                logger.info("Backed up existing config to %s", backup_path)
+
+                # Rotate backups: keep only the most recent N backups
+                try:
+                    max_backups = 5
+                    backups = sorted([p for p in out_path.parent.glob(f"{out_path.name}.*.bak") if p.is_file()], key=lambda p: p.stat().st_mtime, reverse=True)
+                    for old in backups[max_backups:]:
+                        try:
+                            old.unlink()
+                            logger.info("Removed old backup %s", old)
+                        except Exception:
+                            logger.debug("Failed to remove old backup %s", old, exc_info=True)
+                except Exception:
+                    logger.debug("Backup rotation failed", exc_info=True)
+            except Exception:
+                logger.exception("Failed to create backup of existing config %s", out_path)
+
+            merged = _deep_merge(existing, cfg.config_data or {})
+            to_write = merged
+        else:
+            to_write = cfg.config_data or {}
+
+        with out_path.open("w", encoding="utf-8") as f:
+            json.dump(to_write, f, indent=2)
+        logger.info("Saved configuration to %s", out_path)
+    except Exception as exc:
+        logger.exception("Failed to save configuration to %s: %s", out_path, exc)
+        raise
+
+    return out_path

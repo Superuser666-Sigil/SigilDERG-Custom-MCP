@@ -6,6 +6,8 @@
 Tests for authentication module (auth.py).
 """
 
+from pathlib import Path
+
 from sigil_mcp.auth import (
     generate_api_key,
     hash_api_key,
@@ -13,6 +15,8 @@ from sigil_mcp.auth import (
     verify_api_key,
     get_api_key_from_env,
     get_api_key_path,
+    _update_api_key_path,
+    API_KEY_FILE,
 )
 
 
@@ -147,3 +151,56 @@ class TestEnvironmentVariableAuth:
         # Ensure env var is not set
         os.environ.pop("SIGIL_MCP_API_KEY", None)
         assert get_api_key_from_env() is None
+
+
+def test_update_api_key_path_updates_globals(tmp_path):
+    original = get_api_key_path()
+    new_path = tmp_path / "new_key"
+    _update_api_key_path(new_path)
+    assert get_api_key_path() == new_path
+    _update_api_key_path(original)
+
+
+def test_initialize_api_key_permission_fallback(monkeypatch, tmp_path):
+    target = tmp_path / "api_key"
+    fallback = tmp_path / "fallback_key"
+    monkeypatch.setattr("sigil_mcp.auth._WORKSPACE_FALLBACK", fallback)
+    monkeypatch.setattr("sigil_mcp.auth._update_api_key_path", lambda p: None)
+    monkeypatch.setattr("sigil_mcp.auth.generate_api_key", lambda: "key")
+    monkeypatch.setattr("sigil_mcp.auth.hash_api_key", lambda k: "hash")
+    monkeypatch.setattr("sigil_mcp.auth.get_api_key_path", lambda: target)
+
+    def fake_open(path, mode="r", *a, **k):
+        if Path(path) == target and "w" in mode:
+            raise PermissionError()
+        return open(path, mode, *a, **k)
+
+    monkeypatch.setattr("sigil_mcp.auth.open", fake_open, raising=False)
+    created = initialize_api_key()
+    assert created == "key"
+    assert fallback.exists()
+    assert fallback.read_text() == "hash"
+
+
+def test_verify_api_key_permission_error(monkeypatch, tmp_path):
+    target = tmp_path / "api_key"
+    target.write_text("hash")
+
+    def fake_open(path, mode="r", *a, **k):
+        raise PermissionError()
+
+    monkeypatch.setattr("sigil_mcp.auth.get_api_key_path", lambda: target)
+    monkeypatch.setattr("sigil_mcp.auth.open", fake_open, raising=False)
+    assert verify_api_key("value") is False
+
+
+def test_verify_api_key_generic_error(monkeypatch, tmp_path):
+    target = tmp_path / "api_key"
+    target.write_text("hash")
+
+    def fake_open(path, mode="r", *a, **k):
+        raise ValueError("boom")
+
+    monkeypatch.setattr("sigil_mcp.auth.get_api_key_path", lambda: target)
+    monkeypatch.setattr("sigil_mcp.auth.open", fake_open, raising=False)
+    assert verify_api_key("value") is False

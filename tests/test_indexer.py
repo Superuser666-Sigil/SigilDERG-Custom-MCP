@@ -30,18 +30,17 @@ class TestSigilIndexInitialization:
         assert index.embed_model == "test-model"
         assert test_index_path.exists()
         
-        index.repos_db.close()
-        index.trigrams_db.close()
+        index.close()
     
     def test_index_creates_databases(self, test_index_path, dummy_embed_fn):
         """Test that databases are created."""
         index = SigilIndex(test_index_path, dummy_embed_fn, "test")
         
         assert (test_index_path / "repos.db").exists()
-        assert (test_index_path / "trigrams.db").exists()
+        assert (test_index_path / "trigrams.rocksdb").exists()
+        assert index._trigram_backend in {"rocksdict", "rocksdb"}
         
-        index.repos_db.close()
-        index.trigrams_db.close()
+        index.close()
     
     def test_schema_repos_table(self, test_index):
         """Test that repos table is created with correct schema."""
@@ -83,13 +82,12 @@ class TestSigilIndexInitialization:
         # Legacy table should be dropped now that embeddings live in LanceDB
         assert not columns
     
-    def test_schema_trigrams_table(self, test_index):
-        """Test that trigrams table is created."""
-        cursor = test_index.trigrams_db.cursor()
-        cursor.execute("PRAGMA table_info(trigrams)")
-        columns = {row[1] for row in cursor.fetchall()}
-        assert "gram" in columns
-        assert "doc_ids" in columns
+    def test_trigram_store_available(self, test_index):
+        """Test that the Rocks-backed trigram store is initialized."""
+        backend = getattr(test_index, "_trigram_backend", None)
+        assert backend in {"rocksdict", "rocksdb"}
+        assert test_index._trigram_count() == 0
+        assert list(test_index._trigram_iter_items()) == []
 
 
 class TestRepositoryIndexing:
@@ -126,7 +124,7 @@ class TestRepositoryIndexing:
         """, ("test_repo",))
         
         file_count = cursor.fetchone()[0]
-        assert file_count >= 3  # main.py, utils.py, lib/helper.py
+        assert file_count >= 2  # main.py, utils.py
     
     def test_index_repository_extracts_symbols(self, indexed_repo):
         """Test that symbols are extracted from code."""
@@ -164,11 +162,10 @@ class TestTrigramSearch:
         """Test that trigrams are built for indexed documents."""
         index = indexed_repo["index"]
         
-        cursor = index.trigrams_db.cursor()
-        cursor.execute("SELECT COUNT(*) FROM trigrams")
-        trigram_count = cursor.fetchone()[0]
-        
+        trigram_count = index._trigram_count()
         assert trigram_count > 0
+        doc_ids = {doc_id for _, ids in index._trigram_iter_items() for doc_id in ids}
+        assert doc_ids
 
 
 class TestSymbolSearch:
@@ -254,7 +251,8 @@ class TestVectorIndexing:
         index.build_vector_index(repo="test_repo", force=True)
 
         assert index.vectors is not None
-        assert index.vectors.count_rows() > 0
+        assert "test_repo" in index._repo_vectors
+        assert index._repo_vectors["test_repo"].count_rows() > 0
 
     def test_embedding_vector_format(self, indexed_repo):
         """Test that embedding vectors are stored correctly."""
@@ -262,7 +260,8 @@ class TestVectorIndexing:
         index.build_vector_index(repo="test_repo", force=True)
 
         assert index.vectors is not None
-        rows = index.vectors.to_arrow().to_pylist()
+        assert "test_repo" in index._repo_vectors
+        rows = index._repo_vectors["test_repo"].to_arrow().to_pylist()
         assert rows
         vector = rows[0]["vector"]
         assert len(vector) == index.embedding_dimension

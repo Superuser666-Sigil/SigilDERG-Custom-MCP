@@ -8,7 +8,7 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 ## Status
 
-Accepted
+Superseded by [ADR-017: RocksDB Trigram Store](adr-017-rocksdb-trigram-store.md)
 
 ## Context
 
@@ -71,7 +71,7 @@ Post-filter: Verify actual substring exists in candidates
 
 ### Neutral
 
-- Trigram index stored in `~/.sigil_index/trigrams.db`
+- Trigram index stored in `~/.sigil_index/trigrams.rocksdb`
 - Documents and symbols in separate `repos.db` for relational queries
 - Compressed content blobs in `blobs/` directory
 - SHA-256 deduplication prevents storing identical files multiple times

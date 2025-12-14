@@ -3,6 +3,7 @@
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union, cast
 from urllib.parse import urlencode
@@ -350,7 +351,22 @@ def check_ip_whitelist(client_ip: Optional[str] = None) -> bool:
 # --------------------------------------------------------------------
 
 # Load repositories from config
-REPOS: Dict[str, Path] = {k: Path(v) for k, v in config.repositories.items()}
+# Backwards-compatible: build simple REPOS mapping name->Path and
+# REPO_OPTIONS mapping name->{path, respect_gitignore}
+REPO_OPTIONS: Dict[str, dict] = {}
+REPOS: Dict[str, Path] = {}
+for name, info in config.repositories_config.items():
+    try:
+        p = Path(info.get("path")).expanduser().resolve()
+    except Exception:
+        continue
+    # Persist per-repo runtime options including ignore_patterns
+    REPO_OPTIONS[name] = {
+        "path": p,
+        "respect_gitignore": bool(info.get("respect_gitignore", True)),
+        "ignore_patterns": list(info.get("ignore_patterns", []) or []),
+    }
+    REPOS[name] = p
 
 if not REPOS:
     logger.warning(
@@ -447,7 +463,7 @@ def rebuild_index_op(
 
     if repo is not None:
         # Per-repo rebuild: use script's single-repo logic
-        from scripts.rebuild_indexes import rebuild_single_repo_index
+        from sigil_mcp.scripts.rebuild_indexes import rebuild_single_repo_index
         repo_path = _get_repo_root(repo)
         return rebuild_single_repo_index(
             index=index,
@@ -457,7 +473,7 @@ def rebuild_index_op(
         )
 
     # Complete rebuild: use script's rebuild_all_indexes logic
-    from scripts.rebuild_indexes import rebuild_all_indexes
+    from sigil_mcp.scripts.rebuild_indexes import rebuild_all_indexes
     return rebuild_all_indexes(
         index=index,
         wipe_index=False,  # Don't wipe - we're using existing index
@@ -705,10 +721,29 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
                 else 0
             )
             
+            # compute stale vectors count for this repo from repos.db
+            try:
+                cur = index.repos_db.cursor()
+                cur.execute("SELECT id FROM repos WHERE name = ?", (repo,))
+                r = cur.fetchone()
+                if r:
+                    repo_id = r[0]
+                    cur.execute(
+                        "SELECT COUNT(*) FROM documents WHERE repo_id = ? AND (vector_index_error IS NOT NULL OR vector_indexed_at IS NULL)",
+                        (repo_id,),
+                    )
+                    vectors_stale = int(cur.fetchone()[0] or 0)
+                else:
+                    vectors_stale = 0
+            except Exception:
+                logger.debug("Failed to compute vectors_stale for repo %s", repo, exc_info=True)
+                vectors_stale = 0
+
             return {
                 "total_documents": stats.get("documents", 0),
                 "total_symbols": stats.get("symbols", 0),
                 "total_vectors": _get_vector_count(repo),
+                "total_vectors_stale": vectors_stale,
                 "total_repos": 1,
                 "repos": {
                     repo: {
@@ -716,6 +751,7 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
                         "symbols": stats.get("symbols", 0),
                         "files": file_count,
                         "vectors": _get_vector_count(repo),
+                        "vectors_stale": vectors_stale,
                     }
                 }
             }
@@ -725,7 +761,18 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
         total_repos = stats.get("repositories", 0)
         total_vectors = _get_vector_count()
 
-        # Get per-repo stats
+        # compute total stale vectors across all repos
+        try:
+            cur = index.repos_db.cursor()
+            cur.execute(
+                "SELECT COUNT(*) FROM documents WHERE (vector_index_error IS NOT NULL OR vector_indexed_at IS NULL)"
+            )
+            total_vectors_stale = int(cur.fetchone()[0] or 0)
+        except Exception:
+            logger.debug("Failed to compute total_vectors_stale", exc_info=True)
+            total_vectors_stale = 0
+
+        # Get per-repo stats and per-repo stale counts
         repos_dict: Dict[str, Dict[str, int]] = {}
         from .server import REPOS
         for repo_name in REPOS.keys():
@@ -737,11 +784,30 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
                     if repo_path.exists()
                     else 0
                 )
+                # compute per-repo stale count
+                try:
+                    cur = index.repos_db.cursor()
+                    cur.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
+                    row = cur.fetchone()
+                    if row:
+                        repo_id = row[0]
+                        cur.execute(
+                            "SELECT COUNT(*) FROM documents WHERE repo_id = ? AND (vector_index_error IS NOT NULL OR vector_indexed_at IS NULL)",
+                            (repo_id,),
+                        )
+                        repo_vectors_stale = int(cur.fetchone()[0] or 0)
+                    else:
+                        repo_vectors_stale = 0
+                except Exception:
+                    logger.debug("Failed to compute vectors_stale for %s", repo_name, exc_info=True)
+                    repo_vectors_stale = 0
+
                 repos_dict[repo_name] = {
                     "documents": int(repo_stats.get("documents", 0)),
                     "symbols": int(repo_stats.get("symbols", 0)),
                     "files": int(file_count),
                     "vectors": _get_vector_count(repo_name),
+                    "vectors_stale": repo_vectors_stale,
                 }
 
         return {
@@ -749,6 +815,7 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
             "total_symbols": total_symbols,
             "total_repos": total_repos,
             "total_vectors": total_vectors,
+            "total_vectors_stale": total_vectors_stale,
             "repos": repos_dict
         }
     
@@ -887,8 +954,15 @@ def _attempt_local_index_remove(repo_name: str, repo_path: Path, file_path: Path
             try:
                 removed = local_index.remove_file(repo_name, repo_path, file_path)
             finally:
-                local_index.repos_db.close()
-                local_index.trigrams_db.close()
+                try:
+                    local_index.repos_db.close()
+                except Exception:
+                    pass
+                try:
+                    if getattr(local_index, "trigrams_db", None):
+                        local_index.trigrams_db.close()
+                except Exception:
+                    pass
             if removed:
                 logger.info("Removed %s from local index at %s", file_path, entry)
                 return True
@@ -936,12 +1010,33 @@ def _on_file_change(repo_name: str, file_path: Path, event_type: str):
             _handle_deleted_event(index, repo_name, repo_path, file_path)
             return
 
-        # Granular re-indexing for modified/created files
-        success = index.index_file(repo_name, repo_path, file_path)
-        if success:
-            logger.info(f"Re-indexed {file_path.name} after {event_type}")
-        else:
-            logger.debug(f"Skipped re-indexing {file_path.name}")
+        # Ensure embedding function is initialized on-demand when possible
+        try:
+            if getattr(index, "embed_fn", None) is None and get_config().embeddings_enabled:
+                try:
+                    embed_fn, embed_model = _create_embedding_function()
+                    if embed_fn:
+                        index.embed_fn = embed_fn
+                        index.embed_model = embed_model or index.embed_model
+                        logger.info("Initialized embed_fn on-demand in _on_file_change")
+                except Exception:
+                    logger.debug("On-demand embedding init failed; continuing without embeddings", exc_info=True)
+        except Exception:
+            logger.debug("Failed to check/init embed_fn in _on_file_change", exc_info=True)
+
+        # Granular re-indexing for modified/created files — run in background to avoid blocking watcher
+        def _do_index():
+            try:
+                success = index.index_file(repo_name, repo_path, file_path)
+                if success:
+                    logger.info(f"Re-indexed {file_path.name} after {event_type}")
+                else:
+                    logger.debug(f"Skipped re-indexing {file_path.name}")
+            except Exception as e:
+                logger.error(f"Error during background re-index of {file_path}: {e}")
+
+        t = threading.Thread(target=_do_index, daemon=True)
+        t.start()
     except Exception as e:
         logger.error(f"Error re-indexing after {event_type}: {e}")
 
@@ -970,7 +1065,13 @@ def _start_watching_repos():
     watcher = _get_watcher()
     if watcher:
         for repo_name, repo_path in REPOS.items():
-            watcher.watch_repository(repo_name, Path(repo_path))
+            # honor per-repo respect_gitignore option when creating the watcher
+            respect = True
+            try:
+                respect = bool(REPO_OPTIONS.get(repo_name, {}).get("respect_gitignore", True))
+            except Exception:
+                respect = True
+            watcher.watch_repository(repo_name, Path(repo_path), honor_gitignore=respect)
 
 
 # --------------------------------------------------------------------

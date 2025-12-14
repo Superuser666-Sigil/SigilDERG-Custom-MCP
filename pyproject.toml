@@ -35,7 +35,9 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=1.22.0",
+    "fastmcp>=2.14.0",
     "numpy>=1.24.0,<3.0",
+    "rocksdict>=0.3.20",
 ]
 
 [project.optional-dependencies]
@@ -101,6 +103,10 @@ sigil-rebuild-indexes = "sigil_mcp.scripts.rebuild_indexes:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sigil_mcp"]
+
+[tool.setuptools.packages.find]
+include = ["sigil_mcp*"]
+exclude = ["tmp_*", "tmp_*", "test_*", "tests*", "htmlcov*", ".pytest_cache*"]
 
 [tool.black]
 line-length = 100

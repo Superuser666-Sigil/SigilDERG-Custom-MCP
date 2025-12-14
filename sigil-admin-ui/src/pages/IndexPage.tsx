@@ -111,6 +111,23 @@ export function IndexPage() {
 
           <Card>
             <CardHeader>
+              <CardTitle>Total Vectors</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold">{(stats.total_vectors ?? 0).toLocaleString()}</div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Vectors Stale</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold text-rose-600">{(stats.total_vectors_stale ?? 0).toLocaleString()}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
               <CardTitle>Total Symbols</CardTitle>
             </CardHeader>
             <CardContent>
@@ -141,6 +158,8 @@ export function IndexPage() {
                       <TableHead>Documents</TableHead>
                       <TableHead>Symbols</TableHead>
                       <TableHead>Files</TableHead>
+                      <TableHead>Vectors</TableHead>
+                      <TableHead>Vectors Stale</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -150,6 +169,8 @@ export function IndexPage() {
                         <TableCell>{data.documents.toLocaleString()}</TableCell>
                         <TableCell>{data.symbols.toLocaleString()}</TableCell>
                         <TableCell>{data.files.toLocaleString()}</TableCell>
+                        <TableCell>{(data.vectors ?? 0).toLocaleString()}</TableCell>
+                        <TableCell>{(data.vectors_stale ?? 0).toLocaleString()}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

@@ -122,6 +122,11 @@ Edit your `config.json`:
 - 32 = full offload for 8B models (recommended if you have GPU)
 - Higher = faster but more VRAM
 
+**`n_batch` / `n_ubatch`** (defaults: n_batch 2048, n_ubatch = n_batch)
+- llama.cpp logical batch vs micro-batch. `n_ubatch` must be **>= tokens in any single embed call** or llama.cpp will hard-abort with `encoder requires n_ubatch >= n_tokens`.
+- llama-cpp-python clamps `n_ubatch <= n_batch`, so raise both together (e.g., set both to `4096` to avoid crashes on long inputs).
+- Sigil auto-splits long texts to fit the configured `n_ubatch`, but larger values reduce chunking and speed up indexing if you have headroom.
+
 **`use_mlock`** (default: false)
 - Lock model in RAM to prevent swapping
 - Recommended if you have enough RAM

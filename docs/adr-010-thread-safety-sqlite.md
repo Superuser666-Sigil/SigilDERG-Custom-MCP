@@ -11,7 +11,7 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 ## Context
 
-The Sigil MCP server's indexing system uses SQLite databases to store repository metadata, document content, symbols, trigrams, and vector embeddings. The server operates in a multi-threaded environment with concurrent access from multiple sources:
+The Sigil MCP server's indexing system uses SQLite databases to store repository metadata, document content, symbols, and vector embeddings. The trigram index now uses RocksDB exclusively. The server operates in a multi-threaded environment with concurrent access from multiple sources:
 
 1. **HTTP Request Handlers**: Multiple concurrent MCP tool invocations (search_code, find_symbol, semantic_search)
 2. **File Watcher Thread**: Automatic file change detection triggering incremental re-indexing
@@ -36,16 +36,12 @@ Implement comprehensive thread safety using **Write-Ahead Logging (WAL) mode** a
 
 ### 1. WAL Mode for Concurrent Readers
 
-Enable SQLite's WAL (Write-Ahead Log) journaling mode on both databases:
+Enable SQLite's WAL (Write-Ahead Log) journaling mode on the repos database:
 
 ```python
 self.repos_db.execute("PRAGMA journal_mode=WAL;")
 self.repos_db.execute("PRAGMA synchronous=NORMAL;")
 self.repos_db.execute("PRAGMA busy_timeout=5000;")
-
-self.trigrams_db.execute("PRAGMA journal_mode=WAL;")
-self.trigrams_db.execute("PRAGMA synchronous=NORMAL;")
-self.trigrams_db.execute("PRAGMA busy_timeout=5000;")
 ```
 
 **WAL Mode Benefits (at SQLite level):**
@@ -102,7 +98,7 @@ def search_code(self, query, repo=None, max_results=50):
 
 ### 4. Connection Sharing Strategy
 
-- **Single Connection Per Database**: One `repos_db` and one `trigrams_db` connection shared across all threads
+- **Single Connection Per Database**: One `repos_db` connection shared across all threads
 - **No Connection Pool**: Serialization via RLock makes pooling unnecessary
 - **check_same_thread=False**: Required for cross-thread usage (safe with locking)
 

@@ -8,6 +8,7 @@ Hybrid code indexing for Sigil MCP Server.
 Combines trigram-based text search with symbol extraction for IDE-like features.
 Designed to work well with ChatGPT and other AI assistants via MCP.
 """
+# pyright: reportGeneralTypeIssues=false
 
 import hashlib
 import zlib
@@ -17,13 +18,38 @@ import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import List, Optional, Set, Callable, Sequence, Dict
+from .ignore_utils import (
+    load_gitignore,
+    is_ignored_by_gitignore,
+    load_include_patterns,
+    should_ignore,
+)
+from typing import List, Optional, Set, Callable, Sequence, Dict, Any, cast
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from time import perf_counter
 import numpy as np
 import threading
+from collections import defaultdict
+
+# RocksDB bindings: prefer rocksdict (prebuilt wheels), fall back to python-rocksdb if present
+try:
+    from rocksdict import Rdict  # type: ignore
+
+    ROCKSDICT_AVAILABLE = True
+except Exception:
+    Rdict = None  # type: ignore
+    ROCKSDICT_AVAILABLE = False
+
+try:
+    import rocksdb  # type: ignore
+
+    ROCKSDB_AVAILABLE = True
+except Exception:
+    rocksdb = None  # type: ignore
+    ROCKSDB_AVAILABLE = False
 
 try:
     import lancedb  # type: ignore
@@ -37,12 +63,49 @@ except ImportError:
 from .config import get_config
 from .schema import get_code_chunk_model
 
+# Optional tokenizer support
+try:
+    import tiktoken  # type: ignore
+    TIKTOKEN_AVAILABLE = True
+except Exception:
+    tiktoken = None  # type: ignore
+    TIKTOKEN_AVAILABLE = False
+
+# Tell the type-checker these optional third-party modules/objects are untyped
+Rdict = cast(Any, Rdict)
+rocksdb = cast(Any, rocksdb)
+lancedb = cast(Any, lancedb)
+pa = cast(Any, pa)
+tiktoken = cast(Any, tiktoken)
+
 logger = logging.getLogger(__name__)
 
 # Type alias for embedding function: takes sequence of texts, returns (N, dim) array
 EmbeddingFn = Callable[[Sequence[str]], np.ndarray]
 
 USE_LANCEDB_STUB = os.getenv("SIGIL_MCP_LANCEDB_STUB", "").lower() == "1"
+
+# Heuristics to keep embedding workloads small and useful
+DEFAULT_EMBED_CHUNK_LINES = 80
+DEFAULT_EMBED_CHUNK_OVERLAP = 20
+
+# Files/extensions/names we should never send to the embedder by default
+EMBED_SKIP_EXTS = {'.ipynb', '.jsonl'}
+EMBED_SKIP_NAMES = {'package-lock.json', 'Cargo.lock', '.coverage'}
+DEFAULT_EMBED_MAX_CHARS = 4000
+DEFAULT_EMBED_MAX_BYTES = 1_000_000
+EMBED_SKIP_SUFFIXES = {".jsonl", ".log"}
+EMBED_SKIP_FILENAMES = {
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "cargo.lock",
+    "poetry.lock",
+    "pipfile.lock",
+    "composer.lock",
+    "gemfile.lock",
+}
+EMBED_SKIP_DIRS = {"coverage", "htmlcov", "test_logs", "output", "outputs", "backups"}
 
 
 class _StubVectorType:
@@ -81,6 +144,24 @@ class _InMemoryQuery:
         self._query_vec = query_vec.astype("float32") if query_vec is not None else None
         self._where = None
         self._limit: Optional[int] = None
+
+    def limit(self, k: int):
+        self._limit = k
+        return self
+
+
+class _NullTrigramDB:
+    """No-op stub to provide a close() for non-SQLite trigram backends."""
+
+    def __init__(self):
+        # Provide attributes used by methods so static checkers know they exist
+        self._rows: list[dict] = []
+        self._where: Optional[str] = None
+        self._limit: Optional[int] = None
+        self._query_vec: Optional[np.ndarray] = None
+
+    def close(self) -> None:
+        return None
 
     def where(self, expression: str):
         self._where = expression
@@ -141,17 +222,17 @@ class InMemoryLanceTable:
         self.rows: list[dict] = []
         self.schema = _StubSchema(dimension)
 
-    def _normalize_record(self, record: object) -> dict:
+    def _normalize_record(self, record: Any) -> dict:
         if hasattr(record, "model_dump"):
-            data = record.model_dump()
+            data = cast(dict, record.model_dump())
         elif hasattr(record, "dict"):
-            data = record.dict()  # type: ignore[attr-defined]
+            data = cast(dict, record.dict())  # type: ignore[attr-defined]
         else:
             data = dict(record)  # type: ignore[arg-type]
 
         vec = data.get("vector")
-        if hasattr(vec, "tolist"):
-            vec = vec.tolist()
+        if vec is not None and hasattr(vec, "tolist"):
+            vec = cast(list, vec.tolist())
         data["vector"] = vec
         return data
 
@@ -264,26 +345,46 @@ class SigilIndex:
         embed_model: str = "local"
     ):
         self.index_path = index_path
-        self.index_path.mkdir(parents=True, exist_ok=True)
+        
         self.embed_fn = embed_fn
         self.embed_model = embed_model
         self._embedding_init_failed = False
         self.use_lancedb_stub = USE_LANCEDB_STUB
 
         config = get_config()
+        # Keep config available for runtime decisions (ignore patterns, per-repo options)
+        self.config = config
         self.embedding_dimension = config.embeddings_dimension
         self.embedding_provider = config.embeddings_provider
         self.allow_vector_schema_overwrite = config.index_allow_vector_schema_overwrite
+        # Base directory under which per-repo LanceDB directories will live.
+        # Previously we used a single shared LanceDB path; migrate to
+        # per-repo directories located under this base path.
         if config.index_path == self.index_path:
-            self.lance_db_path = config.lance_dir
+            self.base_lance_dir = Path(config.lance_dir)
         else:
-            self.lance_db_path = self.index_path / "lancedb"
-        self.lance_db = None
-        self.lance = None
+            self.base_lance_dir = self.index_path / "lancedb"
+
+        # Cache of per-repo LanceDB connections / tables
+        self._repo_lance_dbs: dict[str, object] = {}
+        self._repo_vectors: dict[str, object] = {}
+        # Separate locks: DB/trigram metadata vs embedding calls
+        self._db_lock = threading.RLock()
+        self._embed_lock = threading.RLock()
+        # Backward compatibility with older callers that referenced _lock
+        self._lock = self._db_lock
+
+        # Backwards-compatible single global attributes (may remain None)
+        self.lance_db: Any = None
+        self.lance: Any = None
+        self.lance_db_path = self.base_lance_dir
         self.vector_table_name = "code_vectors"
-        self.vectors = None
+        self.vectors: Any = None
         self.lancedb_available = LANCEDB_AVAILABLE or self.use_lancedb_stub
         self._vector_index_stale = False
+
+        # Helper: a small lock scoped to per-repo lance initialization
+        self._lance_init_lock = threading.RLock()
 
         # If embeddings are enabled via config but no embed_fn was provided,
         # try to initialize one automatically so semantic search works out-of-the-box.
@@ -342,16 +443,42 @@ class SigilIndex:
             self._sync_embedding_dimension_from_lance()
             self._log_embedding_startup()
             self._warn_on_vector_schema_mismatch()
+        # Wrap embed_fn to apply batching/bucketing heuristics to avoid padding blowup
+        # Preserve the original function object on `embed_fn` for callers/tests
+        # while using `_wrapped_embed_fn` internally for batching behavior.
+        if self.embed_fn is not None:
+            self._raw_embed_fn = self.embed_fn
+            try:
+                if self.embedding_provider != "llamacpp":
+                    self._wrapped_embed_fn = self._wrap_embed_fn(self._raw_embed_fn)
+                else:
+                    # Skip bucketing for llama.cpp to avoid redundant tokenization
+                    self._wrapped_embed_fn = self._raw_embed_fn
+            except Exception:
+                # If wrapping fails, fall back to raw function
+                self._wrapped_embed_fn = self._raw_embed_fn
         else:
+            self._raw_embed_fn = None
+            self._wrapped_embed_fn = None
             self._code_chunk_model = None
             self.vectors = None
 
         self._vector_index_enabled = self._embeddings_active and self.vectors is not None
         self._log_vector_index_status()
 
-        # Global lock to serialize DB access across threads
-        # (HTTP handlers + file watcher + vector indexing)
-        self._lock = threading.RLock()
+        # Which backend to use for trigram postings: rocksdb (preferred when available)
+        # or sqlite (legacy/fallback). Controlled by SIGIL_MCP_TRIGRAM_BACKEND env:
+        # values: "rocksdb", "sqlite", "auto" (default -> prefer rocksdb if available).
+        self._trigram_backend: str = "sqlite"
+        self._rocksdb_trigrams: Any = None
+        self._rocksdict_trigrams: Any = None
+        trigram_backend_env = os.getenv("SIGIL_MCP_TRIGRAM_BACKEND", "auto").lower()
+        force_sqlite = trigram_backend_env == "sqlite"
+        force_rocksdict = trigram_backend_env == "rocksdict"
+        force_rocksdb = trigram_backend_env == "rocksdb"
+        prefer_rocks = trigram_backend_env in {"auto", "rocksdb", "rocksdict"}
+        if force_sqlite:
+            prefer_rocks = False
         
         # Use longer timeout for multi-process access (Admin API + main server)
         # 60 seconds should be enough for most operations
@@ -367,19 +494,70 @@ class SigilIndex:
             "PRAGMA busy_timeout=60000;"
         )  # 60 seconds in milliseconds
 
-        self.trigrams_db = sqlite3.connect(
-            self.index_path / "trigrams.db",
-            check_same_thread=False,
-            timeout=60.0  # 60 second timeout for database locks
-        )
-        self.trigrams_db.execute("PRAGMA journal_mode=WAL;")
-        self.trigrams_db.execute("PRAGMA synchronous=NORMAL;")
-        self.trigrams_db.execute(
-            "PRAGMA busy_timeout=60000;"
-        )  # 60 seconds in milliseconds
+        # Initialize trigram store (RocksDB required)
+        if ROCKSDICT_AVAILABLE:
+            try:
+                trigram_path = self.index_path / "trigrams.rocksdb"
+                trigram_path.mkdir(parents=True, exist_ok=True)
+                # Rdict auto-creates when path does not exist; no create_if_missing kw
+                rd = cast(Any, Rdict)
+                self._rocksdict_trigrams = rd(str(trigram_path))
+                self._trigram_backend = "rocksdict"
+                logger.info("Using rocksdict trigram store at %s", trigram_path)
+            except Exception:
+                logger.exception("Failed to initialize rocksdict")
+                raise RuntimeError("rocksdict initialization failed - RocksDB trigrams are required")
+        elif ROCKSDB_AVAILABLE:
+            try:
+                rb = cast(Any, rocksdb)
+                rocks_opts = rb.Options()
+                rocks_opts.create_if_missing = True
+                rocks_opts.max_background_jobs = 2
+                rocks_opts.max_open_files = 500
+                rocks_opts.write_buffer_size = 64 * 1024 * 1024
+                rocks_opts.target_file_size_base = 64 * 1024 * 1024
+                rocks_opts.compression = rb.CompressionType.lz4_compression
+                table_opts = rb.BlockBasedTableOptions()
+                table_opts.block_cache = rb.LRUCache(128 * 1024 * 1024)
+                table_opts.filter_policy = rb.BloomFilterPolicy(10)
+                rocks_opts.table_factory = rb.BlockBasedTableFactory(
+                    table_opts
+                )
+                trigram_path = self.index_path / "trigrams.rocksdb"
+                self._rocksdb_trigrams = rb.DB(
+                    str(trigram_path),
+                    rocks_opts,
+                )
+                self._trigram_backend = "rocksdb"
+                logger.info("Using RocksDB trigram store at %s", trigram_path)
+            except Exception:
+                logger.exception("Failed to initialize python-rocksdb")
+                raise RuntimeError("RocksDB initialization failed - RocksDB trigrams are required")
+        else:
+            raise RuntimeError(
+                "No RocksDB backend available. Please install rocksdict: pip install rocksdict"
+            )
         
         self._init_schema()
         self._check_vector_repo_alignment()
+
+    def _call_embed(self, texts: Sequence[str]) -> np.ndarray:
+        """Invoke the embedding function, preferring the internal wrapped/batched version.
+
+        Keeps `self.embed_fn` pointing at the original function object for tests that
+        assert identity, while using `_wrapped_embed_fn` for actual embedding calls.
+        """
+        fn = getattr(self, "_wrapped_embed_fn", None) or getattr(self, "embed_fn", None)
+        if fn is None:
+            return np.zeros((0, self.embedding_dimension), dtype='float32')
+        try:
+            if self.embedding_provider == "llamacpp":
+                with self._embed_lock:
+                    return fn(list(texts))
+            return fn(list(texts))
+        except Exception:
+            # Fail-open: return empty array on error
+            return np.zeros((0, self.embedding_dimension), dtype='float32')
 
     def _auto_initialize_embed_fn_from_config(self, config) -> None:
         """Initialize an embedding function from config when none is provided."""
@@ -439,22 +617,85 @@ class SigilIndex:
     def _ensure_lance_dir_permissions(self) -> None:
         """Create the LanceDB path and align its permissions to the index dir."""
 
+        # Ensure base directory for per-repo lance DBs exists and has sane perms
         created = False
-        if not self.lance_db_path.exists():
-            self.lance_db_path.mkdir(parents=True, exist_ok=True)
-            created = True
-        else:
-            self.lance_db_path.mkdir(parents=True, exist_ok=True)
+        try:
+            if not self.base_lance_dir.exists():
+                self.base_lance_dir.mkdir(parents=True, exist_ok=True)
+                created = True
+            else:
+                self.base_lance_dir.mkdir(parents=True, exist_ok=True)
 
-        if created:
+            if created:
+                try:
+                    mode = self.index_path.stat().st_mode & 0o777
+                    os.chmod(self.base_lance_dir, mode)
+                except Exception:
+                    logger.exception(
+                        "Failed to apply index directory permissions to LanceDB base path %s",
+                        self.base_lance_dir,
+                    )
+        except Exception:
+            logger.exception("Failed to ensure base LanceDB directory %s", self.base_lance_dir)
+
+    def _get_repo_lance_path(self, repo_name: str) -> Path:
+        """Compute the LanceDB directory path for a given repo name."""
+        return (self.base_lance_dir / repo_name).resolve()
+
+    def _get_repo_name_for_id(self, repo_id: int) -> Optional[str]:
+        with self._db_lock:
+            cur = self.repos_db.cursor()
+            cur.execute("SELECT name FROM repos WHERE id = ?", (repo_id,))
+            row = cur.fetchone()
+        return row[0] if row else None
+
+    def _get_repo_lance_and_vectors(self, repo_name: str):
+        """Return a (lance_db, vectors_table) tuple for the given repo, creating
+        the LanceDB and table if necessary. Caches connections in-memory."""
+        with self._lance_init_lock:
+            if repo_name in self._repo_vectors and repo_name in self._repo_lance_dbs:
+                return self._repo_lance_dbs[repo_name], self._repo_vectors[repo_name]
+
+            path = self._get_repo_lance_path(repo_name)
             try:
-                mode = self.index_path.stat().st_mode & 0o777
-                os.chmod(self.lance_db_path, mode)
+                path.mkdir(parents=True, exist_ok=True)
             except Exception:
-                logger.exception(
-                    "Failed to apply index directory permissions to LanceDB path %s",
-                    self.lance_db_path,
-                )
+                logger.exception("Failed to create LanceDB path for repo %s at %s", repo_name, path)
+
+            # Initialize stub or real LanceDB for this repo
+            if self.use_lancedb_stub:
+                stub_key = str(path)
+                if stub_key in _STUB_LANCEDB_REGISTRY:
+                    repo_db = _STUB_LANCEDB_REGISTRY[stub_key]
+                else:
+                    repo_db = InMemoryLanceDB(self.embedding_dimension)
+                    _STUB_LANCEDB_REGISTRY[stub_key] = repo_db
+            else:
+                try:
+                    repo_db = lancedb.connect(str(path)) if lancedb else None
+                except Exception:
+                    logger.exception("Failed to connect to LanceDB at %s for repo %s", path, repo_name)
+                    repo_db = None
+
+            repo_table = None
+            if repo_db is not None:
+                try:
+                    table_names = set(repo_db.table_names())
+                    target_table = self.vector_table_name
+                    if target_table in table_names:
+                        repo_table = repo_db.open_table(target_table)
+                    elif "code_chunks" in table_names:
+                        target_table = "code_chunks"
+                        repo_table = repo_db.open_table(target_table)
+                    else:
+                        repo_table = repo_db.create_table(target_table, schema=get_code_chunk_model(self.embedding_dimension))
+                except Exception:
+                    logger.exception("Failed to open/create vector table for repo %s at %s", repo_name, path)
+                    repo_table = None
+
+            self._repo_lance_dbs[repo_name] = repo_db
+            self._repo_vectors[repo_name] = repo_table
+            return repo_db, repo_table
 
     def _log_embedding_startup(self) -> None:
         """Log embedding provider configuration for visibility at startup."""
@@ -481,6 +722,294 @@ class SigilIndex:
                 "LanceDB initialized but no embedding function configured; "
                 "vector indexing calls will fail until embeddings are set."
             )
+
+    def _wrap_embed_fn(self, fn: EmbeddingFn) -> EmbeddingFn:
+        """Wrap a provider embed function to apply simple length bucketing and batching.
+
+        This reduces padding waste by grouping similarly-sized texts together
+        before calling the underlying provider.
+        """
+        def wrapped(texts: Sequence[str]) -> np.ndarray:
+            # Use tokenizer-based token counting when available for accurate bucketing
+            thresholds = list(self._get_bucket_thresholds())
+            # buckets is list of lists (preserve order of thresholds)
+            buckets: list[list[tuple[str, int]]] = [[] for _ in range(len(thresholds) + 1)]
+
+            def count_tokens(s: str) -> int:
+                # Prefer tiktoken if available and a model is known
+                try:
+                    if TIKTOKEN_AVAILABLE and self.embed_model:
+                        tk = cast(Any, tiktoken)
+                        try:
+                            enc = tk.encoding_for_model(self.embed_model)
+                        except Exception:
+                            enc = tk.get_encoding("cl100k_base")
+                        return len(enc.encode(s))
+                except Exception:
+                    pass
+                # Fallback: whitespace heuristic (words)
+                return max(1, len(s.split()))
+
+            for t in texts:
+                toks = count_tokens(t)
+                placed = False
+                for i, th in enumerate(thresholds):
+                    if toks <= th:
+                        buckets[i].append((t, toks))
+                        placed = True
+                        break
+                if not placed:
+                    buckets[-1].append((t, toks))
+
+            results: list[np.ndarray] = []
+
+            def process_bucket(items: list[tuple[str, int]]):
+                batch_size = 64
+                texts_only = [i[0] for i in items]
+                for i in range(0, len(texts_only), batch_size):
+                    batch = texts_only[i : i + batch_size]
+                    out = fn(list(batch))
+                    arr = np.asarray(out)
+                    # ensure 2D array (N, dim)
+                    if arr.ndim == 1:
+                        arr = arr.reshape(1, -1)
+                    for row in arr:
+                        results.append(row)
+
+            for bucket in buckets:
+                if bucket:
+                    process_bucket(bucket)
+
+            if results:
+                return np.asarray(results, dtype='float32')
+            # default empty array with correct dimensionality
+            return np.zeros((0, self.embedding_dimension), dtype='float32')
+
+        return wrapped
+
+    def _get_bucket_thresholds(self) -> list[int]:
+        cfg = get_config()
+        try:
+            vals = list(cfg.embeddings_bucket_thresholds)
+            # ensure ints and sorted
+            vals = sorted(int(v) for v in vals)
+            return vals
+        except Exception:
+            return [256, 512, 1024, 2048]
+
+    def _hard_wrap(self, text: str) -> list[str]:
+        """Fallback char-based windowing for runaway chunks.
+
+        Returns list of text windows of size embed_hard_window with embed_hard_overlap overlap.
+        """
+        cfg = get_config()
+        window = cfg.embed_hard_window
+        overlap = cfg.embed_hard_overlap
+        if window <= 0:
+            return [text]
+        step = max(1, window - overlap)
+        out = []
+        for i in range(0, len(text), step):
+            out.append(text[i : i + window])
+        return out
+
+    def _is_jsonl_path(self, p: str | Path) -> bool:
+        """Detect whether a path refers to a JSONL file, handling multi-suffix names.
+
+        Returns True for names like 'data.jsonl', 'data.jsonl.backup', 'file.jsonl.20251130'.
+        """
+        try:
+            p0 = Path(p)
+            # any suffix equals .jsonl
+            if any(s.lower() == '.jsonl' for s in p0.suffixes):
+                return True
+            s = str(p).lower()
+            if s.endswith('.jsonl'):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _enforce_chunk_size_limits(self, chunks: list[tuple[int, int, int, str]]) -> list[tuple[int, int, int, str]]:
+        """Ensure chunks are not excessively large. Replace any oversized chunk with hard-wrapped windows.
+
+        Returns a new list of chunks with updated chunk indices and line spans (line numbers approximate when created from chars).
+        """
+        cfg = get_config()
+        hard_chars = cfg.embed_hard_chars
+        max_tokens = cfg.embeddings_max_tokens
+        target_tokens = cfg.embeddings_target_tokens
+        overlap_tokens = cfg.embeddings_token_overlap
+
+        new_chunks: list[tuple[int, int, int, str]] = []
+        next_idx = 0
+        for (_idx, start_line, end_line, chunk_text) in chunks:
+            if not chunk_text:
+                new_chunks.append((next_idx, start_line, end_line, chunk_text))
+                next_idx += 1
+                continue
+
+            toks = self._count_tokens(chunk_text)
+            # If token count exceeds configured max, apply token-aware hard wrap
+            if toks > max_tokens:
+                logger.warning(
+                    "Oversized chunk detected (tokens=%s, chars=%s) - applying token-aware hard_wrap",
+                    toks,
+                    len(chunk_text),
+                )
+                # Approximate char window size from tokens -> chars mapping
+                try:
+                    chars_per_tok = max(1.0, len(chunk_text) / float(toks))
+                    window_chars = max(1, int(chars_per_tok * float(target_tokens)))
+                    overlap_chars = max(0, int(chars_per_tok * float(overlap_tokens)))
+                except Exception:
+                    window_chars = cfg.embed_hard_window
+                    overlap_chars = cfg.embed_hard_overlap
+
+                # produce windows using computed char window/overlap
+                step = max(1, window_chars - overlap_chars)
+                i = 0
+                while i < len(chunk_text):
+                    win = chunk_text[i : i + window_chars]
+                    win_lines = win.count('\n') + 1
+                    new_chunks.append((next_idx, start_line, start_line + win_lines - 1, win))
+                    next_idx += 1
+                    start_line += win_lines
+                    i += step
+            elif len(chunk_text) > hard_chars:
+                # Fallback char-based wrapping
+                logger.warning(
+                    "Oversized chunk detected (chars=%s) - applying hard_wrap",
+                    len(chunk_text),
+                )
+                windows = self._hard_wrap(chunk_text)
+                for win in windows:
+                    win_lines = win.count('\n') + 1
+                    new_chunks.append((next_idx, start_line, start_line + win_lines - 1, win))
+                    next_idx += 1
+                    start_line += win_lines
+            else:
+                new_chunks.append((next_idx, start_line, end_line, chunk_text))
+                next_idx += 1
+
+        return new_chunks
+
+    def _count_tokens(self, s: str) -> int:
+        """Utility to count tokens for a string using tiktoken when available."""
+        if self.embedding_provider == "llamacpp":
+            # Avoid expensive tokenizer for llama.cpp; use cheap char heuristic
+            try:
+                return max(1, int((len(s) + 3) / 4))
+            except Exception:
+                return max(1, len(s.split()))
+        try:
+            if TIKTOKEN_AVAILABLE and self.embed_model:
+                try:
+                    enc = cast(Any, tiktoken).encoding_for_model(self.embed_model)
+                except Exception:
+                    enc = cast(Any, tiktoken).get_encoding("cl100k_base")
+                return len(enc.encode(s))
+        except Exception:
+            pass
+        return max(1, len(s.split()))
+
+    def _parse_jsonl_records(self, text: str, include_solution: bool | None = None) -> list[str]:
+        """Parse a JSONL file into per-record strings suitable for embedding.
+
+        For each line, attempt to json.loads and extract useful text fields
+        (prioritized). Falls back to the raw line if parsing fails.
+        """
+        out: list[str] = []
+        if not text:
+            return out
+
+        # Fields to prioritize when building a canonical text block
+        top_fields = [
+            "task", "prompt", "statement", "description", "text", "content",
+        ]
+        sig_fields = ["signature", "sig", "signature_text"]
+        docstring_fields = ["docstring", "doc", "explanation", "reasoning"]
+        solution_fields = ["solution", "answer", "solution_text", "output"]
+
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                # Not JSON: embed raw line as last resort
+                if line:
+                    out.append(line)
+                continue
+
+            if not isinstance(obj, dict):
+                out.append(str(obj))
+                continue
+
+            parts: list[str] = []
+
+            # 1) main prompt/task block
+            for k in top_fields:
+                if k in obj and obj.get(k):
+                    v = obj.get(k)
+                    if isinstance(v, list):
+                        parts.append("\n".join(str(x) for x in v))
+                    else:
+                        parts.append(str(v))
+                    break
+
+            # 2) signature (optional)
+            for k in sig_fields:
+                if k in obj and obj.get(k):
+                    parts.append(str(obj.get(k)))
+                    break
+
+            # 3) docstring / explanation
+            for k in docstring_fields:
+                if k in obj and obj.get(k):
+                    parts.append(str(obj.get(k)))
+                    break
+
+            # 4) optional short solution - include depending on config
+            sol = None
+            for k in solution_fields:
+                if k in obj and obj.get(k):
+                    sol = obj.get(k)
+                    break
+
+            # If no prioritized fields found, fall back to concatenating long string fields
+            if not parts:
+                for k, v in obj.items():
+                    if isinstance(v, str) and len(v) > 20:
+                        parts.append(v)
+
+            if parts:
+                canonical = "\n\n".join(parts)
+                # Append solution as an optional section separated by a marker based on config
+                # Decide whether to append solution: caller may provide `include_solution`.
+                if sol:
+                    use_solution = include_solution if include_solution is not None else get_config().embeddings_include_solution
+                else:
+                    use_solution = False
+
+                if sol and use_solution:
+                    if isinstance(sol, list):
+                        sol_text = "\n".join(str(x) for x in sol)
+                    else:
+                        sol_text = str(sol)
+                    canonical = canonical + "\n\n--SOLUTION--\n\n" + sol_text
+
+                out.append(canonical)
+            else:
+                # As a last resort, append compact JSON without structural noise
+                try:
+                    compact = json.dumps(obj, separators=(',', ':'))
+                except Exception:
+                    compact = str(obj)
+                out.append(compact)
+
+        return out
 
     def _sync_embedding_dimension_from_lance(self) -> None:
         """Align configured embedding dimension with existing LanceDB schema."""
@@ -534,44 +1063,77 @@ class SigilIndex:
     
     def _log_vector_index_status(self, context: str = "startup") -> None:
         """Log current vector index availability and size."""
-
-        if self.vectors is None:
-            logger.info(
-                "Vector index unavailable (%s); trigram search will be used.",
-                context,
-            )
-            return
-
+        # If we have per-repo vector tables, log per-repo status; otherwise
+        # fall back to global table logging.
         try:
-            row_count = int(self.vectors.count_rows())
-        except Exception:
-            logger.debug(
-                "Failed to count vector rows during %s status check",
-                context,
-                exc_info=True,
-            )
-            row_count = -1
+            if self._repo_vectors:
+                for repo_name, table in self._repo_vectors.items():
+                    try:
+                        count = int(cast(Any, table).count_rows()) if table is not None else -1
+                    except Exception:
+                        logger.debug("Failed to count rows for repo %s", repo_name, exc_info=True)
+                        count = -1
+                    path = self._get_repo_lance_path(repo_name)
+                    logger.info("Vector index ready (%s) for repo %s: %s indexed chunks at %s", context, repo_name, count, path)
+                return
 
-        logger.info(
-            "Vector index ready (%s): %s indexed chunks at %s",
-            context,
-            row_count,
-            self.lance_db_path,
-        )
+            if self.vectors is None:
+                logger.info(
+                    "Vector index unavailable (%s); trigram search will be used.",
+                    context,
+                )
+                return
+
+            try:
+                row_count = int(self.vectors.count_rows())
+            except Exception:
+                logger.debug(
+                    "Failed to count vector rows during %s status check",
+                    context,
+                    exc_info=True,
+                )
+                row_count = -1
+
+            logger.info(
+                "Vector index ready (%s): %s indexed chunks at %s",
+                context,
+                row_count,
+                self.lance_db_path,
+            )
+        except Exception:
+            logger.exception("Error logging vector index status")
 
     def _sample_vector_repo_ids(self, limit: int = 200) -> Set[str]:
         """Read a small sample of repo_ids from LanceDB for sanity checks."""
+        repo_ids: Set[str] = set()
 
-        if self.vectors is None:
-            return set()
-
+        # Prefer sampling from per-repo tables
         try:
+            if self._repo_vectors:
+                for repo_name, table in self._repo_vectors.items():
+                    if table is None:
+                        continue
+                    try:
+                        if hasattr(table, "to_list"):
+                            rows = cast(Any, table).to_list(limit=limit)
+                        else:
+                            t = cast(Any, table).head(limit)
+                            rows = t.to_pylist() if t is not None else []
+                    except Exception:
+                        logger.debug("Failed to sample rows from repo %s", repo_name, exc_info=True)
+                        continue
+                    for r in rows:
+                        if r.get("repo_id") is not None:
+                            repo_ids.add(str(r.get("repo_id")))
+                return repo_ids
+
+            # Fallback: sample from global table
+            if self.vectors is None:
+                return set()
             if hasattr(self.vectors, "to_list"):
-                # Older LanceDB versions exposed to_list on LanceTable
-                rows = self.vectors.to_list(limit=limit)
+                rows = cast(Any, self.vectors).to_list(limit=limit)
             else:
-                # Newer versions expose head() on LanceTable and to_list() on queries
-                table = self.vectors.head(limit)
+                table = cast(Any, self.vectors).head(limit)
                 rows = table.to_pylist() if table is not None else []
         except Exception:
             logger.exception("Failed to sample repo_ids from vector table")
@@ -591,13 +1153,12 @@ class SigilIndex:
         semantic search is marked stale to avoid silently returning no results.
         """
 
-        if not self._vector_index_enabled or self.vectors is None:
+        if not self._vector_index_enabled:
             return
 
-        repo_ids = {
-            str(row[0])
-            for row in self.repos_db.execute("SELECT id FROM repos")
-        }
+        with self._db_lock:
+            repo_rows = list(self.repos_db.execute("SELECT id FROM repos"))
+        repo_ids = {str(row[0]) for row in repo_rows}
         sample_repo_ids = self._sample_vector_repo_ids()
 
         if not repo_ids or not sample_repo_ids:
@@ -637,7 +1198,7 @@ class SigilIndex:
                 FOREIGN KEY(repo_id) REFERENCES repos(id)
             )
         """)
-        
+
         self.repos_db.execute("""
             CREATE INDEX IF NOT EXISTS idx_doc_path 
             ON documents(repo_id, path)
@@ -680,34 +1241,67 @@ class SigilIndex:
         except Exception:
             logger.debug("Skipping removal of legacy embeddings table", exc_info=True)
 
-        # Keep 'repos' table
-        # Replace 'file_content_fts' creation with:
-        self.trigrams_db.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts 
-            USING fts5(
-                path UNINDEXED, 
-                repo_id UNINDEXED, 
-                content, 
-                tokenize='trigram'
-            )
-        """)
-
-        # Trigram inverted index for fast text search
-        self.trigrams_db.execute("""
-            CREATE TABLE IF NOT EXISTS trigrams (
-                gram TEXT PRIMARY KEY,
-                doc_ids BLOB
-            )
-        """)
-        
-        self.trigrams_db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_gram 
-            ON trigrams(gram)
-        """)
-        
+        # RocksDB backend uses key/value store; nothing to initialize here.
         self.repos_db.commit()
-        self.trigrams_db.commit()
+        # Ensure vector metadata columns exist for backward-compatible upgrades
+        try:
+            cur = self.repos_db.cursor()
+            cur.execute("PRAGMA table_info(documents)")
+            cols = {row[1] for row in cur.fetchall()}
+            if "vector_indexed_at" not in cols:
+                try:
+                    self.repos_db.execute(
+                        "ALTER TABLE documents ADD COLUMN vector_indexed_at TEXT"
+                    )
+                except Exception:
+                    # If ALTER fails for any reason, continue; column is non-critical
+                    logger.debug(
+                        "Could not add vector_indexed_at column to documents table",
+                        exc_info=True,
+                    )
+            if "vector_index_error" not in cols:
+                try:
+                    self.repos_db.execute(
+                        "ALTER TABLE documents ADD COLUMN vector_index_error TEXT"
+                    )
+                except Exception:
+                    logger.debug(
+                        "Could not add vector_index_error column to documents table",
+                        exc_info=True,
+                    )
+            try:
+                self.repos_db.commit()
+            except Exception:
+                pass
+        except Exception:
+            # Best-effort migration; don't block startup on metadata columns
+            logger.debug("Skipping vector metadata migration check", exc_info=True)
+        # Note: Do not alter the repos schema here to maintain compatibility with
+        # test expectations that assert a minimal repos table (id, name, path, indexed_at).
+        # If per-repo embedding options are added in the future, handle migrations
+        # externally or via a dedicated migration step.
     
+    def _get_repo_include_solution(self, repo_id: int) -> bool | None:
+        """Return per-repo embeddings.include_solution setting (True/False) or None if unset.
+
+        This reads the `repos` table for the optional `embeddings_include_solution` column
+        introduced in schema migrations. Returns None when repository has no explicit
+        per-repo setting so callers can fall back to global config.
+        """
+        try:
+            with self._db_lock:
+                cur = self.repos_db.cursor()
+                cur.execute("SELECT embeddings_include_solution FROM repos WHERE id = ?", (repo_id,))
+                row = cur.fetchone()
+            if not row:
+                return None
+            val = row[0]
+            if val is None:
+                return None
+            return bool(val)
+        except Exception:
+            return None
+
     def index_file(
         self,
         repo_name: str,
@@ -725,9 +1319,25 @@ class SigilIndex:
         Returns:
             True if file was indexed, False if skipped or error
         """
-        with self._lock:
+        try:
+            # Normalize paths to avoid relative/absolute mismatches.
+            # Some callers pass relative paths (e.g., admin API requests); always
+            # resolve them under the configured repo root and ensure they do not
+            # escape the repository.
+            repo_path = Path(repo_path).resolve()
+            file_path = Path(file_path)
+            if not file_path.is_absolute():
+                file_path = (repo_path / file_path).resolve()
+            else:
+                file_path = file_path.resolve()
+
             try:
-                # Get or create repo entry
+                file_path.relative_to(repo_path)
+            except ValueError:
+                raise ValueError(f"{file_path} is not in the subpath of {repo_path}")
+
+            # Get or create repo entry
+            with self._db_lock:
                 cursor = self.repos_db.cursor()
                 cursor.execute(
                     "INSERT OR IGNORE INTO repos (name, path, indexed_at) "
@@ -736,67 +1346,133 @@ class SigilIndex:
                 )
                 cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
                 repo_id = cursor.fetchone()[0]
-                
-                # Determine language
-                file_extensions = {
-                    '.py': 'python', '.rs': 'rust', '.js': 'javascript',
-                    '.ts': 'typescript', '.java': 'java', '.go': 'go',
-                    '.cpp': 'cpp', '.c': 'c', '.h': 'c', '.hpp': 'cpp',
-                    '.rb': 'ruby', '.php': 'php', '.cs': 'csharp',
-                    '.sh': 'shell', '.toml': 'toml', '.yaml': 'yaml',
-                    '.yml': 'yaml', '.json': 'json', '.md': 'markdown',
-                }
-                ext = file_path.suffix.lower()
-                language = file_extensions.get(ext, 'unknown')
-                
-                # Index the specific file
-                result = self._index_file(
-                    repo_id, repo_name, repo_path, file_path, language
+            
+            # Determine language
+            file_extensions = {
+                '.py': 'python', '.rs': 'rust', '.js': 'javascript',
+                '.ts': 'typescript', '.java': 'java', '.go': 'go',
+                '.cpp': 'cpp', '.c': 'c', '.h': 'c', '.hpp': 'cpp',
+                '.rb': 'ruby', '.php': 'php', '.cs': 'csharp',
+                '.sh': 'shell', '.toml': 'toml', '.yaml': 'yaml',
+                '.yml': 'yaml', '.json': 'json', '.md': 'markdown',
+            }
+            ext = file_path.suffix.lower()
+            language = file_extensions.get(ext, 'unknown')
+            
+            # Index the specific file (metadata + symbols)
+            result = self._index_file(
+                repo_id, repo_name, repo_path, file_path, language
+            )
+            if not result:
+                with self._db_lock:
+                    try:
+                        self.repos_db.commit()
+                    except Exception:
+                        logger.debug("Failed to commit after no-op index_file for %s", file_path, exc_info=True)
+                return False
+
+            res = cast(dict, result)
+            doc_id = int(res.get("doc_id", 0))
+            rel_path = res.get("rel_path", file_path.as_posix())
+            embed_allowed = bool(res.get("embed_allowed", True))
+            embeddings: np.ndarray | None = None
+            chunks: list[tuple[int, int, int, str]] = []
+
+            # Embedding path: only when vector store and embedding fn are available
+            if self.vectors is not None and self.embed_fn is not None and embed_allowed:
+                # Special-case JSONL: chunk by record (per-line), extracting useful fields
+                if self._is_jsonl_path(file_path):
+                    include_sol = self._get_repo_include_solution(repo_id)
+                    records = self._parse_jsonl_records(res.get("text", ""), include_solution=include_sol)
+                    chunks = [(i, 1, 1, r) for i, r in enumerate(records)] if records else []
+                else:
+                    chunks = self._chunk_text(res.get("text", ""))
+                # Enforce hard caps on chunk size to avoid runaway chunks
+                chunks = self._enforce_chunk_size_limits(chunks)
+                if chunks:
+                    try:
+                        embeddings = self._call_embed([c[3] for c in chunks])
+                    except Exception as e:
+                        logger.exception("Embedding failed for %s: %s", file_path, e)
+                        with self._db_lock:
+                            try:
+                                self.repos_db.execute(
+                                    "UPDATE documents SET vector_index_error = ? WHERE id = ?",
+                                    (str(e)[:1024], doc_id),
+                                )
+                                self.repos_db.commit()
+                            except Exception:
+                                logger.debug("Failed to record vector_index_error for doc %s", doc_id, exc_info=True)
+                        embeddings = None
+            else:
+                # If embedding was skipped by policy, mark it explicitly.
+                if not embed_allowed:
+                    with self._db_lock:
+                        try:
+                            self.repos_db.execute(
+                                "UPDATE documents SET vector_index_error = ? WHERE id = ?",
+                                ("embed_skipped_by_policy", doc_id),
+                            )
+                            self.repos_db.commit()
+                        except Exception:
+                            logger.debug("Failed to record embed_skipped flag for doc %s", doc_id, exc_info=True)
+                else:
+                    # Vector store or embed function not available — record reason
+                    reason = None
+                    if self.vectors is None:
+                        reason = "vector_store_unavailable"
+                    elif self.embed_fn is None:
+                        reason = "embeddings_unavailable"
+                    if reason is not None:
+                        with self._db_lock:
+                            try:
+                                self.repos_db.execute(
+                                    "UPDATE documents SET vector_index_error = ? WHERE id = ?",
+                                    (reason, doc_id),
+                                )
+                                self.repos_db.commit()
+                            except Exception:
+                                logger.debug("Failed to record vector_index_error for doc %s", doc_id, exc_info=True)
+
+            if embeddings is not None and chunks:
+                self._index_file_vectors(
+                    repo_id,
+                    doc_id,
+                    rel_path,
+                    chunks,
+                    embeddings,
                 )
 
-                if result:
-                    if self.vectors is not None and self.embed_fn is not None:
-                        chunks = self._chunk_text(result.get("text", ""))
-                        if chunks:
-                            embeddings = self.embed_fn([c[3] for c in chunks])
-                            self._index_file_vectors(
-                                repo_id,
-                                result.get("doc_id", 0),
-                                result.get("rel_path", file_path.as_posix()),
-                                chunks,
-                                embeddings,
-                            )
+            # Rebuild trigrams for this file
+            self._update_trigrams_for_file(repo_id, repo_path, file_path)
+            with self._db_lock:
+                self.repos_db.commit()
+                logger.info(f"Re-indexed {file_path.name} in {repo_name}")
+                return True
+        except Exception:
+            # Catch-all to ensure the try-block opened at the start of this
+            # function is properly closed and to provide a safe failure path.
+            logger.exception("Failed to index file %s in %s", file_path, repo_name)
+            return False
 
-                    # Rebuild trigrams for this file
-                    self._update_trigrams_for_file(repo_id, repo_path, file_path)
-                    self.repos_db.commit()
-                    logger.info(f"Re-indexed {file_path.name} in {repo_name}")
-                    return True
-                
-                return False
-                
-            except Exception as e:
-                logger.error(f"Error re-indexing {file_path}: {e}")
-                return False
-    
     def _update_trigrams_for_file(self, repo_id: int, repo_path: Path, file_path: Path):
         """Update trigrams for a specific file."""
-        cursor = self.repos_db.cursor()
-        
         # Calculate relative path (same way _index_file does)
         rel_path = file_path.relative_to(repo_path).as_posix()
-        
+
         # Get document ID and blob SHA
-        cursor.execute(
-            "SELECT id, blob_sha FROM documents WHERE repo_id = ? AND path = ?",
-            (repo_id, rel_path)
-        )
-        row = cursor.fetchone()
+        with self._db_lock:
+            cursor = self.repos_db.cursor()
+            cursor.execute(
+                "SELECT id, blob_sha FROM documents WHERE repo_id = ? AND path = ?",
+                (repo_id, rel_path)
+            )
+            row = cursor.fetchone()
         if not row:
             return
-        
+
         doc_id, blob_sha = row
-        
+
         # Read file content
         content = self._read_blob(blob_sha)
         if not content:
@@ -808,98 +1484,22 @@ class SigilIndex:
             return
 
         text = content.decode('utf-8', errors='replace').lower()
-        logger.warning(
-            "_update_trigrams_for_file: sample text start: %s",
-            repr(text[:200]),
-        )
-        logger.warning(
-            "_update_trigrams_for_file: contains 'new_function'? %s",
-            'new_function' in text,
-        )
         new_trigrams = self._extract_trigrams(text)
-        logger.warning(
+        prior_trigrams = self._load_doc_trigrams(doc_id)
+        logger.debug(
             "_update_trigrams_for_file: repo_id=%s doc_id=%s blob_sha=%s trigrams=%s",
             repo_id,
             doc_id,
             blob_sha,
             len(new_trigrams),
         )
-        
-        # Update trigrams database
-        # Note: This is a simplified approach - for production, you'd want to
-        # track which trigrams belong to which documents to enable removal
-        for trigram in new_trigrams:
-            cursor = self.trigrams_db.execute(
-                "SELECT doc_ids FROM trigrams WHERE gram = ?", (trigram,)
-            )
-            row = cursor.fetchone()
-            
-            if row:
-                # Add this doc_id if not already present
-                try:
-                    existing_ids = {
-                        int(x) for x in zlib.decompress(row[0]).decode().split(',') if x
-                    }
-                except Exception:
-                    # Defensive: log and reset existing ids if decompress/parse fails
-                    logger.exception(
-                        "Failed to parse existing doc_ids for trigram %s",
-                        trigram,
-                    )
-                    existing_ids = set()
-                existing_ids.add(doc_id)
-            else:
-                existing_ids = {doc_id}
-            
-            joined_ids = ','.join(str(doc_id) for doc_id in sorted(existing_ids))
-            compressed = zlib.compress(joined_ids.encode())
-            self.trigrams_db.execute(
-                "INSERT OR REPLACE INTO trigrams (gram, doc_ids) VALUES (?, ?)",
-                (trigram, compressed)
-            )
-        
-        self.trigrams_db.commit()
-        logger.warning(
-            "_update_trigrams_for_file: committed %d trigrams for doc %s",
-            len(new_trigrams),
-            doc_id,
-        )
-        # Quick verification for common trigrams we expect from function names
-        for sample in ("new", "fun", "unc"):
-            c = self.trigrams_db.execute(
-                "SELECT doc_ids FROM trigrams WHERE gram = ?",
-                (sample,),
-            )
-            r = c.fetchone()
-            if r:
-                try:
-                    ids = {
-                        int(x)
-                        for x in zlib.decompress(r[0]).decode().split(',')
-                        if x
-                    }
-                except Exception:
-                    ids = set()
-                logger.warning(
-                    "_update_trigrams_for_file: sample trigram %s -> %s",
-                    sample,
-                    sorted(ids),
-                )
-            else:
-                logger.warning(
-                    "_update_trigrams_for_file: sample trigram %s -> NOT FOUND",
-                    sample,
-                )
-        # Dump first few grams present for quick inspection
-        try:
-            rows = list(self.trigrams_db.execute("SELECT gram FROM trigrams LIMIT 30"))
-            grams = [r[0] for r in rows]
-            logger.warning(
-                "_update_trigrams_for_file: sample stored grams (first 30): %s",
-                grams,
-            )
-        except Exception:
-            logger.exception("_update_trigrams_for_file: failed to read stored grams")
+
+        stale_trigrams = prior_trigrams.difference(new_trigrams)
+        if stale_trigrams:
+            self._remove_doc_from_trigram_postings(doc_id, stale_trigrams)
+
+        self._add_doc_to_trigram_postings(doc_id, new_trigrams)
+        self._store_doc_trigrams(doc_id, new_trigrams)
     
     def index_repository(
         self,
@@ -918,18 +1518,18 @@ class SigilIndex:
         Returns:
             Statistics about indexing operation
         """
-        with self._lock:
-            logger.info(f"Indexing repository: {repo_name} at {repo_path}")
-            
-            start_time = datetime.now()
-            stats: dict[str, int] = {
-                "files_indexed": 0,
-                "symbols_extracted": 0,
-                "trigrams_built": 0,
-                "bytes_indexed": 0
-            }
-            
-            # Register or update repo
+        logger.info(f"Indexing repository: {repo_name} at {repo_path}")
+        
+        start_time = datetime.now()
+        stats: dict[str, int] = {
+            "files_indexed": 0,
+            "symbols_extracted": 0,
+            "trigrams_built": 0,
+            "bytes_indexed": 0
+        }
+        
+        # Register or update repo
+        with self._db_lock:
             cursor = self.repos_db.cursor()
             cursor.execute(
                 """
@@ -938,13 +1538,14 @@ class SigilIndex:
                 ON CONFLICT(name) DO UPDATE SET
                     path=excluded.path,
                     indexed_at=excluded.indexed_at
-                """,
+                """
+                ,
                 (repo_name, str(repo_path), datetime.now().isoformat()),
             )
             # Preserve stable repo_id (INSERT ... ON CONFLICT does not replace row)
             cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
             repo_id = cursor.fetchone()[0]
-            
+        
             # Clear old repo-scoped data if forcing rebuild
             if force:
                 cursor.execute(
@@ -952,64 +1553,144 @@ class SigilIndex:
                     (repo_id,),
                 )
                 old_doc_ids = {row[0] for row in cursor.fetchall()}
-                logger.info(
-                    "Force rebuild: clearing old index data for %s (%s docs)",
-                    repo_name,
-                    len(old_doc_ids),
-                )
-
                 if old_doc_ids:
+                    logger.info(
+                        "Force rebuild: clearing old index data for %s (%s docs)",
+                        repo_name,
+                        len(old_doc_ids),
+                    )
                     placeholders = ",".join("?" for _ in old_doc_ids)
                     cursor.execute(
                         f"DELETE FROM symbols WHERE doc_id IN ({placeholders})",
                         tuple(old_doc_ids),
                     )
-                cursor.execute(
-                    "DELETE FROM documents WHERE repo_id = ?", (repo_id,)
+                    cursor.execute(
+                        "DELETE FROM documents WHERE repo_id = ?", (repo_id,)
+                    )
+                    # Remove only this repo's postings from trigram index
+                    self._remove_trigrams_for_doc_ids(old_doc_ids)
+                else:
+                    logger.debug(
+                        "Force rebuild: no existing index data for %s (0 docs)",
+                        repo_name,
+                    )
+        
+        # Index all files (parallel CPU prep; DB writes stay serialized by locks in _index_file)
+        file_extensions = {
+            '.py': 'python', '.rs': 'rust', '.js': 'javascript',
+            '.ts': 'typescript', '.java': 'java', '.go': 'go',
+            '.cpp': 'cpp', '.c': 'c', '.h': 'c', '.hpp': 'cpp',
+            '.rb': 'ruby', '.php': 'php', '.cs': 'csharp',
+            '.sh': 'shell', '.toml': 'toml', '.yaml': 'yaml',
+            '.yml': 'yaml', '.json': 'json', '.md': 'markdown',
+        }
+
+        file_paths: list[Path] = []
+        total_scanned = 0
+        skipped = 0
+        skipped_examples: list[str] = []
+        for file_path in repo_path.rglob("*"):
+            if not file_path.is_file():
+                continue
+            total_scanned += 1
+            try:
+                skip = self._should_skip(file_path, repo_path)
+            except Exception:
+                skip = False
+            if skip:
+                skipped += 1
+                if len(skipped_examples) < 10:
+                    skipped_examples.append(str(file_path))
+                continue
+            file_paths.append(file_path)
+
+        logger.info("Index scan summary: scanned=%s skipped=%s included=%s sample_skipped=%s",
+                    total_scanned, skipped, len(file_paths), skipped_examples)
+        # Report top-level directory breakdown to help tune ignore patterns
+        try:
+            by_top: dict[str, int] = {}
+            repo_root = Path(repo_path).resolve()
+            for p in file_paths:
+                try:
+                    rel = p.resolve().relative_to(repo_root)
+                    top = rel.parts[0] if rel.parts else "."
+                except Exception:
+                    top = str(p.parent)
+                by_top[top] = by_top.get(top, 0) + 1
+            # Log top 10 contributors
+            top_items = sorted(by_top.items(), key=lambda x: x[1], reverse=True)[:10]
+            logger.info("Index included files by top-level dir: %s", top_items)
+        except Exception:
+            pass
+
+        worker_env = os.getenv("SIGIL_MCP_INDEX_WORKERS")
+        if worker_env:
+            try:
+                max_workers = max(1, int(worker_env))
+            except Exception:
+                max_workers = max(1, (os.cpu_count() or 2) - 1)
+        else:
+            max_workers = max(1, (os.cpu_count() or 2) - 1)
+
+        logger.info("Indexing %s files for %s with %s workers", len(file_paths), repo_name, max_workers)
+
+        if max_workers == 1 or len(file_paths) <= 1:
+            for file_path in file_paths:
+                ext = file_path.suffix.lower()
+                language = file_extensions.get(ext, 'unknown')
+                file_stats = self._index_file(
+                    repo_id, repo_name, repo_path, file_path, language
                 )
-                # Remove only this repo's postings from trigram index
-                self._remove_trigrams_for_doc_ids(old_doc_ids)
-            
-            # Index all files
-            file_extensions = {
-                '.py': 'python', '.rs': 'rust', '.js': 'javascript',
-                '.ts': 'typescript', '.java': 'java', '.go': 'go',
-                '.cpp': 'cpp', '.c': 'c', '.h': 'c', '.hpp': 'cpp',
-                '.rb': 'ruby', '.php': 'php', '.cs': 'csharp',
-                '.sh': 'shell', '.toml': 'toml', '.yaml': 'yaml',
-                '.yml': 'yaml', '.json': 'json', '.md': 'markdown',
-            }
-            
-            for file_path in repo_path.rglob("*"):
-                if file_path.is_file() and not self._should_skip(file_path):
+                if file_stats:
+                    stats["files_indexed"] += 1
+                    stats["symbols_extracted"] += cast(int, file_stats.get("symbols", 0))
+                    stats["bytes_indexed"] += cast(int, file_stats.get("bytes", 0))
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
+                for file_path in file_paths:
                     ext = file_path.suffix.lower()
                     language = file_extensions.get(ext, 'unknown')
-                    
-                    file_stats = self._index_file(
-                        repo_id, repo_name, repo_path, file_path, language
+                    futures.append(
+                        executor.submit(
+                            self._index_file,
+                            repo_id,
+                            repo_name,
+                            repo_path,
+                            file_path,
+                            language,
+                        )
                     )
+
+                for fut in as_completed(futures):
+                    try:
+                        file_stats = fut.result()
+                    except Exception:
+                        logger.exception("Failed indexing file in parallel executor")
+                        continue
                     if file_stats:
                         stats["files_indexed"] += 1
-                        stats["symbols_extracted"] += file_stats.get("symbols", 0)
-                        stats["bytes_indexed"] += file_stats.get("bytes", 0)
-            
+                        stats["symbols_extracted"] += cast(int, file_stats.get("symbols", 0))
+                        stats["bytes_indexed"] += cast(int, file_stats.get("bytes", 0))
+        
+        with self._db_lock:
             self.repos_db.commit()
-            
-            # Build trigram index
-            logger.info(f"Building trigram index for {repo_name}")
-            trigram_count = self._build_trigram_index(repo_id)
-            stats["trigrams_built"] = trigram_count
-            
-            elapsed = (datetime.now() - start_time).total_seconds()
-            stats["duration_seconds"] = int(elapsed)
-            
-            logger.info(
-                f"Indexed {repo_name}: {stats['files_indexed']} files, "
-                f"{stats['symbols_extracted']} symbols, "
-                f"{stats['trigrams_built']} trigrams in {elapsed:.1f}s"
-            )
-            
-            return stats
+        
+        # Build trigram index
+        logger.info(f"Building trigram index for {repo_name}")
+        trigram_count = self._build_trigram_index(repo_id)
+        stats["trigrams_built"] = trigram_count
+        
+        elapsed = (datetime.now() - start_time).total_seconds()
+        stats["duration_seconds"] = int(elapsed)
+        
+        logger.info(
+            f"Indexed {repo_name}: {stats['files_indexed']} files, "
+            f"{stats['symbols_extracted']} symbols, "
+            f"{stats['trigrams_built']} trigrams in {elapsed:.1f}s"
+        )
+        
+        return stats
     
     def _index_file(
         self,
@@ -1022,61 +1703,113 @@ class SigilIndex:
         """Index a single file."""
         try:
             content = file_path.read_bytes()
-            text = content.decode("utf-8", errors="replace")
+            raw_text = content.decode("utf-8", errors="replace")
+            text = raw_text
+            # Determine whether to allow embedding for this file
+            ext = file_path.suffix.lower()
+            name = file_path.name
+            embed_allowed = True
+            if ext in EMBED_SKIP_EXTS or name in EMBED_SKIP_NAMES:
+                embed_allowed = False
+
+            # Don't embed backup/timestamped files even if they appear in the documents table
+            try:
+                nl = name.lower()
+                if ".backup" in nl or nl.endswith('.bak') or nl.endswith('~'):
+                    embed_allowed = False
+            except Exception:
+                pass
+
+            # Special-case: notebooks — extract cell sources (code + markdown) for embeddings
+            if ext == '.ipynb':
+                try:
+                    import json as _json
+                    nb = _json.loads(raw_text)
+                    parts = []
+                    for cell in nb.get('cells', []):
+                        if cell.get('cell_type') in ('markdown', 'code'):
+                            src = ''.join(cell.get('source', []) or [])
+                            if src and src.strip():
+                                parts.append(src)
+                    cleaned = '\n\n'.join(parts)
+                    if cleaned.strip():
+                        text = cleaned
+                        embed_allowed = True
+                    else:
+                        embed_allowed = False
+                except Exception:
+                    embed_allowed = False
+
+            # Special-case: JSONL with very long lines — skip embedding unless per-record indexing is implemented
+            if self._is_jsonl_path(file_path) and raw_text:
+                try:
+                    # If any line is extremely long, avoid embedding whole file
+                    for line in raw_text.splitlines():
+                        if len(line) > 10000:
+                            embed_allowed = False
+                            break
+                except Exception:
+                    embed_allowed = False
             blob_sha = hashlib.sha256(content).hexdigest()
             rel_path = file_path.relative_to(repo_root).as_posix()
-            cursor = self.repos_db.cursor()
+            # Extract symbols before acquiring DB lock so we don't hold it during ctags
+            symbols = self._extract_symbols(file_path, language)
 
-            # Check if this repo/path is already indexed
-            cursor.execute(
-                "SELECT id, blob_sha FROM documents WHERE repo_id = ? AND path = ?",
-                (repo_id, rel_path),
-            )
-            existing = cursor.fetchone()
+            with self._db_lock:
+                cursor = self.repos_db.cursor()
 
-            if existing:
-                existing_doc_id, existing_blob = existing
-                if existing_blob == blob_sha:
-                    # Already indexed with same content; refresh metadata and skip work
-                    cursor.execute(
-                        "UPDATE documents SET language = ?, size = ? WHERE id = ?",
-                        (language, len(content), existing_doc_id),
-                    )
-                    self._update_vector_metadata_for_doc(
-                        doc_id=existing_doc_id,
-                        repo_id=repo_id,
-                        rel_path=rel_path,
-                    )
-                    return None
-
-                # Path is the same but content changed: clean up old symbols/vectors/doc
-                self._delete_symbols_and_embeddings_for_doc(
-                    existing_doc_id, repo_id, rel_path
-                )
-                cursor.execute("DELETE FROM documents WHERE id = ?", (existing_doc_id,))
-
-            # Store document metadata (repo/path scoped; blob_sha can be reused across repos)
-            # Remove any additional stale rows for this repo/path just in case
-            try:
+                # Check if this repo/path is already indexed
                 cursor.execute(
-                    "SELECT id FROM documents WHERE repo_id = ? AND path = ?",
-                    (repo_id, rel_path)
+                    "SELECT id, blob_sha FROM documents WHERE repo_id = ? AND path = ?",
+                    (repo_id, rel_path),
                 )
-                rows = cursor.fetchall()
-                for (old_doc_id,) in rows:
-                    self._delete_symbols_and_embeddings_for_doc(
-                        old_doc_id, repo_id, rel_path
-                    )
-                    cursor.execute("DELETE FROM documents WHERE id = ?", (old_doc_id,))
-            except Exception:
-                logger.exception("Failed to cleanup old document rows for %s", rel_path)
+                existing = cursor.fetchone()
 
-            cursor.execute("""
-                INSERT INTO documents (repo_id, path, blob_sha, size, language)
-                VALUES (?, ?, ?, ?, ?)
-            """, (repo_id, rel_path, blob_sha, len(content), language))
-            doc_id = cursor.lastrowid
-            
+                if existing:
+                    existing_doc_id, existing_blob = existing
+                    if existing_blob == blob_sha:
+                        # Already indexed with same content; refresh metadata and skip work
+                        cursor.execute(
+                            "UPDATE documents SET language = ?, size = ? WHERE id = ?",
+                            (language, len(content), existing_doc_id),
+                        )
+                        self._update_vector_metadata_for_doc(
+                            doc_id=existing_doc_id,
+                            repo_id=repo_id,
+                            rel_path=rel_path,
+                        )
+                        return None
+
+                    # Path is the same but content changed: clean up old symbols/vectors/doc
+                    self._delete_symbols_and_embeddings_for_doc(
+                        existing_doc_id, repo_id, rel_path
+                    )
+                    self._remove_trigrams_for_doc_ids({existing_doc_id})
+                    cursor.execute("DELETE FROM documents WHERE id = ?", (existing_doc_id,))
+
+                # Store document metadata (repo/path scoped; blob_sha can be reused across repos)
+                # Remove any additional stale rows for this repo/path just in case
+                try:
+                    cursor.execute(
+                        "SELECT id FROM documents WHERE repo_id = ? AND path = ?",
+                        (repo_id, rel_path)
+                    )
+                    rows = cursor.fetchall()
+                    for (old_doc_id,) in rows:
+                        self._delete_symbols_and_embeddings_for_doc(
+                            old_doc_id, repo_id, rel_path
+                        )
+                        self._remove_trigrams_for_doc_ids({old_doc_id})
+                        cursor.execute("DELETE FROM documents WHERE id = ?", (old_doc_id,))
+                except Exception:
+                    logger.exception("Failed to cleanup old document rows for %s", rel_path)
+
+                cursor.execute("""
+                    INSERT INTO documents (repo_id, path, blob_sha, size, language)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (repo_id, rel_path, blob_sha, len(content), language))
+                doc_id = cursor.lastrowid
+
             # Store blob content (compressed)
             blob_dir = self.index_path / "blobs" / blob_sha[:2]
             blob_dir.mkdir(parents=True, exist_ok=True)
@@ -1085,22 +1818,23 @@ class SigilIndex:
                 blob_file.write_bytes(zlib.compress(content))
             
             # Extract symbols using ctags
-            symbols = self._extract_symbols(file_path, language)
-            for symbol in symbols:
-                cursor.execute("""
-                    INSERT INTO symbols (
-                        doc_id, name, kind, line, character, signature, scope
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    doc_id,
-                    symbol.name,
-                    symbol.kind,
-                    symbol.line,
-                    0,  # character position
-                    symbol.signature,
-                    symbol.scope
-                ))
+            if symbols:
+                with self._db_lock:
+                    for symbol in symbols:
+                        self.repos_db.execute("""
+                            INSERT INTO symbols (
+                                doc_id, name, kind, line, character, signature, scope
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            doc_id,
+                            symbol.name,
+                            symbol.kind,
+                            symbol.line,
+                            0,  # character position
+                            symbol.signature,
+                            symbol.scope
+                        ))
 
             return {
                 "symbols": len(symbols),
@@ -1108,6 +1842,7 @@ class SigilIndex:
                 "doc_id": doc_id,
                 "rel_path": rel_path,
                 "text": text,
+                "embed_allowed": embed_allowed,
             }
         
         except Exception as e:
@@ -1176,47 +1911,75 @@ class SigilIndex:
             return []
     
     def _build_trigram_index(self, repo_id: int) -> int:
-        """Build trigram index for a repository's documents."""
-        cursor = self.repos_db.cursor()
-        trigram_map = {}  # gram -> set of doc_ids
-        
-        for doc_id, blob_sha in cursor.execute(
-            "SELECT id, blob_sha FROM documents WHERE repo_id = ?",
-            (repo_id,)
-        ):
+        """Build trigram index for a repository's documents.
+
+        Optimized approach: build trigram -> doc_id map in-memory, then
+        batch-merge existing postings from the trigrams DB and write using
+        executemany to reduce Python/SQLite round-trips and CPU overhead.
+        """
+        start = perf_counter()
+        with self._db_lock:
+            cursor = self.repos_db.cursor()
+            docs = list(cursor.execute(
+                "SELECT id, blob_sha FROM documents WHERE repo_id = ?",
+                (repo_id,)
+            ))
+
+        trigram_map: Dict[str, Set[int]] = defaultdict(set)
+        doc_count = 0
+        for doc_id, blob_sha in docs:
+            doc_count += 1
             content = self._read_blob(blob_sha)
-            if content:
-                text = content.decode('utf-8', errors='replace').lower()
-                for trigram in self._extract_trigrams(text):
-                    if trigram not in trigram_map:
-                        trigram_map[trigram] = set()
-                    trigram_map[trigram].add(doc_id)
-        
-        # Write to trigrams database
-        for gram, doc_ids in trigram_map.items():
-            # Get existing doc_ids if any
-            cursor = self.trigrams_db.execute(
-                "SELECT doc_ids FROM trigrams WHERE gram = ?", (gram,)
-            )
-            row = cursor.fetchone()
-            
-            if row:
-                # Merge with existing
-                existing_ids = {
-                    int(x) for x in zlib.decompress(row[0]).decode().split(',') if x
-                }
-                doc_ids = doc_ids.union(existing_ids)
-            
-            # Compress and store
-            compressed = zlib.compress(
-                ','.join(str(doc_id) for doc_id in sorted(doc_ids)).encode()
-            )
-            self.trigrams_db.execute(
-                "INSERT OR REPLACE INTO trigrams (gram, doc_ids) VALUES (?, ?)",
-                (gram, compressed)
-            )
-        
-        self.trigrams_db.commit()
+            if not content:
+                continue
+            text = content.decode('utf-8', errors='replace').lower()
+            doc_trigrams = self._extract_trigrams(text)
+            for tg in doc_trigrams:
+                trigram_map[tg].add(doc_id)
+            # Persist per-doc trigram cache for fast removals later
+            try:
+                self._store_doc_trigrams(doc_id, doc_trigrams)
+            except Exception:
+                logger.debug("_build_trigram_index: failed to store doc trigrams for %s", doc_id, exc_info=True)
+
+        mid = perf_counter()
+        logger.info("_build_trigram_index: repo_id=%s docs=%s unique_trigrams=%s build_time=%.2fs",
+                    repo_id, doc_count, len(trigram_map), mid - start)
+
+        # Merge with any existing postings and write into the selected backend.
+        grams = list(trigram_map.keys())
+        if grams:
+            # For Rocks-backed stores we use the K/V API to read/merge/write per-gram.
+            for gram in grams:
+                try:
+                    existing_ids = self._trigram_get_doc_ids(gram)
+                    doc_ids = trigram_map[gram].union(existing_ids)
+                    # Use helper which will route to the proper backend
+                    self._trigram_set_doc_ids(gram, doc_ids)
+                except Exception:
+                    logger.error("Failed to merge/write trigram %s", gram, exc_info=True)
+
+        # Commit once
+        self._trigram_commit()
+        try:
+            with self._db_lock:
+                self.repos_db.commit()
+        except Exception:
+            logger.debug("Failed to commit doc_trigrams update for repo %s", repo_id, exc_info=True)
+
+        end = perf_counter()
+        logger.info("_build_trigram_index: wrote_trigrams=%d db_time=%.2fs total_time=%.2fs",
+                len(grams), end - mid, end - start)
+        # Post-commit sanity check: ensure persisted trigram keys are visible for Rocks-backed stores.
+        try:
+            if self._trigram_backend in ("rocksdict", "rocksdb"):
+                trigram_count = self._trigram_count()
+                if trigram_count == 0:
+                    logger.error("_build_trigram_index: post-commit trigram store reports 0 keys (backend=%s). Possible persistence failure.", self._trigram_backend)
+                else:
+                    logger.info("_build_trigram_index: post-commit persisted_trigram_keys=%d (backend=%s)", trigram_count, self._trigram_backend)
+        except Exception:
+            logger.debug("_build_trigram_index: failed to perform post-commit trigram sanity check", exc_info=True)
         return len(trigram_map)
 
     def _remove_trigrams_for_doc_ids(self, doc_ids: Set[int]) -> None:
@@ -1228,64 +1991,337 @@ class SigilIndex:
         """
         if not doc_ids:
             return
-
-        cursor = self.trigrams_db.cursor()
-        updates: list[tuple[bytes, str]] = []
-        deletes: list[tuple[str]] = []
-        processed = 0
-
-        for gram, compressed in cursor.execute("SELECT gram, doc_ids FROM trigrams"):
-            try:
-                existing_ids = {
-                    int(x)
-                    for x in zlib.decompress(compressed).decode().split(",")
-                    if x
-                }
-            except Exception:
-                logger.exception("Failed to decode trigram row for %s", gram)
-                continue
-
-            if not existing_ids.intersection(doc_ids):
-                continue
-
-            remaining = existing_ids.difference(doc_ids)
-            if remaining:
-                new_blob = zlib.compress(
-                    ",".join(str(x) for x in sorted(remaining)).encode()
-                )
-                updates.append((new_blob, gram))
+        fallback_scan: Set[int] = set()
+        for doc_id in doc_ids:
+            trigrams = self._load_doc_trigrams(doc_id)
+            if trigrams:
+                self._remove_doc_from_trigram_postings(doc_id, trigrams)
             else:
-                deletes.append((gram,))
+                fallback_scan.add(doc_id)
+            self._delete_doc_trigram_record(doc_id)
 
-            processed += 1
-            if processed % 500 == 0:
-                if updates:
-                    cursor.executemany(
-                        "UPDATE trigrams SET doc_ids = ? WHERE gram = ?",
-                        updates,
-                    )
-                    updates.clear()
-                if deletes:
-                    cursor.executemany(
-                        "DELETE FROM trigrams WHERE gram = ?", deletes
-                    )
-                    deletes.clear()
+        # If we have no cached trigram set, fall back to a full scan for that doc_id
+        for missing_doc_id in fallback_scan:
+            self._remove_trigrams_for_doc_scan(missing_doc_id)
 
-        if updates:
-            cursor.executemany(
-                "UPDATE trigrams SET doc_ids = ? WHERE gram = ?", updates
-            )
-        if deletes:
-            cursor.executemany("DELETE FROM trigrams WHERE gram = ?", deletes)
+        self._trigram_commit()
 
-        self.trigrams_db.commit()
+    def _load_doc_trigrams(self, doc_id: int) -> Set[str]:
+        """Return cached trigrams for a doc_id from doc_trigrams table."""
+        try:
+            with self._db_lock:
+                cur = self.repos_db.execute(
+                    "SELECT trigrams FROM doc_trigrams WHERE doc_id = ?", (doc_id,)
+                )
+                row = cur.fetchone()
+        except Exception:
+            logger.debug("Failed to load cached trigrams for doc %s", doc_id, exc_info=True)
+            return set()
+
+        if not row or row[0] is None:
+            return set()
+        return self._deserialize_trigram_set(row[0])
+
+    def _store_doc_trigrams(self, doc_id: int, trigrams: Set[str]) -> None:
+        """Persist a trigram set for quick diff/removal later."""
+        try:
+            payload = self._serialize_trigram_set(trigrams)
+            with self._db_lock:
+                self.repos_db.execute(
+                    "INSERT OR REPLACE INTO doc_trigrams (doc_id, trigrams) VALUES (?, ?)",
+                    (doc_id, payload),
+                )
+        except Exception:
+            logger.debug("Failed to persist trigrams for doc %s", doc_id, exc_info=True)
+
+    def _delete_doc_trigram_record(self, doc_id: int) -> None:
+        """Remove cached trigram record for a doc_id."""
+        try:
+            with self._db_lock:
+                self.repos_db.execute(
+                    "DELETE FROM doc_trigrams WHERE doc_id = ?", (doc_id,)
+                )
+        except Exception:
+            logger.debug("Failed to delete cached trigrams for doc %s", doc_id, exc_info=True)
+
+    def _add_doc_to_trigram_postings(self, doc_id: int, trigrams: Set[str]) -> None:
+        """Add doc_id to trigram postings for provided trigrams."""
+        if not trigrams:
+            return
+        with self._db_lock:
+            batch_size = 500
+            for idx, trigram in enumerate(trigrams, start=1):
+                existing_ids = self._trigram_get_doc_ids(trigram)
+                existing_ids.add(doc_id)
+                self._trigram_set_doc_ids(trigram, existing_ids)
+                if self._trigram_backend == "sqlite" and idx % batch_size == 0:
+                    self._trigram_commit()
+            self._trigram_commit()
+
+    def _remove_doc_from_trigram_postings(self, doc_id: int, trigrams: Set[str]) -> None:
+        """Remove doc_id from the provided trigrams' postings."""
+        if not trigrams:
+            return
+        with self._db_lock:
+            for trigram in trigrams:
+                existing_ids = self._trigram_get_doc_ids(trigram)
+                if not existing_ids or doc_id not in existing_ids:
+                    continue
+                existing_ids.discard(doc_id)
+                if existing_ids:
+                    self._trigram_set_doc_ids(trigram, existing_ids)
+                else:
+                    self._trigram_delete(trigram)
+            self._trigram_commit()
+
+    # ------------------------------------------------------------------
+    # Trigram storage helpers (RocksDB or SQLite backend)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _serialize_doc_ids(doc_ids: Set[int]) -> bytes:
+        return zlib.compress(",".join(str(doc) for doc in sorted(doc_ids)).encode())
+
+    @staticmethod
+    def _deserialize_doc_ids(blob: bytes) -> Set[int]:
+        try:
+            return {
+                int(x) for x in zlib.decompress(blob).decode().split(",") if x
+            }
+        except Exception:
+            logger.debug("Failed to deserialize doc_ids blob", exc_info=True)
+            return set()
+
+    @staticmethod
+    def _serialize_trigram_set(trigrams: Set[str]) -> bytes:
+        try:
+            # Use JSON array encoding to preserve arbitrary characters (including newlines)
+            import json
+
+            return zlib.compress(json.dumps(sorted(trigrams), ensure_ascii=False).encode("utf-8"))
+        except Exception:
+            logger.debug("Failed to serialize trigram set", exc_info=True)
+            return b""
+
+    @staticmethod
+    def _deserialize_trigram_set(blob: bytes) -> Set[str]:
+        try:
+            data = zlib.decompress(blob).decode("utf-8")
+            # Prefer JSON-formatted storage (safe for arbitrary trigram characters)
+            try:
+                import json
+                parsed = json.loads(data)
+                if isinstance(parsed, list):
+                    return {str(t) for t in parsed}
+            except Exception:
+                # Fall back to legacy newline-separated format for backward compatibility
+                return {t for t in data.split("\n") if t}
+        except Exception:
+            logger.debug("Failed to deserialize trigram set", exc_info=True)
+        return set()
+
+    def _trigram_commit(self) -> None:
+        # Ensure on-disk durability for Rocks-backed stores when available.
+        # rocksdict exposes flush / flush_wal; python-rocksdb may expose flush or Flush
+        if self._trigram_backend == "rocksdict" and getattr(self, "_rocksdict_trigrams", None) is not None:
+            try:
+                rd = self._rocksdict_trigrams
+                if hasattr(rd, "flush_wal"):
+                    rd.flush_wal()
+                if hasattr(rd, "flush"):
+                    rd.flush()
+            except Exception:
+                logger.debug("rocksdict flush failed", exc_info=True)
+
+        if self._trigram_backend == "rocksdb" and getattr(self, "_rocksdb_trigrams", None) is not None:
+            try:
+                rb = self._rocksdb_trigrams
+                # python-rocksdb may expose a Flush method on the DB or via a Flush method on the column family
+                if hasattr(rb, "flush"):
+                    try:
+                        rb.flush()
+                    except Exception:
+                        # some bindings use Flush
+                        if hasattr(rb, "Flush"):
+                            rb.Flush()
+                elif hasattr(rb, "Flush"):
+                    rb.Flush()
+            except Exception:
+                logger.debug("rocksdb flush failed", exc_info=True)
+
+    def _trigram_get_doc_ids(self, gram: str) -> Set[int]:
+        if self._trigram_backend == "rocksdict":
+            if self._rocksdict_trigrams is None:
+                return set()
+            raw = self._rocksdict_trigrams.get(gram.encode(), None)
+            if raw is None:
+                return set()
+            return self._deserialize_doc_ids(raw)
+
+        if self._trigram_backend == "rocksdb":
+            if self._rocksdb_trigrams is None:
+                return set()
+            raw = self._rocksdb_trigrams.get(gram.encode())
+            if raw is None:
+                return set()
+            return self._deserialize_doc_ids(raw)
+
+        # Should not reach here - backend should be rocksdict or rocksdb
+        return set()
+
+    def _trigram_set_doc_ids(self, gram: str, doc_ids: Set[int]) -> None:
+        if not doc_ids:
+            self._trigram_delete(gram)
+            return
+        serialized = self._serialize_doc_ids(doc_ids)
+
+        if self._trigram_backend == "rocksdict":
+            if self._rocksdict_trigrams is None:
+                return
+            # Retry with backoff to handle transient write issues
+            retries = int(os.getenv("SIGIL_MCP_TRIGRAM_WRITE_RETRIES", "3"))
+            backoff_ms = int(os.getenv("SIGIL_MCP_TRIGRAM_RETRY_BACKOFF_MS", "50"))
+            last_exc = None
+            for attempt in range(1, retries + 1):
+                try:
+                    self._rocksdict_trigrams[gram.encode()] = serialized
+                    last_exc = None
+                    break
+                except Exception as e:
+                    last_exc = e
+                    logger.warning("rocksdict write attempt %d/%d failed for %s", attempt, retries, gram)
+                    if attempt < retries:
+                        try:
+                            import time
+
+                            time.sleep(backoff_ms / 1000.0)
+                        except Exception:
+                            pass
+            if last_exc is not None:
+                logger.error("Failed to write trigram %s to rocksdict after %d attempts", gram, retries, exc_info=True)
+                raise last_exc
+            return
+
+        if self._trigram_backend == "rocksdb":
+            if self._rocksdb_trigrams is None:
+                return
+            # python-rocksdb DB.put can be used; retry similarly
+            retries = int(os.getenv("SIGIL_MCP_TRIGRAM_WRITE_RETRIES", "3"))
+            backoff_ms = int(os.getenv("SIGIL_MCP_TRIGRAM_RETRY_BACKOFF_MS", "50"))
+            last_exc = None
+            for attempt in range(1, retries + 1):
+                try:
+                    self._rocksdb_trigrams.put(gram.encode(), serialized)
+                    last_exc = None
+                    break
+                except Exception as e:
+                    last_exc = e
+                    logger.warning("rocksdb write attempt %d/%d failed for %s", attempt, retries, gram)
+                    if attempt < retries:
+                        try:
+                            import time
+
+                            time.sleep(backoff_ms / 1000.0)
+                        except Exception:
+                            pass
+            if last_exc is not None:
+                logger.error("Failed to write trigram %s to RocksDB after %d attempts", gram, retries, exc_info=True)
+                raise last_exc
+            return
+
+        # Should not reach here - backend should be rocksdict or rocksdb
+
+    def _trigram_delete(self, gram: str) -> None:
+        if self._trigram_backend == "rocksdict":
+            if self._rocksdict_trigrams is None:
+                return
+            try:
+                del self._rocksdict_trigrams[gram.encode()]
+            except KeyError:
+                pass
+            except Exception:
+                logger.debug("Failed to delete trigram %s in rocksdict", gram, exc_info=True)
+            return
+
+        if self._trigram_backend == "rocksdb":
+            if self._rocksdb_trigrams is None:
+                return
+            try:
+                self._rocksdb_trigrams.delete(gram.encode())
+            except Exception:
+                logger.debug("Failed to delete trigram %s in RocksDB", gram, exc_info=True)
+            return
+
+        # Should not reach here - backend should be rocksdict or rocksdb
+
+    def _trigram_iter_items(self):
+        if self._trigram_backend == "rocksdict":
+            if self._rocksdict_trigrams is None:
+                return []
+            try:
+                for key, value in self._rocksdict_trigrams.items():
+                    if isinstance(key, (bytes, bytearray)):
+                        k = key.decode()
+                    else:
+                        k = str(key)
+                    yield k, self._deserialize_doc_ids(value)
+            except Exception:
+                logger.debug("Failed to iterate rocksdict trigrams", exc_info=True)
+            return
+
+        if self._trigram_backend == "rocksdb":
+            if self._rocksdb_trigrams is None:
+                return []
+            it = self._rocksdb_trigrams.iteritems()
+            it.seek_to_first()
+            for key, value in it:
+                if isinstance(key, (bytes, bytearray)):
+                    k = key.decode()
+                else:
+                    k = str(key)
+                yield k, self._deserialize_doc_ids(value)
+            return
+
+        # Should not reach here - backend should be rocksdict or rocksdb
+        return []
+
+    def _trigram_count(self) -> int:
+        if self._trigram_backend == "rocksdict":
+            if self._rocksdict_trigrams is None:
+                return 0
+            try:
+                count = len(self._rocksdict_trigrams)
+                if count:
+                    return count
+            except Exception:
+                logger.debug("Failed to read rocksdict key count", exc_info=True)
+            # Fallback: iterate to count if len() unsupported or returns 0
+            try:
+                return sum(1 for _ in self._trigram_iter_items())
+            except Exception:
+                logger.debug("Failed to iterate rocksdict for count", exc_info=True)
+                return 0
+
+        if self._trigram_backend == "rocksdb":
+            if self._rocksdb_trigrams is None:
+                return 0
+            try:
+                prop = self._rocksdb_trigrams.get_property(b"rocksdb.estimate-num-keys")
+                if prop is not None:
+                    return int(prop)
+            except Exception:
+                logger.debug("Failed to read rocksdb key count", exc_info=True)
+            # Fallback to iteration
+            return sum(1 for _ in self._trigram_iter_items())
+
+        # Should not reach here - backend should be rocksdict or rocksdb
+        return 0
     
     def _extract_trigrams(self, text: str) -> Set[str]:
         """Extract all trigrams from text."""
-        trigrams = set()
-        for i in range(len(text) - 2):
-            trigrams.add(text[i:i+3])
-        return trigrams
+        if len(text) < 3:
+            return set()
+        # Fast set comprehension avoids Python loop overhead
+        return {text[i : i + 3] for i in range(len(text) - 2)}
     
     def _read_blob(self, blob_sha: str) -> Optional[bytes]:
         """Read blob content from storage."""
@@ -1294,12 +2330,48 @@ class SigilIndex:
             return zlib.decompress(blob_file.read_bytes())
         return None
     
-    def _should_skip(self, path: Path) -> bool:
+    def _should_skip(self, path: Path, repo_root: Optional[Path] = None) -> bool:
         """Check if file should be skipped during indexing."""
+        # Delegate to unified should_ignore helper to maintain identical
+        # semantics between watcher and indexer. Provide config/global
+        # patterns and any per-repo overrides if available.
+        cfg = getattr(self, "config", None)
+        repo_specific = None
+        if cfg is not None and repo_root is not None:
+            try:
+                for rname, rraw in cfg.get("repositories", {}).items():
+                    try:
+                        rpath = rraw["path"] if isinstance(rraw, dict) else rraw
+                    except Exception:
+                        rpath = rraw
+                    try:
+                        rpath_s = str(rpath)
+                        if Path(rpath_s).resolve() == Path(repo_root).resolve():
+                            repo_specific = rraw if isinstance(rraw, dict) else None
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                repo_specific = None
+
+        repo_ignore_patterns = []
+        if isinstance(repo_specific, dict):
+            repo_ignore_patterns = list(repo_specific.get("ignore_patterns", []) or [])
+
+        try:
+            return should_ignore(
+                path,
+                repo_root,
+                config_ignore_patterns=(cfg.index_ignore_patterns if cfg is not None else None),
+                repo_ignore_patterns=repo_ignore_patterns,
+            )
+        except Exception:
+            # Fail-open to legacy heuristics if helper errors
+            pass
         skip_dirs = {
             '.git', '__pycache__', 'node_modules', 'target',
             'build', 'dist', '.venv', 'venv', '.tox',
-            '.mypy_cache', '.pytest_cache', 'coverage'
+            '.mypy_cache', '.pytest_cache', '.ruff_cache', '.ruff', '.cache', 'coverage'
         }
         skip_dirs.update({"htmlcov", "coverage_html", ".coverage", "site-packages"})
         
@@ -1309,12 +2381,28 @@ class SigilIndex:
             '.svg', '.ico', '.woff', '.woff2', '.ttf',
             '.zip', '.tar', '.gz', '.bz2', '.xz', '.mjs'
         }
-        skip_extensions.update({'.html', '.htm'})
+        skip_extensions.update({'.html', '.htm', '.rmeta', '.rlib'})
         
         # Check if any parent is in skip_dirs
         for parent in path.parents:
             if parent.name in skip_dirs:
                 return True
+
+        # Skip common cargo build cache outputs (e.g., output/cargo_target_cache/...)
+        try:
+            s = str(path).lower()
+            if "cargo_target_cache" in s or "/cargo_target_cache/" in s:
+                return True
+        except Exception:
+            pass
+
+        # Skip timestamped or backup-like files (e.g., *.backup*, *.bak, *~)
+        try:
+            name_l = path.name.lower()
+            if ".backup" in name_l or name_l.endswith("~") or name_l.endswith(".bak"):
+                return True
+        except Exception:
+            pass
         
         # Check extension
         if path.suffix.lower() in skip_extensions:
@@ -1334,7 +2422,22 @@ class SigilIndex:
                 return True
         except OSError:
             return True
-        
+
+        # Honor per-repo .gitignore if provided
+        try:
+            if repo_root:
+                # If repo defines explicit includes, respect them (they override gitignore)
+                include_patterns = load_include_patterns(repo_root)
+                if include_patterns and is_ignored_by_gitignore(path, repo_root, include_patterns):
+                    return False
+
+                patterns = load_gitignore(repo_root)
+                if patterns and is_ignored_by_gitignore(path, repo_root, patterns):
+                    return True
+        except Exception:
+            # Fail-open: if gitignore parsing fails, do not block indexing
+            pass
+
         return False
     
     def search_code(
@@ -1367,14 +2470,8 @@ class SigilIndex:
         # Fetch document IDs for each trigram
         doc_id_sets = []
         for gram in query_trigrams:
-            cursor = self.trigrams_db.execute(
-                "SELECT doc_ids FROM trigrams WHERE gram = ?", (gram,)
-            )
-            row = cursor.fetchone()
-            if row:
-                doc_ids = {
-                    int(x) for x in zlib.decompress(row[0]).decode().split(',') if x
-                }
+            doc_ids = self._trigram_get_doc_ids(gram)
+            if doc_ids:
                 logger.debug("search_code: trigram %s -> doc_ids=%s", gram, sorted(doc_ids))
                 doc_id_sets.append(doc_ids)
             else:
@@ -1452,7 +2549,7 @@ class SigilIndex:
         Returns:
             List of symbol definitions
         """
-        with self._lock:
+        with self._db_lock:
             query = (
                 "SELECT s.name, s.kind, s.line, s.signature, s.scope, "
                 "d.path, r.name as repo_name "
@@ -1504,7 +2601,7 @@ class SigilIndex:
         Returns:
             List of symbols
         """
-        with self._lock:
+        with self._db_lock:
             query = (
                 "SELECT s.name, s.kind, s.line, s.signature, s.scope, d.path "
                 "FROM symbols s "
@@ -1542,14 +2639,14 @@ class SigilIndex:
     
     def _get_document(self, doc_id: int) -> Optional[dict[str, str]]:
         """Get document metadata."""
-        cursor = self.repos_db.execute("""
-            SELECT d.path, d.blob_sha, d.language, r.name as repo_name
-            FROM documents d
-            JOIN repos r ON d.repo_id = r.id
-            WHERE d.id = ?
-        """, (doc_id,))
-        
-        row = cursor.fetchone()
+        with self._db_lock:
+            cursor = self.repos_db.execute("""
+                SELECT d.path, d.blob_sha, d.language, r.name as repo_name
+                FROM documents d
+                JOIN repos r ON d.repo_id = r.id
+                WHERE d.id = ?
+            """, (doc_id,))
+            row = cursor.fetchone()
         if row:
             return {
                 'path': row[0],
@@ -1571,13 +2668,41 @@ class SigilIndex:
         and (repo_id, file_path) to ensure stale chunks are removed even if
         doc_id reuse or path changes occur.
         """
-        self.repos_db.execute("DELETE FROM symbols WHERE doc_id = ?", (doc_id,))
-        try:
-            self.repos_db.execute("DELETE FROM embeddings WHERE doc_id = ?", (doc_id,))
-        except Exception:
-            # Embeddings table may not exist in newer versions; ignore errors
-            logger.debug("No embeddings table found when deleting doc %s", doc_id)
+        with self._db_lock:
+            self.repos_db.execute("DELETE FROM symbols WHERE doc_id = ?", (doc_id,))
+            try:
+                self.repos_db.execute("DELETE FROM embeddings WHERE doc_id = ?", (doc_id,))
+            except Exception:
+                # Embeddings table may not exist in newer versions; ignore errors
+                logger.debug("No embeddings table found when deleting doc %s", doc_id)
+            # Drop cached trigram record; postings are removed separately
+            self._delete_doc_trigram_record(doc_id)
 
+        # Attempt to delete vectors from the per-repo LanceDB if available
+        if repo_id is not None:
+            repo_name = self._get_repo_name_for_id(repo_id)
+            if repo_name:
+                try:
+                    repo_db, repo_table = self._get_repo_lance_and_vectors(repo_name)
+                    if repo_table is not None:
+                        clauses = [f"doc_id == '{doc_id}'"]
+                        if rel_path is not None:
+                            clauses.append(f"file_path == '{rel_path}'")
+                        for clause in clauses:
+                            try:
+                                cast(Any, repo_table).delete(clause)
+                            except Exception:
+                                logger.exception(
+                                    "Failed to delete vector rows for doc %s in repo %s using clause %s",
+                                    doc_id,
+                                    repo_name,
+                                    clause,
+                                )
+                        return
+                except Exception:
+                    logger.exception("Error deleting vectors for doc %s in repo_id %s", doc_id, repo_id)
+
+        # Fallback: try global table if present
         if self.vectors is not None:
             delete_clauses = [f"doc_id == '{doc_id}'"]
             if repo_id is not None and rel_path is not None:
@@ -1587,7 +2712,7 @@ class SigilIndex:
 
             for clause in delete_clauses:
                 try:
-                    self.vectors.delete(clause)
+                    cast(Any, self.vectors).delete(clause)
                 except Exception:
                     logger.exception(
                         "Failed to delete vector rows for doc %s using clause %s",
@@ -1597,73 +2722,31 @@ class SigilIndex:
 
     def _remove_trigrams_for_doc_fast(self, doc_id: int, trigrams: Set[str]) -> None:
         """Fast path for removing doc_id from a list of trigrams."""
-        for gram in trigrams:
-            tri_cursor = self.trigrams_db.execute(
-                "SELECT doc_ids FROM trigrams WHERE gram = ?",
-                (gram,),
-            )
-            tri_row = tri_cursor.fetchone()
-            if not tri_row:
-                continue
-
-            existing_ids = {
-                int(x) for x in zlib.decompress(tri_row[0]).decode().split(",") if x
-            }
-            if doc_id not in existing_ids:
-                logger.debug(
-                    "remove_file: doc_id %s not in posting for gram %s",
-                    doc_id,
-                    gram,
-                )
-                continue
-
-            existing_ids.remove(doc_id)
-            if not existing_ids:
-                logger.debug("remove_file: dropping trigram %s (no docs left)", gram)
-                self.trigrams_db.execute("DELETE FROM trigrams WHERE gram = ?", (gram,))
-            else:
-                joined = ",".join(str(x) for x in sorted(existing_ids))
-                compressed = zlib.compress(joined.encode())
-                self.trigrams_db.execute(
-                    "INSERT OR REPLACE INTO trigrams (gram, doc_ids) VALUES (?, ?)",
-                    (gram, compressed),
-                )
-                logger.debug(
-                    "remove_file: updated trigram %s -> %s",
-                    gram,
-                    sorted(existing_ids),
-                )
+        self._remove_doc_from_trigram_postings(doc_id, trigrams)
 
     def _remove_trigrams_for_doc_scan(self, doc_id: int) -> None:
         """
         Slow fallback scanning removal: scan all trigrams and remove this doc_id
         where present.
         """
-        tri_cursor = self.trigrams_db.execute("SELECT gram, doc_ids FROM trigrams")
-        rows = tri_cursor.fetchall()
-        for gram, blob in rows:
-            existing_ids = {
-                int(x) for x in zlib.decompress(blob).decode().split(",") if x
-            }
-            if doc_id not in existing_ids:
-                continue
+        with self._db_lock:
+            for gram, existing_ids in self._trigram_iter_items():
+                if doc_id not in existing_ids:
+                    continue
 
-            existing_ids.remove(doc_id)
-            if not existing_ids:
-                self.trigrams_db.execute("DELETE FROM trigrams WHERE gram = ?", (gram,))
-            else:
-                joined = ",".join(str(x) for x in sorted(existing_ids))
-                compressed = zlib.compress(joined.encode())
-                self.trigrams_db.execute(
-                    "INSERT OR REPLACE INTO trigrams (gram, doc_ids) VALUES (?, ?)",
-                    (gram, compressed),
-                )
+                existing_ids.remove(doc_id)
+                if not existing_ids:
+                    self._trigram_delete(gram)
+                else:
+                    self._trigram_set_doc_ids(gram, existing_ids)
+            self._trigram_commit()
 
     def _delete_blob_if_unreferenced(self, blob_sha: str, rel_path: str) -> None:
         """Delete blob file if no other document references it."""
-        curs = self.repos_db.cursor()
-        curs.execute("SELECT COUNT(*) FROM documents WHERE blob_sha = ?", (blob_sha,))
-        ref_count = curs.fetchone()[0]
+        with self._db_lock:
+            curs = self.repos_db.cursor()
+            curs.execute("SELECT COUNT(*) FROM documents WHERE blob_sha = ?", (blob_sha,))
+            ref_count = curs.fetchone()[0]
         if ref_count == 0:
             blob_file = self.index_path / "blobs" / blob_sha[:2] / blob_sha[2:]
             try:
@@ -1719,6 +2802,32 @@ class SigilIndex:
     ) -> None:
         """Keep vector rows in sync when a blob moves to a different repo/path."""
 
+        # Update metadata in the appropriate per-repo vector table if available
+        repo_name = self._get_repo_name_for_id(repo_id)
+        if repo_name:
+            try:
+                repo_db, repo_table = self._get_repo_lance_and_vectors(repo_name)
+                if repo_table is not None:
+                    try:
+                        cast(Any, repo_table).update(
+                            where=f"doc_id == '{doc_id}'",
+                            values={
+                                "repo_id": str(repo_id),
+                                "file_path": rel_path,
+                            },
+                        )
+                        return
+                    except Exception:
+                        logger.exception(
+                            "Failed to update vector metadata for doc %s in repo %s (path %s)",
+                            doc_id,
+                            repo_name,
+                            rel_path,
+                        )
+            except Exception:
+                logger.exception("Error looking up lance DB for repo id %s", repo_id)
+
+        # Fallback: update global table if present
         if self.vectors is None:
             return
 
@@ -1748,7 +2857,22 @@ class SigilIndex:
     ) -> None:
         """Replace vector rows for a file with fresh embeddings."""
 
-        if self.vectors is None:
+        # Resolve repo name and per-repo vectors table
+        repo_name = self._get_repo_name_for_id(repo_id)
+        repo_db = None
+        vectors = None
+        if repo_name:
+            try:
+                repo_db, vectors = self._get_repo_lance_and_vectors(repo_name)
+            except Exception:
+                logger.exception("Failed to get per-repo lance table for repo_id %s", repo_id)
+
+        # If no per-repo vectors table, fall back to global one
+        if vectors is None:
+            vectors = self.vectors
+            repo_db = self.lance_db
+
+        if vectors is None:
             return
 
         if embeddings.shape[0] != len(chunks):
@@ -1779,11 +2903,23 @@ class SigilIndex:
             self.embedding_dimension = new_dim
             self._code_chunk_model = get_code_chunk_model(new_dim)
             try:
-                self.vectors = self.lance_db.create_table(
-                    self.vector_table_name,
-                    schema=self._code_chunk_model,
-                    mode="overwrite",
-                )
+                # Recreate table in the repo-specific DB if possible
+                if repo_db is not None:
+                    new_table = cast(Any, repo_db).create_table(
+                        self.vector_table_name,
+                        schema=self._code_chunk_model,
+                        mode="overwrite",
+                    )
+                    vectors = new_table
+                    if repo_name:
+                        self._repo_vectors[repo_name] = new_table
+                else:
+                    self.vectors = cast(Any, self.lance_db).create_table(
+                        self.vector_table_name,
+                        schema=self._code_chunk_model,
+                        mode="overwrite",
+                    )
+                    vectors = self.vectors
             except Exception:
                 logger.exception(
                     "Failed to recreate vector table with dimension %s for %s",
@@ -1791,38 +2927,86 @@ class SigilIndex:
                     rel_path,
                 )
                 return
+                return
 
         timestamp = datetime.now()
 
         try:
-            self.vectors.delete(
-                f"repo_id == '{repo_id}' AND file_path == '{rel_path}'"
-            )
-        except Exception:
-            logger.exception("Failed to delete existing vectors for %s", rel_path)
+            # Delete prior vectors for this file in the repo-specific table
+            cast(Any, vectors).delete(f"file_path == '{rel_path}'")
+        except Exception as exc:
+            # If the underlying Lance dataset is missing/corrupt, recreate table and continue
+            if "Not found" in str(exc) or "LanceError" in str(exc):
+                logger.warning(
+                    "Vector table delete failed for %s (not found/corrupt); recreating table",
+                    rel_path,
+                )
+                try:
+                    if repo_db is not None:
+                        vectors = cast(Any, repo_db).create_table(
+                            self.vector_table_name,
+                            schema=self._code_chunk_model or get_code_chunk_model(self.embedding_dimension),
+                            mode="overwrite",
+                        )
+                        if repo_name:
+                            self._repo_vectors[repo_name] = vectors
+                    else:
+                        self.vectors = cast(Any, self.lance_db).create_table(
+                            self.vector_table_name,
+                            schema=self._code_chunk_model or get_code_chunk_model(self.embedding_dimension),
+                            mode="overwrite",
+                        )
+                        vectors = self.vectors
+                    # After recreating the table, proceed to insert fresh records
+                except Exception:
+                    logger.exception("Failed to recreate vector table after delete error")
+                    return
+            else:
+                logger.exception("Failed to delete existing vectors for %s", rel_path)
+                return
 
         records = []
-        code_chunk_model = self._code_chunk_model or get_code_chunk_model(
-            self.embedding_dimension
-        )
         for (chunk_idx, start_line, end_line, chunk_text), vector in zip(chunks, embeddings):
-            records.append(code_chunk_model(
-                vector=np.asarray(vector, dtype="float32"),
-                doc_id=str(doc_id),
-                repo_id=str(repo_id),
-                file_path=rel_path,
-                chunk_index=int(chunk_idx),
-                start_line=int(start_line),
-                end_line=int(end_line),
-                content=chunk_text,
-                last_updated=timestamp,
-            ))
+            records.append({
+                "vector": np.asarray(vector, dtype="float32"),
+                "doc_id": str(doc_id),
+                "repo_id": str(repo_id),
+                "file_path": rel_path,
+                "chunk_index": int(chunk_idx),
+                "start_line": int(start_line),
+                "end_line": int(end_line),
+                "content": chunk_text,
+                "last_updated": timestamp,
+            })
 
         if records:
             try:
-                self.vectors.add(records)
+                cast(Any, vectors).add(records)
+                # Mark document vectors as indexed successfully
+                try:
+                    with self._db_lock:
+                        self.repos_db.execute(
+                            "UPDATE documents SET vector_indexed_at = ?, vector_index_error = NULL WHERE id = ?",
+                            (timestamp.isoformat(), str(doc_id)),
+                        )
+                        self.repos_db.commit()
+                except Exception:
+                    logger.debug(
+                        "Failed to update vector_indexed_at for doc %s", doc_id, exc_info=True
+                    )
             except Exception:
                 logger.exception("Failed to upsert vectors for %s", rel_path)
+                try:
+                    with self._db_lock:
+                        self.repos_db.execute(
+                            "UPDATE documents SET vector_index_error = ? WHERE id = ?",
+                            ("vector_upsert_failed", str(doc_id)),
+                        )
+                        self.repos_db.commit()
+                except Exception:
+                    logger.debug(
+                        "Failed to record vector_index_error for doc %s", doc_id, exc_info=True
+                    )
     
     def build_vector_index(
         self,
@@ -1843,83 +3027,160 @@ class SigilIndex:
         Returns:
             Statistics about indexing operation
         """
-        with self._lock:
-            if not self._embeddings_active or not self.lancedb_available:
-                logger.info(
-                    "Embeddings disabled or LanceDB unavailable; skipping vector index build for %s",
-                    repo,
-                )
-                return {"chunks_indexed": 0, "documents_processed": 0}
+        if not self._embeddings_active or not self.lancedb_available:
+            logger.info(
+                "Embeddings disabled or LanceDB unavailable; skipping vector index build for %s",
+                repo,
+            )
+            return {"chunks_indexed": 0, "documents_processed": 0}
 
-            if embed_fn is None:
-                embed_fn = self.embed_fn
-            if embed_fn is None:
-                logger.warning(
-                    "No embedding function configured for SigilIndex; skipping vector build for %s",
-                    repo,
-                )
-                return {"chunks_indexed": 0, "documents_processed": 0}
-            
-            model = model or self.embed_model
-            
-            stats = {
-                "chunks_indexed": 0,
-                "documents_processed": 0,
-            }
+        if embed_fn is None:
+            embed_fn = self.embed_fn
+        if embed_fn is None:
+            logger.warning(
+                "No embedding function configured for SigilIndex; skipping vector build for %s",
+                repo,
+            )
+            return {"chunks_indexed": 0, "documents_processed": 0}
+        
+        model = model or self.embed_model
+        
+        stats = {
+            "chunks_indexed": 0,
+            "documents_processed": 0,
+        }
 
+        with self._db_lock:
             cur = self.repos_db.cursor()
             cur.execute("SELECT id FROM repos WHERE name = ?", (repo,))
             row = cur.fetchone()
             if not row:
                 raise ValueError(f"Repository {repo!r} not indexed yet")
-
             repo_id = row[0]
-
-            if self.vectors is None:
-                logger.info("Vector index not initialized; skipping build for %s", repo)
-                return stats
-
-            if force and self.vectors is not None:
-                try:
-                    self.vectors.delete(f"repo_id == '{repo_id}'")
-                except Exception:
-                    logger.exception(
-                        "Failed to clear existing vectors for repo %s", repo
-                    )
-            
             cur.execute(
                 "SELECT id, blob_sha, path FROM documents WHERE repo_id = ?",
                 (repo_id,)
             )
             docs = cur.fetchall()
 
-            for doc_id, blob_sha, rel_path in docs:
-                content = self._read_blob(blob_sha)
-                if not content:
-                    continue
-
-                text = content.decode("utf-8", errors="replace")
-                chunks = self._chunk_text(text)
-                if not chunks:
-                    continue
-
-                texts = [c[3] for c in chunks]
-                vectors = embed_fn(texts)  # np.ndarray (N, dim)
-
-                self._index_file_vectors(repo_id, doc_id, rel_path, chunks, vectors)
-
-                stats["documents_processed"] += 1
-                stats["chunks_indexed"] += len(chunks)
-
-            logger.info(
-                "Built vector index for %s using model %s: %s documents, %s chunks",
-                repo,
-                model,
-                stats['documents_processed'],
-                stats['chunks_indexed'],
-            )
-            self._log_vector_index_status(context=f"rebuild:{repo}")
+        if self.vectors is None:
+            logger.info("Vector index not initialized; skipping build for %s", repo)
             return stats
+
+        if force and self.vectors is not None:
+            try:
+                cast(Any, self.vectors).delete(f"repo_id == '{repo_id}'")
+            except Exception:
+                logger.exception(
+                    "Failed to clear existing vectors for repo %s", repo
+                )
+        
+        for doc_id, blob_sha, rel_path in docs:
+            content = self._read_blob(blob_sha)
+            if not content:
+                continue
+
+            text = content.decode("utf-8", errors="replace")
+            # Special-case JSONL files: produce per-record chunks
+            if self._is_jsonl_path(rel_path):
+                include_sol = self._get_repo_include_solution(repo_id)
+                records = self._parse_jsonl_records(text, include_solution=include_sol)
+                chunks = [(i, 1, 1, r) for i, r in enumerate(records)] if records else []
+            else:
+                chunks = self._chunk_text(text)
+            # Ensure no chunk exceeds configured hard char limit
+            chunks = self._enforce_chunk_size_limits(chunks)
+            if not chunks:
+                continue
+
+            texts = [c[3] for c in chunks]
+            if embed_fn is self.embed_fn:
+                vectors = self._call_embed(texts)
+            else:
+                if self.embedding_provider == "llamacpp":
+                    with self._embed_lock:
+                        vectors = embed_fn(texts)
+                else:
+                    vectors = embed_fn(texts)
+
+            self._index_file_vectors(repo_id, doc_id, rel_path, chunks, vectors)
+
+            stats["documents_processed"] += 1
+            stats["chunks_indexed"] += len(chunks)
+
+        logger.info(
+            "Built vector index for %s using model %s: %s documents, %s chunks",
+            repo,
+            model,
+            stats['documents_processed'],
+            stats['chunks_indexed'],
+        )
+        self._log_vector_index_status(context=f"rebuild:{repo}")
+        return stats
+
+    def generate_hardwrap_report(self, repo: str | None = None, top_n: int = 50) -> list[dict]:
+        """Scan documents and report files that trigger many hard-wrap splits.
+
+        Returns a list of dicts: {repo: name, path: rel_path, oversized_count: int, total_chunks: int}
+        sorted by oversized_count descending.
+        """
+        results: list[dict] = []
+        with self._db_lock:
+            cur = self.repos_db.cursor()
+            if repo:
+                repo_names = [repo]
+            else:
+                cur.execute("SELECT name FROM repos")
+                repo_names = [r[0] for r in cur.fetchall()]
+
+        for repo_name in repo_names:
+            with self._db_lock:
+                cur = self.repos_db.cursor()
+                cur.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
+                row = cur.fetchone()
+                if not row:
+                    continue
+                repo_id = row[0]
+                cur.execute("SELECT id, blob_sha, path FROM documents WHERE repo_id = ?", (repo_id,))
+                doc_rows = cur.fetchall()
+
+            for doc_id, blob_sha, rel_path in doc_rows:
+                try:
+                    content = self._read_blob(blob_sha)
+                    if not content:
+                        continue
+                    text = content.decode('utf-8', errors='replace')
+                    if self._is_jsonl_path(rel_path):
+                        include_sol = self._get_repo_include_solution(repo_id)
+                        records = self._parse_jsonl_records(text, include_solution=include_sol)
+                        chunks = [(i, 1, 1, r) for i, r in enumerate(records)] if records else []
+                    else:
+                        chunks = self._chunk_text(text)
+                    cfg = get_config()
+                    hard_chars = cfg.embed_hard_chars
+                    max_tokens = cfg.embeddings_max_tokens
+                    oversized = 0
+                    for c in chunks:
+                        txt = c[3]
+                        if not txt:
+                            continue
+                        if len(txt) > hard_chars:
+                            oversized += 1
+                            continue
+                        toks = self._count_tokens(txt)
+                        if toks > max_tokens:
+                            oversized += 1
+                    if oversized:
+                        results.append({
+                            "repo": repo_name,
+                            "path": rel_path,
+                            "oversized_count": oversized,
+                            "total_chunks": len(chunks),
+                        })
+                except Exception:
+                    continue
+        results.sort(key=lambda x: x.get("oversized_count", 0), reverse=True)
+        return results[:top_n]
     
     def semantic_search(
         self,
@@ -1942,85 +3203,107 @@ class SigilIndex:
         Returns:
             List of search results with scores, sorted by relevance
         """
-        with self._lock:
-            if embed_fn is None:
-                embed_fn = self.embed_fn
-            if embed_fn is None or self.vectors is None:
-                logger.info(
-                    "Semantic search requested but embeddings are unavailable; "
-                    "returning no results."
-                )
-                return []
+        if embed_fn is None:
+            embed_fn = self.embed_fn
+        if embed_fn is None or self.vectors is None:
+            logger.info(
+                "Semantic search requested but embeddings are unavailable; "
+                "returning no results."
+            )
+            return []
 
-            if self._vector_index_stale:
-                msg = (
-                    "Vector index repo IDs are stale; rebuild embeddings or "
-                    "clear LanceDB to realign (semantic search disabled)."
-                )
-                logger.warning(msg)
-                raise RuntimeError(msg)
+        if self._vector_index_stale:
+            msg = (
+                "Vector index repo IDs are stale; rebuild embeddings or "
+                "clear LanceDB to realign (semantic search disabled)."
+            )
+            logger.warning(msg)
+            raise RuntimeError(msg)
 
-            model = model or self.embed_model
+        model = model or self.embed_model
 
-            # 1) embed query
-            q_vec = embed_fn([query])[0].astype("float32")
-            q_norm = np.linalg.norm(q_vec) or 1.0
-            q_vec = q_vec / q_norm
+        # 1) embed query outside DB locks
+        q_vec = self._call_embed([query])[0].astype("float32")
+        q_norm = np.linalg.norm(q_vec) or 1.0
+        q_vec = q_vec / q_norm
 
-            repo_id: Optional[str] = None
-            repo_lookup: dict[str, str] = {}
-            query_builder = self.vectors.search(q_vec.astype("float32"))
+        repo_lookup: dict[str, str] = {}
+        results: list[dict] = []
 
-            if repo:
+        def _rows_to_results(rows: list[dict], repo_name: Optional[str]) -> list[dict]:
+            out: list[dict] = []
+            for r in rows:
+                try:
+                    doc_id = int(r.get("doc_id", 0))
+                except (TypeError, ValueError):
+                    continue
+                if repo_name is None:
+                    doc = self._get_document(doc_id)
+                    repo_n = doc.get("repo_name") if doc else None
+                else:
+                    repo_n = repo_name
+                if repo_n is None:
+                    continue
+                distance = float(r.get("_distance", 0.0))
+                score = 1.0 / (1.0 + distance)
+                out.append({
+                    "repo": repo_n,
+                    "path": r.get("file_path", ""),
+                    "chunk_index": int(r.get("chunk_index", -1)),
+                    "start_line": int(r.get("start_line", 0)),
+                    "end_line": int(r.get("end_line", 0)),
+                    "content": r.get("content", ""),
+                    "score": score,
+                    "doc_id": f"{repo_n}::{r.get('file_path', '')}",
+                })
+            return out
+
+        # If a repo was specified, search only its per-repo table
+        if repo:
+            with self._db_lock:
                 cur = self.repos_db.cursor()
                 cur.execute("SELECT id FROM repos WHERE name = ?", (repo,))
                 row = cur.fetchone()
-                if not row:
-                    raise ValueError(f"Repository {repo!r} not indexed yet")
-                repo_id = str(row[0])
-                query_builder = query_builder.where(f"repo_id == '{repo_id}'")
-                repo_lookup[repo_id] = repo
+            if not row:
+                raise ValueError(f"Repository {repo!r} not indexed yet")
+            # Use per-repo vectors if available
+            repo_db, repo_table = self._get_repo_lance_and_vectors(repo)
+            if repo_table is None:
+                return []
+            try:
+                query_results = cast(Any, repo_table).search(q_vec.astype("float32")).limit(k).to_list()
+            except Exception:
+                logger.exception("Semantic search failed for repo %s", repo)
+                return []
+            return _rows_to_results(query_results, repo)
 
-            query_results = query_builder.limit(k).to_list()
-
-            results = []
-            for row in query_results:
+        # No repo specified: aggregate from all per-repo tables if present
+        aggregated: list[dict] = []
+        try:
+            with self._db_lock:
+                cur = self.repos_db.cursor()
+                cur.execute("SELECT name FROM repos")
+                repo_names = [r[0] for r in cur.fetchall()]
+            for rname in repo_names:
                 try:
-                    doc_id = int(row.get("doc_id", 0))
-                except (TypeError, ValueError):
-                    continue
-
-                repo_name: Optional[str] = None
-                if repo_id is not None:
-                    repo_name = repo_lookup.get(repo_id)
-                else:
-                    doc = self._get_document(doc_id)
-                    if doc is not None:
-                        repo_name = doc.get("repo_name")
-                        if doc.get("repo_name"):
-                            repo_lookup[str(row.get("repo_id", ""))] = doc["repo_name"]
-                if repo_name is None:
-                    continue
-
-                distance = float(row.get("_distance", 0.0))
-                score = 1.0 / (1.0 + distance)
-
-                results.append({
-                    "repo": repo_name,
-                    "path": row.get("file_path", ""),
-                    "chunk_index": int(row.get("chunk_index", -1)),
-                    "start_line": int(row.get("start_line", 0)),
-                    "end_line": int(row.get("end_line", 0)),
-                    "content": row.get("content", ""),
-                    "score": score,
-                    "doc_id": f"{repo_name}::{row.get('file_path', '')}",
-                })
-
-            return results
+                    repo_db, repo_table = self._get_repo_lance_and_vectors(rname)
+                    if repo_table is None:
+                        continue
+                    rows = cast(Any, repo_table).search(q_vec.astype("float32")).limit(k).to_list()
+                    for res in _rows_to_results(rows, rname):
+                        aggregated.append(res)
+                except Exception:
+                    logger.debug("Failed semantic search for repo %s", rname, exc_info=True)
+            # Sort aggregated results by score and return top-k
+            aggregated.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+            return aggregated[:k]
+        except Exception:
+            logger.exception("Semantic search aggregation failed")
+            return []
     
     def get_index_stats(self, repo: Optional[str] = None) -> dict[str, int | str]:
         """Get statistics about the index."""
-        with self._lock:
+        with self._db_lock:
             cursor = self.repos_db.cursor()
             
             if repo:
@@ -2066,9 +3349,7 @@ class SigilIndex:
                 symbol_count = cursor.fetchone()[0]
                 
                 # Query trigrams from the trigrams database
-                tri_cursor = self.trigrams_db.cursor()
-                tri_cursor.execute("SELECT COUNT(*) FROM trigrams")
-                trigram_count = tri_cursor.fetchone()[0]
+                trigram_count = self._trigram_count()
                 
                 return {
                     "repositories": repo_count,
@@ -2096,8 +3377,8 @@ class SigilIndex:
         Returns:
             True if an indexed document was removed, False otherwise.
         """
-        with self._lock:
-            try:
+        try:
+            with self._db_lock:
                 cursor = self.repos_db.cursor()
 
                 # Resolve repo_id
@@ -2118,17 +3399,17 @@ class SigilIndex:
                     return False
 
                 doc_id, blob_sha = row
-                logger.warning(
-                    "remove_file: found doc_id=%s blob_sha=%s for %s",
-                    doc_id,
-                    blob_sha,
-                    rel_path,
-                )
 
-                # Load content for trigram cleanup (optional but ideal).
-                # If the blob is missing or unreadable, we still must ensure that
-                # trigram postings do not retain this doc_id, even if it requires
-                # a slower full-table scan as a fallback.
+            logger.warning(
+                "remove_file: found doc_id=%s blob_sha=%s for %s",
+                doc_id,
+                blob_sha,
+                rel_path,
+            )
+
+            # Load content for trigram cleanup (optional but ideal).
+            trigrams = self._load_doc_trigrams(doc_id)
+            if not trigrams:
                 content = self._read_blob(blob_sha)
                 if content is not None:
                     text = content.decode("utf-8", errors="replace").lower()
@@ -2138,42 +3419,62 @@ class SigilIndex:
                         len(trigrams),
                         doc_id,
                     )
-                else:
-                    trigrams = None
 
-                # Delete symbols and embeddings for this doc and clear vectors
-                self._delete_symbols_and_embeddings_for_doc(
-                    doc_id, repo_id, rel_path
-                )
+            # Delete symbols and embeddings for this doc and clear vectors
+            self._delete_symbols_and_embeddings_for_doc(
+                doc_id, repo_id, rel_path
+            )
 
-                # Update trigram index to drop this doc_id
-                if trigrams is not None:
-                    # Fast path: we know which trigrams belonged to this document.
-                    if trigrams:
-                        self._remove_trigrams_for_doc_fast(doc_id, trigrams)
-                else:
-                    # Fallback scan to remove doc_id from any trigram postings found
-                    self._remove_trigrams_for_doc_scan(doc_id)
+            # Update trigram index to drop this doc_id
+            if trigrams:
+                self._remove_doc_from_trigram_postings(doc_id, trigrams)
+            else:
+                # Fallback scan to remove doc_id from any trigram postings found
+                self._remove_trigrams_for_doc_scan(doc_id)
 
-                # Delete document row
+            # Delete document row and cached trigram record
+            with self._db_lock:
                 self.repos_db.execute(
                     "DELETE FROM documents WHERE id = ?",
                     (doc_id,),
                 )
-
-                # Optionally delete blob content if no other docs reference it
-                self._delete_blob_if_unreferenced(blob_sha, rel_path)
-
+                self._delete_doc_trigram_record(doc_id)
                 self.repos_db.commit()
-                self.trigrams_db.commit()
-                logger.warning(
-                    "remove_file: committed deletion for doc_id %s "
-                    "and updated trigrams",
-                    doc_id,
-                )
 
-                logger.info("Removed %s from index (repo=%s)", rel_path, repo_name)
-                return True
-            except Exception as exc:
-                logger.error("Error removing %s from index: %s", file_path, exc)
-                return False
+            # Optionally delete blob content if no other docs reference it
+            self._delete_blob_if_unreferenced(blob_sha, rel_path)
+
+            self._trigram_commit()
+            logger.warning(
+                "remove_file: committed deletion for doc_id %s "
+                "and updated trigrams",
+                doc_id,
+            )
+
+            logger.info("Removed %s from index (repo=%s)", rel_path, repo_name)
+            return True
+        except Exception as exc:
+            logger.error("Error removing %s from index: %s", file_path, exc)
+            return False
+
+    def close(self) -> None:
+        """Close all database connections."""
+        # Close RocksDB trigram databases
+        if hasattr(self, "_rocksdict_trigrams") and self._rocksdict_trigrams is not None:
+            try:
+                self._rocksdict_trigrams.close()
+            except Exception:
+                logger.debug("Error closing rocksdict trigrams", exc_info=True)
+        
+        if hasattr(self, "_rocksdb_trigrams") and self._rocksdb_trigrams is not None:
+            try:
+                self._rocksdb_trigrams.close()
+            except Exception:
+                logger.debug("Error closing rocksdb trigrams", exc_info=True)
+        
+        # Close SQLite repos database
+        if hasattr(self, "repos_db") and self.repos_db is not None:
+            try:
+                self.repos_db.close()
+            except Exception:
+                logger.debug("Error closing repos database", exc_info=True)

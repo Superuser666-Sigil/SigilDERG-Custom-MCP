@@ -9,6 +9,7 @@ import type {
   RebuildResponse,
   LogsResponse,
   ConfigResponse,
+  SaveConfigResponse,
   ErrorResponse,
   RebuildIndexRequest,
   RebuildVectorRequest,
@@ -20,6 +21,7 @@ export type {
   RebuildResponse,
   LogsResponse,
   ConfigResponse,
+  SaveConfigResponse,
   ErrorResponse,
   RebuildIndexRequest,
   RebuildVectorRequest,
@@ -118,6 +120,43 @@ export const rebuildVector = async (request: RebuildVectorRequest = {}): Promise
   }
 }
 
+export interface RebuildFileRequest {
+  repo: string
+  path: string
+}
+
+export const rebuildFile = async (request: RebuildFileRequest): Promise<RebuildResponse> => {
+  try {
+    const response = await apiClient.post<RebuildResponse>('/admin/index/file/rebuild', {
+      repo: request.repo,
+      path: request.path,
+    })
+    return response.data
+  } catch (error) {
+    throw handleError(error)
+  }
+}
+
+export interface StaleIndexResponse {
+  success: boolean
+  repos: Record<string, {
+    lance_db_path: string | null
+    lance_db_size: number
+    vectors_stale: number
+    stale_documents: Array<{ path: string; error: string | null }>
+  }>
+}
+
+export const getStaleIndex = async (repo?: string): Promise<StaleIndexResponse> => {
+  try {
+    const params = repo ? { repo } : {}
+    const response = await apiClient.get<StaleIndexResponse>('/admin/index/stale', { params })
+    return response.data
+  } catch (error) {
+    throw handleError(error)
+  }
+}
+
 export const getLogsTail = async (n: number = 200): Promise<LogsResponse> => {
   try {
     const response = await apiClient.get<LogsResponse>('/admin/logs/tail', {
@@ -138,6 +177,43 @@ export const getConfig = async (): Promise<ConfigResponse> => {
   }
 }
 
+export const saveConfig = async (config: ConfigResponse): Promise<SaveConfigResponse> => {
+  try {
+    const response = await apiClient.post<SaveConfigResponse>('/admin/config', config)
+    return response.data
+  } catch (error) {
+    throw handleError(error)
+  }
+}
+
+// Repo-level admin endpoints
+export interface RepoInfoResponse {
+  name: string
+  path: string
+  respect_gitignore: boolean
+  ignore_patterns?: string[]
+}
+
+export const getRepoInfo = async (name: string): Promise<RepoInfoResponse> => {
+  try {
+    const response = await apiClient.get<RepoInfoResponse>(`/admin/repo/${encodeURIComponent(name)}`)
+    return response.data
+  } catch (error) {
+    throw handleError(error)
+  }
+}
+
+export const setRepoGitignore = async (name: string, respect: boolean, ignore_patterns?: string[]): Promise<RepoInfoResponse> => {
+  try {
+    const body: any = { respect_gitignore: respect }
+    if (ignore_patterns !== undefined) body.ignore_patterns = ignore_patterns
+    const response = await apiClient.post<RepoInfoResponse>(`/admin/repo/${encodeURIComponent(name)}/gitignore`, body)
+    return response.data
+  } catch (error) {
+    throw handleError(error)
+  }
+}
+
 // Helper to set API key
 export const setApiKey = (key: string | null): void => {
   if (typeof window !== 'undefined') {
@@ -148,4 +224,3 @@ export const setApiKey = (key: string | null): void => {
     }
   }
 }
-
