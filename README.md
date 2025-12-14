@@ -8,6 +8,10 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 A Model Context Protocol (MCP) server that provides IDE-like code navigation and search for local repositories. Gives AI assistants like ChatGPT powerful code exploration capabilities including symbol search, trigram indexing, and semantic navigation.
 
+## Quickstart
+
+See `docs/QUICKSTART.md` for the fastest path to a working config and the most common knobs (index path, repos, embeddings on/off, admin settings).
+
 ## Features
 
 **Hybrid Code Search**
