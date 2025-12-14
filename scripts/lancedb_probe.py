@@ -21,7 +21,7 @@ def main() -> None:
     os.environ.setdefault("LANCEDB_LOG_STYLE", "never")
     os.environ.setdefault("LANCE_DISABLE_IO_URING", "1")
 
-    import lancedb  # noqa: WPS433
+    import lancedb
 
     target = os.environ.get("LANCEDB_PROBE_PATH", "tmp_lancedb_probe")
     timeout_seconds = float(os.environ.get("LANCEDB_PROBE_TIMEOUT", "15"))

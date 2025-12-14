@@ -2,8 +2,6 @@ import time
 from pathlib import Path
 from unittest.mock import Mock
 
-import pytest
-
 from sigil_mcp import watcher as watcher_mod
 
 

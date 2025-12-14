@@ -3,11 +3,10 @@
 
 import asyncio
 import types
-from pathlib import Path
 
-from starlette.testclient import TestClient
 from starlette.applications import Starlette
 from starlette.routing import Route
+from starlette.testclient import TestClient
 
 import sigil_mcp.server as server
 from sigil_mcp.indexer import SigilIndex

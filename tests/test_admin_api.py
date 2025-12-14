@@ -59,11 +59,11 @@ def test_admin_api_auth_required():
         # No key
         response = asyncio.run(_request("/admin/status"))
         assert response.status_code == 401
-        
+
         # Wrong key
         response = asyncio.run(_request("/admin/status", headers={"X-Admin-Key": "wrong"}))
         assert response.status_code == 401
-        
+
         # Correct key
         response = asyncio.run(_request("/admin/status", headers={"X-Admin-Key": "secret"}))
         assert response.status_code == 200

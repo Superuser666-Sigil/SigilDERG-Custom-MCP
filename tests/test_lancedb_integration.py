@@ -3,6 +3,7 @@
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
 import pytest
+
 import sigil_mcp.config as sigil_config
 from sigil_mcp.indexer import SigilIndex
 

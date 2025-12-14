@@ -1,7 +1,5 @@
-import tempfile
-from pathlib import Path
-from sigil_mcp.config import load_config, Config
 import sigil_mcp.ignore_utils as ignore_utils
+from sigil_mcp.config import Config
 
 
 def test_repositories_config_includes_ignore_patterns(tmp_path):
@@ -16,7 +14,7 @@ def test_repositories_config_includes_ignore_patterns(tmp_path):
         }
     }
     cfg_file = tmp_path / "config.json"
-    cfg_file.write_text(("""{""" + f"\n" + "\n".join([]) + """}"""))
+    cfg_file.write_text("""{""" + "\n" + "\n".join([]) + """}""")
     # write a combined JSON with repositories only
     import json
     cfg_file.write_text(json.dumps(cfg_data))
@@ -39,15 +37,13 @@ def test_per_repo_allow_overrides_global_ignore(tmp_path):
     p = (repo / "node_modules" / "a.js")
 
     # Global ignores node_modules/, repo explicitly allows it via !node_modules/
-    do_ignore = ignore_utils.should_ignore(
+    assert not ignore_utils.should_ignore(
         p,
         repo,
         config_ignore_patterns=["node_modules/"],
         repo_ignore_patterns=["!node_modules/"],
     )
-    import tempfile
-    from pathlib import Path
-    from sigil_mcp.config import load_config, Config
+    from sigil_mcp.config import Config
     from sigil_mcp.ignore_utils import should_ignore
 
 

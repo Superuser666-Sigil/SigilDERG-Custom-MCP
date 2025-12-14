@@ -5,10 +5,10 @@
 from pathlib import Path
 
 from sigil_mcp.ignore_utils import (
-    load_gitignore,
-    load_include_patterns,
     _match_pattern,
     is_ignored_by_gitignore,
+    load_gitignore,
+    load_include_patterns,
     should_ignore,
 )
 

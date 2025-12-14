@@ -9,6 +9,7 @@ Entry point for the Sigil MCP Admin API service.
 Starts a separate HTTP server for operational management endpoints.
 """
 
+# ruff: noqa: E402
 import logging
 import sys
 from pathlib import Path
@@ -23,7 +24,7 @@ if str(_parent) not in sys.path:
 
 from sigil_mcp.admin_api import app
 from sigil_mcp.config import get_config
-from sigil_mcp.logging_setup import setup_logging, get_log_file_path
+from sigil_mcp.logging_setup import get_log_file_path, setup_logging
 
 # Set up logging (will use same config as main server)
 config = get_config()
@@ -40,15 +41,15 @@ logger = logging.getLogger("sigil_admin_main")
 def main():
     """Start the Admin API server."""
     config = get_config()
-    
+
     if not config.admin_enabled:
         logger.error("Admin API is disabled in configuration")
         logger.error("Set admin.enabled=true in config.json or SIGIL_MCP_ADMIN_ENABLED=true")
         sys.exit(1)
-    
+
     host = config.admin_host
     port = config.admin_port
-    
+
     logger.info("=" * 60)
     logger.info("Sigil MCP Admin API")
     logger.info("=" * 60)
@@ -64,20 +65,20 @@ def main():
     logger.info("  GET  /admin/logs/tail     - View logs")
     logger.info("  GET  /admin/config        - View configuration")
     logger.info("")
-    
+
     if config.admin_api_key:
-        logger.info(f"API Key authentication: ENABLED")
-        logger.info(f"Use header: X-Admin-Key: <your-key>")
+        logger.info("API Key authentication: ENABLED")
+        logger.info("Use header: X-Admin-Key: <your-key>")
     else:
         logger.info("API Key authentication: DISABLED")
-    
+
     allowed_ips = config.admin_allowed_ips
     if allowed_ips:
         logger.info(f"IP Whitelist: {', '.join(allowed_ips)}")
     logger.info("")
     logger.info("Starting server...")
     logger.info("=" * 60)
-    
+
     try:
         uvicorn.run(
             app,

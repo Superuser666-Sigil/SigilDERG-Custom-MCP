@@ -1,7 +1,4 @@
-import os
 from pathlib import Path
-
-import pytest
 
 from sigil_mcp.ignore_utils import should_ignore
 

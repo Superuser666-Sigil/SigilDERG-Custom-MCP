@@ -1,9 +1,5 @@
-import os
+
 import numpy as np
-import tempfile
-from pathlib import Path
-import sqlite3
-import pytest
 
 from sigil_mcp.indexer import SigilIndex
 

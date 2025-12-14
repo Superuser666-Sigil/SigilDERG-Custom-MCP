@@ -86,10 +86,10 @@ For deeper details, see:
 
 ## 6) Run via Docker
 
-We publish a container image (`sigilderg-custom-mcp:1.0.0`). To build locally:
+We publish a container image (`sigilderg-custom-mcp:1.0.1`). To build locally:
 
 ```bash
-docker build -t sigilderg-custom-mcp:1.0.0 .
+docker build -t sigilderg-custom-mcp:1.0.1 .
 ```
 
 Run with a mounted config and index/data volume:
@@ -99,7 +99,7 @@ docker run --rm -p 8000:8000 -p 8765:8765 \
   -v $PWD/config.json:/app/config.json \
   -v $HOME/.sigil_index:/data/index \
   -e SIGIL_INDEX_PATH=/data/index \
-  sigilderg-custom-mcp:1.0.0
+  sigilderg-custom-mcp:1.0.1
 ```
 
 If you need embeddings with GPU inside Docker, ensure the host runtime (NVIDIA Container Toolkit or appropriate ROCm/Vulkan setup) is present and the image has the necessary GPU-enabled `llama-cpp-python` wheel installed (build or extend the image accordingly).

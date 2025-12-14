@@ -3,7 +3,7 @@
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
 import types
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from starlette.applications import Starlette

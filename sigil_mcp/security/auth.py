@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import logging
 import secrets
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, Optional, Sequence
 
 from ..auth import get_api_key_from_env, verify_api_key
 
@@ -44,7 +44,7 @@ def get_auth_settings(config=None) -> AuthSettings:
     )
 
 
-def is_local_connection(client_ip: Optional[str] = None) -> bool:
+def is_local_connection(client_ip: str | None = None) -> bool:
     """Return True when the client IP represents localhost."""
 
     if not client_ip:
@@ -77,8 +77,8 @@ def is_redirect_uri_allowed(
 
 
 def extract_api_key_from_headers(
-    request_headers: Optional[Dict[str, str]],
-) -> Optional[str]:
+    request_headers: dict[str, str] | None,
+) -> str | None:
     """Return API key from headers, handling common capitalizations."""
 
     if not request_headers:
@@ -105,10 +105,10 @@ def api_key_is_valid(provided_key: str) -> bool:
 
 
 def check_authentication(
-    request_headers: Optional[Dict[str, str]] = None,
-    client_ip: Optional[str] = None,
+    request_headers: dict[str, str] | None = None,
+    client_ip: str | None = None,
     *,
-    settings: Optional[AuthSettings] = None,
+    settings: AuthSettings | None = None,
 ) -> bool:
     """
     Check if a request is authenticated based on the current settings.
@@ -176,9 +176,9 @@ def check_authentication(
 
 
 def check_ip_whitelist(
-    client_ip: Optional[str] = None,
+    client_ip: str | None = None,
     *,
-    settings: Optional[AuthSettings] = None,
+    settings: AuthSettings | None = None,
 ) -> bool:
     """
     Check if client IP is whitelisted.

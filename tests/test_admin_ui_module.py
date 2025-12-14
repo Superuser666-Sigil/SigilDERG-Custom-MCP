@@ -3,7 +3,6 @@
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
 import subprocess
-from pathlib import Path
 
 import sigil_mcp.admin_ui as admin_ui
 

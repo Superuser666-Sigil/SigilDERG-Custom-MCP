@@ -10,12 +10,14 @@
 Tests for header logging middleware.
 """
 
-import pytest
 import logging
+
+import pytest
+
 from sigil_mcp.middleware.header_logging import (
+    SENSITIVE_HEADERS,
     HeaderLoggingASGIMiddleware,
     redact_headers,
-    SENSITIVE_HEADERS,
 )
 
 
@@ -226,15 +228,8 @@ class TestHeaderLoggingMiddleware:
         async def send(message):
             pass
 
-        # Should not raise and should call the app
-        call_count_before = 0
-        try:
-            call_count_before = len([c for c in mock_app.__call__.mock_calls if c])
-        except Exception:
-            pass
-        
         await middleware(scope, receive, send)
-        
+
         # App should have been called (non-HTTP passes through)
         # Since we're using a function, we can't easily track calls, so just verify no error
 
@@ -363,4 +358,3 @@ class TestMiddlewareIntegration:
         assert len(send_calls) > 0
         assert send_calls[0]["type"] == "http.response.start"
         assert send_calls[0]["status"] == 200
-

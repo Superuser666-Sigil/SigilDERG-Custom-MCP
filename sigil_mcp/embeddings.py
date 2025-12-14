@@ -10,7 +10,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Protocol, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +30,8 @@ except ImportError:
     OPENAI_AVAILABLE = False
 
 if TYPE_CHECKING:
-    from sentence_transformers import SentenceTransformer as SentenceTransformerType
     from openai import OpenAI as OpenAIType
+    from sentence_transformers import SentenceTransformer as SentenceTransformerType
 
 
 class EmbeddingProvider(Protocol):
@@ -57,16 +57,16 @@ def create_embedding_provider(  # noqa: C901
     **kwargs: Any,
 ) -> EmbeddingProvider:
     """Create an embedding provider based on configuration.
-    
+
     Args:
         provider: Provider name ('sentence-transformers', 'openai', or 'llamacpp')
         model: Model name or path
         dimension: Expected embedding dimension
         **kwargs: Additional provider-specific arguments
-        
+
     Returns:
         Configured embedding provider
-        
+
     Raises:
         ValueError: If provider is unknown or configuration is invalid
         ImportError: If required dependencies are not installed

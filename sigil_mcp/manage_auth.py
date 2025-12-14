@@ -13,7 +13,8 @@ Usage:
 """
 
 import sys
-from .auth import initialize_api_key, get_api_key_path
+
+from .auth import get_api_key_path, initialize_api_key
 
 
 def generate():
@@ -23,7 +24,7 @@ def generate():
         print(f"[NO] API key already exists at {path}")
         print("   Use 'reset' to generate a new key")
         return 1
-    
+
     api_key = initialize_api_key()
     if api_key:
         print("[YES] API Key Generated Successfully!")
@@ -39,7 +40,7 @@ def generate():
         print("Or use it as a header in requests:")
         print(f"  X-API-Key: {api_key}")
         return 0
-    
+
     return 1
 
 
@@ -50,14 +51,14 @@ def show():
         print("[NO] No API key configured")
         print("   Run 'python manage_auth.py generate' to create one")
         return 1
-    
+
     print("[YES] API key is configured")
     print(f"   Location: {path}")
     print()
     print("   To view or use the key:")
     print("   - The plaintext key was shown only once during generation")
     print("   - If lost, run 'python manage_auth.py reset' to generate a new key")
-    
+
     return 0
 
 
@@ -67,21 +68,21 @@ def reset():
     if not path.exists():
         print("[INFO] No existing API key found, generating new one...")
         return generate()
-    
+
     print("[WARNING]  WARNING: This will invalidate your current API key!")
     print("   All clients will need to be updated with the new key.")
     print()
     response = input("Are you sure you want to continue? (yes/no): ").strip().lower()
-    
+
     if response != "yes":
         print("[NO] Reset cancelled")
         return 1
-    
+
     # Delete existing key
     path.unlink()
     print(f"[YES] Deleted old API key from {path}")
     print()
-    
+
     # Generate new key
     return generate()
 
@@ -91,9 +92,9 @@ def main():
     if len(sys.argv) != 2:
         print(__doc__)
         return 1
-    
+
     command = sys.argv[1].lower()
-    
+
     if command == "generate":
         return generate()
     elif command == "show":

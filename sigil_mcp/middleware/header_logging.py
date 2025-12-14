@@ -7,8 +7,6 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import Dict
-
 
 logger = logging.getLogger("sigil_repos_mcp")
 
@@ -22,10 +20,10 @@ SENSITIVE_HEADERS = {
 }
 
 
-def redact_headers(headers: Dict[str, str]) -> Dict[str, str]:
+def redact_headers(headers: dict[str, str]) -> dict[str, str]:
     """Return a copy of headers with sensitive keys redacted."""
 
-    redacted: Dict[str, str] = {}
+    redacted: dict[str, str] = {}
     for key, value in headers.items():
         if key.lower() in SENSITIVE_HEADERS:
             redacted[key] = "<redacted>"
@@ -50,7 +48,7 @@ class HeaderLoggingASGIMiddleware:
         start_time = time.time()
         request_id = str(uuid.uuid4())
 
-        headers_dict: Dict[str, str] = {}
+        headers_dict: dict[str, str] = {}
         for raw_name, raw_value in scope.get("headers", []):
             name = raw_name.decode("latin-1")
             value = raw_value.decode("latin-1")

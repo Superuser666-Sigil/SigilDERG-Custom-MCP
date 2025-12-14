@@ -3,6 +3,7 @@
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
 import subprocess
+
 import sigil_mcp.mcp_installer as installer
 
 

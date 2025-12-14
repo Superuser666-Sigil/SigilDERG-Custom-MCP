@@ -5,9 +5,9 @@
 """Llama.cpp embedding provider for local LLM embeddings."""
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, List, Sequence
-from time import perf_counter
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def _install_llama_log_filter() -> None:
 
 class LlamaCppEmbeddingProvider:
     """Embedding provider using llama.cpp for local LLM embeddings.
-    
+
     This provider uses llama.cpp's Python bindings to generate embeddings
     from a local Llama model (e.g., Meta Llama 3.1 8B Instruct).
     """
@@ -79,7 +79,7 @@ class LlamaCppEmbeddingProvider:
         **kwargs: Any,
     ) -> None:
         """Initialize llama.cpp embedding provider.
-        
+
         Args:
             model_path: Path to the GGUF model file
             dimension: Expected embedding dimension (default: 4096 for Llama 3.1 8B)
@@ -112,8 +112,9 @@ class LlamaCppEmbeddingProvider:
         self.dimension = dimension
         logger.info(f"Loading llama.cpp model from {self.model_path}...")
         # Determine thread/batching defaults
-        from .config import get_config
         import os as _os
+
+        from .config import get_config
 
         cfg = get_config()
         cores = _os.cpu_count() or 1
@@ -240,15 +241,15 @@ class LlamaCppEmbeddingProvider:
             n_ubatch_source,
         )
 
-        llm_kwargs: dict[str, Any] = dict(
-            model_path=str(self.model_path),
-            n_ctx=context_size,
-            n_gpu_layers=n_gpu_layers,
-            use_mlock=use_mlock,
-            embedding=embedding,
-            verbose=False,
-            n_threads=self.n_threads,
-        )
+        llm_kwargs: dict[str, Any] = {
+            "model_path": str(self.model_path),
+            "n_ctx": context_size,
+            "n_gpu_layers": n_gpu_layers,
+            "use_mlock": use_mlock,
+            "embedding": embedding,
+            "verbose": False,
+            "n_threads": self.n_threads,
+        }
         if self.n_threads_batch is not None:
             llm_kwargs["n_threads_batch"] = self.n_threads_batch
         if self.llama_n_batch is not None:
@@ -368,10 +369,10 @@ class LlamaCppEmbeddingProvider:
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for a list of documents.
-        
+
         Args:
             texts: List of text strings to embed
-            
+
         Returns:
             List of embedding vectors
         """
@@ -393,11 +394,9 @@ class LlamaCppEmbeddingProvider:
         while i < len(flat_segments):
             batch = flat_segments[i : i + self.batch_size]
             texts_batch = [t for (_, t) in batch]
-            batch_start = perf_counter()
             # Try batch embed if supported, otherwise fall back per-item
             try:
                 res = self.llm.embed(texts_batch)  # type: ignore[arg-type]
-                batch_time = perf_counter() - batch_start
                 # If the result is a sequence of embeddings, map them
                 if isinstance(res, (list, tuple)):
                     for j, out in enumerate(res):
@@ -453,15 +452,15 @@ class LlamaCppEmbeddingProvider:
 
     def embed_query(self, text: str) -> list[float]:
         """Generate embedding for a single query.
-        
+
         Args:
             text: Query text to embed
-            
+
         Returns:
             Embedding vector
         """
         segments = self._split_text_for_embedding(text)
-        vectors: List[list[float]] = []
+        vectors: list[list[float]] = []
         for segment in segments:
             result = self.llm.embed(segment)
             if isinstance(result, tuple):

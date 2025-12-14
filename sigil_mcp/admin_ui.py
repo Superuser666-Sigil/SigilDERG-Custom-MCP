@@ -11,9 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import sys
 from pathlib import Path
-from typing import Optional
 
 from .config import get_config
 
@@ -22,8 +20,8 @@ logger = logging.getLogger("sigil_repos_mcp")
 
 class AdminUIProcess:
     def __init__(self):
-        self.proc: Optional[subprocess.Popen] = None
-        self.log_file: Optional[Path] = None
+        self.proc: subprocess.Popen | None = None
+        self.log_file: Path | None = None
 
     def start(self):
         cfg = get_config()

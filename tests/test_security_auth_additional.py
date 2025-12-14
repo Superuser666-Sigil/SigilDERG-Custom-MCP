@@ -1,11 +1,9 @@
 # Copyright (c) 2025 Dave Tofflemire, SigilDERG Project
 # Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
 
-import types
 import secrets
 import sys
-
-import pytest
+import types
 
 from sigil_mcp.security import auth as sec_auth
 

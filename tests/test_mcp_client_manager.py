@@ -4,7 +4,7 @@
 
 import asyncio
 
-from mcp.types import Tool, ListToolsResult, CallToolResult
+from mcp.types import CallToolResult, ListToolsResult, Tool
 
 from sigil_mcp.mcp_client import MCPClientManager
 

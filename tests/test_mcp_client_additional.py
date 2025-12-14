@@ -2,8 +2,8 @@
 # Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
-import types
 import logging
+import types
 
 import pytest
 
@@ -12,8 +12,8 @@ from sigil_mcp.mcp_client import (
     ExternalMCPServer,
     MCPClientManager,
     MCPClientWrapper,
-    _normalize_server_type,
     _normalize_name,
+    _normalize_server_type,
 )
 
 

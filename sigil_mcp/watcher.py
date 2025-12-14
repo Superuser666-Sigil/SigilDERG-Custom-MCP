@@ -15,20 +15,22 @@ automatically triggers re-indexing of modified files.
 
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Dict, Optional, Callable, TYPE_CHECKING
-from threading import Thread, Lock
+from threading import Lock, Thread
+from typing import TYPE_CHECKING
+
+from .config import get_config
 from .ignore_utils import (
-    load_gitignore,
     is_ignored_by_gitignore,
+    load_gitignore,
     load_include_patterns,
     should_ignore,
 )
-from .config import get_config
 
 try:
+    from watchdog.events import FileSystemEvent, FileSystemEventHandler
     from watchdog.observers import Observer
-    from watchdog.events import FileSystemEventHandler, FileSystemEvent
     WATCHDOG_AVAILABLE = True
 except ImportError:
     WATCHDOG_AVAILABLE = False
@@ -36,8 +38,8 @@ except ImportError:
     FileSystemEventHandler = None  # type: ignore
     FileSystemEvent = None  # type: ignore
     if TYPE_CHECKING:
+        from watchdog.events import FileSystemEvent, FileSystemEventHandler  # type: ignore
         from watchdog.observers import Observer  # type: ignore
-        from watchdog.events import FileSystemEventHandler, FileSystemEvent  # type: ignore
     else:
         Observer = None  # type: ignore
         FileSystemEventHandler = object
@@ -59,21 +61,21 @@ for logger_name in [
 
 class RepositoryWatcher(FileSystemEventHandler):
     """Watches a repository directory for file changes."""
-    
+
     def __init__(
         self,
         repo_name: str,
         repo_path: Path,
         on_change: Callable[[str, Path, str], None],
         debounce_seconds: float = 2.0,
-        ignore_dirs: Optional[list[str]] = None,
-        ignore_extensions: Optional[list[str]] = None,
+        ignore_dirs: list[str] | None = None,
+        ignore_extensions: list[str] | None = None,
         honor_gitignore: bool = True,
-        repo_ignore_patterns: Optional[list[str]] = None,
+        repo_ignore_patterns: list[str] | None = None,
     ):
         """
         Initialize repository watcher.
-        
+
         Args:
             repo_name: Logical repository name
             repo_path: Path to repository root
@@ -104,26 +106,26 @@ class RepositoryWatcher(FileSystemEventHandler):
             self._include_patterns = []
         # Optional per-repo ignore patterns provided via admin API / config
         self._repo_ignore_patterns = list(repo_ignore_patterns or [])
-        
+
         # Track pending changes to batch updates
-        self.pending_changes: Dict[str, tuple[Path, str, float]] = {}
+        self.pending_changes: dict[str, tuple[Path, str, float]] = {}
         self.lock = Lock()
-        self.processing_thread: Optional[Thread] = None
+        self.processing_thread: Thread | None = None
         self.running = True
-        
+
         # Start background thread to process changes
         self._start_processing_thread()
-    
+
     def _start_processing_thread(self):
         """Start background thread to process batched changes."""
         self.processing_thread = Thread(target=self._process_changes, daemon=True)
         self.processing_thread.start()
-    
+
     def _process_changes(self):
         """Background thread that processes batched file changes."""
         while self.running:
             time.sleep(0.5)  # Check every 500ms
-            
+
             with self.lock:
                 now = time.time()
                 ready_changes = [
@@ -131,11 +133,11 @@ class RepositoryWatcher(FileSystemEventHandler):
                     for path, (path_obj, event_type, timestamp) in self.pending_changes.items()
                     if now - timestamp >= self.debounce_seconds
                 ]
-                
+
                 # Remove processed changes
                 for path, _ in ready_changes:
                     del self.pending_changes[path]
-            
+
             # Process ready changes (outside lock to avoid blocking)
             for path_str, event_type in ready_changes:
                 try:
@@ -145,7 +147,7 @@ class RepositoryWatcher(FileSystemEventHandler):
                     logger.error(
                         f"Error processing change for {path_str} in {self.repo_name}: {e}"
                     )
-    
+
     def _should_ignore(self, path: Path) -> bool:
         """Check if file should be ignored, honoring configured ignore rules."""
         try:
@@ -163,18 +165,18 @@ class RepositoryWatcher(FileSystemEventHandler):
             ignore_dirs=self.ignore_dirs,
             ignore_extensions=self.ignore_extensions,
         )
-    
+
     def _schedule_change(self, path_str: str, event_type: str):
         """Schedule a file change for processing (with debouncing)."""
         try:
             path = Path(path_str).resolve()
-            
+
             # Ensure path is under repo
             try:
                 path.relative_to(self.repo_path)
             except ValueError:
                 return  # Outside repo, ignore
-            
+
             # For deletions the file will not exist anymore, but we still
             # need to schedule the event so callers can react to deletes.
             should_schedule = False
@@ -193,7 +195,7 @@ class RepositoryWatcher(FileSystemEventHandler):
         except Exception as e:
             # Avoid noisy debug logging in hot watcher path; surface only as info
             logger.info(f"Error scheduling change for {path_str}: {e}")
-    
+
     def _should_ignore_path(self, path_str: str) -> bool:
         """Quick check to ignore paths before any processing."""
         normalized = path_str.replace('\\', '/')
@@ -201,13 +203,13 @@ class RepositoryWatcher(FileSystemEventHandler):
         # Fast include check: if explicitly included, do not ignore
         try:
             p = Path(normalized)
-            if getattr(self, '_include_patterns', None) and is_ignored_by_gitignore(p, self.repo_path, getattr(self, '_include_patterns')):
+            if getattr(self, '_include_patterns', None) and is_ignored_by_gitignore(p, self.repo_path, self._include_patterns):
                 return False
             if self._gitignore_patterns and is_ignored_by_gitignore(p, self.repo_path, self._gitignore_patterns):
                 return True
         except Exception:
             pass
-        
+
         # Check against configured ignore directories
         # This prevents watchdog from even processing events for these dirs
         if self.ignore_dirs:
@@ -219,14 +221,14 @@ class RepositoryWatcher(FileSystemEventHandler):
                     normalized_ignore.add(ignore_dir.lstrip('.'))
                 else:
                     normalized_ignore.add(f'.{ignore_dir}')
-            
+
             # Check if any path component matches an ignored directory
-            if any(part in normalized_ignore or f'.{part}' in normalized_ignore 
+            if any(part in normalized_ignore or f'.{part}' in normalized_ignore
                    for part in parts):
                 return True
-        
+
         return False
-    
+
     def on_modified(self, event: FileSystemEvent):  # type: ignore
         """Called when a file is modified."""
         # Ignore .git directory entirely - don't even process these events
@@ -234,7 +236,7 @@ class RepositoryWatcher(FileSystemEventHandler):
             return
         if not event.is_directory:
             self._schedule_change(str(event.src_path), "modified")
-    
+
     def on_created(self, event: FileSystemEvent):  # type: ignore
         """Called when a file is created."""
         # Ignore .git directory entirely - don't even process these events
@@ -242,7 +244,7 @@ class RepositoryWatcher(FileSystemEventHandler):
             return
         if not event.is_directory:
             self._schedule_change(str(event.src_path), "created")
-    
+
     def on_deleted(self, event: FileSystemEvent):  # type: ignore
         """Called when a file is deleted."""
         # Ignore .git directory entirely - don't even process these events
@@ -250,7 +252,7 @@ class RepositoryWatcher(FileSystemEventHandler):
             return
         if not event.is_directory:
             self._schedule_change(str(event.src_path), "deleted")
-    
+
     def stop(self):
         """Stop the processing thread."""
         self.running = False
@@ -260,16 +262,16 @@ class RepositoryWatcher(FileSystemEventHandler):
 
 class FileWatchManager:
     """Manages file watchers for multiple repositories."""
-    
+
     def __init__(
         self,
         on_change: Callable[[str, Path, str], None],
-        ignore_dirs: Optional[list[str]] = None,
-        ignore_extensions: Optional[list[str]] = None,
+        ignore_dirs: list[str] | None = None,
+        ignore_extensions: list[str] | None = None,
     ):
         """
         Initialize file watch manager.
-        
+
         Args:
             on_change: Callback function(repo_name, file_path, event_type)
             ignore_dirs: Directories to ignore when watching
@@ -280,35 +282,35 @@ class FileWatchManager:
                 "watchdog not available - file watching disabled. "
                 "Install with: pip install sigil-mcp-server[watch]"
             )
-        
+
         self.on_change = on_change
         self.ignore_dirs = ignore_dirs or []
         self.ignore_extensions = ignore_extensions or []
-        self.observer: Optional[Observer] = None  # type: ignore
-        self.watchers: Dict[str, RepositoryWatcher] = {}
+        self.observer: Observer | None = None  # type: ignore
+        self.watchers: dict[str, RepositoryWatcher] = {}
         self.enabled = WATCHDOG_AVAILABLE
-    
+
     def start(self):
         """Start the file watch manager."""
         if not self.enabled or Observer is None:
             return
-        
+
         self.observer = Observer()
         if self.observer is not None:
             self.observer.start()
             logger.info("File watching enabled")
-    
+
     def watch_repository(
         self,
         repo_name: str,
         repo_path: Path,
         recursive: bool = True,
         honor_gitignore: bool = True,
-        repo_ignore_patterns: Optional[list[str]] = None,
+        repo_ignore_patterns: list[str] | None = None,
     ):
         """
         Start watching a repository for changes.
-        
+
         Args:
             repo_name: Logical repository name
             repo_path: Path to repository root
@@ -316,11 +318,11 @@ class FileWatchManager:
         """
         if not self.enabled or not self.observer:
             return
-        
+
         if repo_name in self.watchers:
             logger.debug(f"Already watching {repo_name}")
             return
-        
+
         try:
             watcher = RepositoryWatcher(
                 repo_name=repo_name,
@@ -342,14 +344,14 @@ class FileWatchManager:
             except Exception:
                 # Non-fatal: if we can't update server.REPOS, continue watching
                 pass
-            
+
             self.observer.schedule(watcher, str(repo_path), recursive=recursive)
             self.watchers[repo_name] = watcher
-            
+
             logger.info(f"Watching {repo_name} at {repo_path}")
         except Exception as e:
             logger.error(f"Failed to watch {repo_name}: {e}")
-    
+
     def unwatch_repository(self, repo_name: str):
         """Stop watching a repository."""
         if repo_name in self.watchers:
@@ -357,24 +359,24 @@ class FileWatchManager:
             watcher.stop()
             del self.watchers[repo_name]
             logger.info(f"Stopped watching {repo_name}")
-    
+
     def stop(self):
         """Stop all file watchers."""
         if not self.enabled or not self.observer:
             return
-        
+
         # Stop all watchers
         for watcher in self.watchers.values():
             watcher.stop()
-        
+
         self.watchers.clear()
-        
+
         # Stop observer
         self.observer.stop()
         self.observer.join(timeout=5.0)
-        
+
         logger.info("File watching stopped")
-    
+
     def is_watching(self, repo_name: str) -> bool:
         """Check if a repository is being watched."""
         return repo_name in self.watchers

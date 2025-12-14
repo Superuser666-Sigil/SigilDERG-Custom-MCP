@@ -5,12 +5,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from functools import cache
 
-from functools import lru_cache
 from lancedb.pydantic import LanceModel, Vector
 
 
-@lru_cache(maxsize=None)
+@cache
 def get_code_chunk_model(dimension: int) -> type[LanceModel]:
     """Return a LanceModel configured for the given vector dimension."""
 

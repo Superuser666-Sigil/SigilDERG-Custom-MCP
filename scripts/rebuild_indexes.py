@@ -5,8 +5,9 @@
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
 """Compatibility shim to rebuild indexes."""
-from pathlib import Path
+# ruff: noqa: E402
 import sys
+from pathlib import Path
 
 # Ensure repository root is on sys.path for direct script execution
 ROOT = Path(__file__).resolve().parents[1]

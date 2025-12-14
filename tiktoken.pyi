@@ -1,4 +1,4 @@
-from typing import Any, Sequence
+from collections.abc import Sequence
 
 class Encoding:
     def encode(self, s: str) -> Sequence[int]: ...

@@ -8,23 +8,25 @@ import asyncio
 import logging
 import os
 import sqlite3
-from typing import Any, Dict, Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
-from pathlib import Path
 
-from .config import get_config, save_config, load_config
 import sigil_mcp.server as server_state
+
+from .config import get_config, load_config, save_config
 from .server import (
     REPOS,
-    rebuild_index_op,
     build_vector_index_op,
-    get_index_stats_op,
     external_mcp_status_op,
+    get_index_stats_op,
+    rebuild_index_op,
     refresh_external_mcp_op,
 )
 
@@ -37,7 +39,7 @@ _config = get_config()
 _rebuild_semaphore = asyncio.Semaphore(1)
 
 
-def _get_admin_cfg() -> Dict[str, Any]:
+def _get_admin_cfg() -> dict[str, Any]:
     mode_env = os.getenv("SIGIL_MCP_MODE")
     mode = mode_env.lower() if mode_env else _config.mode
     return {
@@ -51,7 +53,7 @@ def _get_admin_cfg() -> Dict[str, Any]:
     }
 
 
-def _is_allowed_ip(ip: Optional[str]) -> bool:
+def _is_allowed_ip(ip: str | None) -> bool:
     if not ip:
         return False
     cfg = _get_admin_cfg()
@@ -59,7 +61,7 @@ def _is_allowed_ip(ip: Optional[str]) -> bool:
     return ip in allowed
 
 
-async def require_admin(request: Request) -> Optional[JSONResponse]:
+async def require_admin(request: Request) -> JSONResponse | None:
     """
     Common gate for all admin endpoints.
 
@@ -201,7 +203,7 @@ async def admin_status(request: Request) -> Response:
         "watching": list(REPOS.keys()) if watcher else [],
     }
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "admin": {
             "host": cfg["host"],
             "port": cfg["port"],
@@ -361,7 +363,7 @@ async def admin_index_rebuild(request: Request) -> Response:
         # Retry logic for database locks (file watcher might be active)
         max_retries = 3
         retry_delay = 2.0
-        
+
         for attempt in range(max_retries):
             try:
                 # Run blocking operation in thread pool to avoid blocking event loop
@@ -410,7 +412,7 @@ async def admin_index_rebuild(request: Request) -> Response:
                     {"error": "internal_error", "detail": str(exc)},
                     status_code=500,
                 )
-        
+
         # If we get here, all retries failed (shouldn't happen, but type checker)
         return JSONResponse(
             {"error": "internal_error", "detail": "All retry attempts failed"},
@@ -476,7 +478,7 @@ async def admin_vector_rebuild(request: Request) -> Response:
         # Retry logic for database locks (file watcher might be active)
         max_retries = 3
         retry_delay = 2.0
-        
+
         for attempt in range(max_retries):
             try:
                 # Run blocking operation in thread pool to avoid blocking event loop
@@ -554,7 +556,7 @@ async def admin_vector_rebuild(request: Request) -> Response:
                     {"error": "internal_error", "detail": error_msg},
                     status_code=500,
                 )
-        
+
         # If we get here, all retries failed (shouldn't happen, but type checker)
         return JSONResponse(
             {"error": "internal_error", "detail": "All retry attempts failed"},
@@ -690,9 +692,9 @@ async def admin_index_stale(request: Request) -> Response:
         logger.exception("admin_index_stale: failed to get index instance")
         return JSONResponse({"error": "internal_error", "detail": "Index unavailable"}, status_code=500)
 
-    results: Dict[str, Dict[str, object]] = {}
+    results: dict[str, dict[str, object]] = {}
 
-    def _compute_lancedb_info(path) -> Dict[str, object]:
+    def _compute_lancedb_info(path) -> dict[str, object]:
         info = {"lance_db_path": str(path), "lance_db_size": 0}
         try:
             total = 0
@@ -878,7 +880,7 @@ async def admin_logs_tail(request: Request) -> Response:
     # Use the configured log file path
     from .logging_setup import get_log_file_path
     log_path = get_log_file_path(_config.log_file)
-    
+
     if log_path is None:
         # No log file configured
         return JSONResponse({
@@ -988,7 +990,6 @@ async def admin_config_update(request: Request) -> Response:
         return JSONResponse(
             {"error": "config_save_failed", "detail": str(exc)}, status_code=500
         )
-    return JSONResponse(raw)
 
 
 async def admin_mcp_status(request: Request) -> Response:

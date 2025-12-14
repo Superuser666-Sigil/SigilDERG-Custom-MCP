@@ -3,6 +3,7 @@
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
 import copy
+
 import pytest
 
 from sigil_mcp import server

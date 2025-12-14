@@ -4,8 +4,8 @@
 
 import types
 from pathlib import Path
-import numpy as np
 
+import numpy as np
 import pytest
 
 import sigil_mcp.server as server
@@ -135,8 +135,6 @@ def test_get_index_initializes_when_missing(monkeypatch, tmp_path):
 
 
 def test_get_watcher_and_start_watching(monkeypatch, tmp_path):
-    watched = []
-
     class DummyWatcher:
         def __init__(self, on_change, ignore_dirs=None, ignore_extensions=None):
             self.on_change = on_change

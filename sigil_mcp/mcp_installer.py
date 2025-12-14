@@ -11,16 +11,17 @@ declared in external_mcp_servers with auto_install=true or command in a known se
 
 from __future__ import annotations
 
-import subprocess
 import logging
-from typing import Iterable, Dict, Any
+import subprocess
+from collections.abc import Iterable
+from typing import Any
 
 logger = logging.getLogger("sigil_repos_mcp")
 
 KNOWN_INSTALL_COMMANDS = {"npx", "npm", "bunx"}
 
 
-def auto_install(servers: Iterable[Dict[str, Any]]) -> None:
+def auto_install(servers: Iterable[dict[str, Any]]) -> None:
     """
     Run installation commands for eligible servers. Safe no-op on errors.
     """

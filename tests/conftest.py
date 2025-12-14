@@ -10,12 +10,14 @@
 Pytest configuration and shared fixtures for Sigil MCP Server tests.
 """
 
+# ruff: noqa: E402
 import os
-import pytest
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
+
 import numpy as np
+import pytest
 
 # Use the in-memory LanceDB stub during tests to avoid long-running native setup
 os.environ.setdefault("SIGIL_MCP_LANCEDB_STUB", "1")
@@ -23,10 +25,9 @@ os.environ.setdefault("SIGIL_MCP_LANCEDB_STUB", "1")
 TEST_OAUTH_DIR = Path(tempfile.mkdtemp(prefix="sigil_oauth_"))
 os.environ.setdefault("SIGIL_MCP_OAUTH_DIR", str(TEST_OAUTH_DIR))
 
-from sigil_mcp.indexer import SigilIndex
-from sigil_mcp.auth import API_KEY_FILE
-from sigil_mcp.oauth import CLIENT_FILE, TOKENS_FILE
 import sigil_mcp.config as sigil_config
+from sigil_mcp.indexer import SigilIndex
+from sigil_mcp.oauth import CLIENT_FILE, TOKENS_FILE
 
 
 @pytest.fixture
@@ -50,7 +51,7 @@ def test_repo_path(temp_dir):
     """Create a temporary repository with sample files."""
     repo_path = temp_dir / "test_repo"
     repo_path.mkdir(parents=True, exist_ok=True)
-    
+
     # Create sample Python files
     (repo_path / "main.py").write_text("""
 def hello_world():
@@ -59,11 +60,11 @@ def hello_world():
 
 class Calculator:
     '''Simple calculator class.'''
-    
+
     def add(self, a, b):
         '''Add two numbers.'''
         return a + b
-    
+
     def subtract(self, a, b):
         '''Subtract b from a.'''
         return a - b
@@ -71,7 +72,7 @@ class Calculator:
 if __name__ == "__main__":
     hello_world()
 """)
-    
+
     (repo_path / "utils.py").write_text("""
 def process_data(data):
     '''Process input data.'''
@@ -86,11 +87,11 @@ def validate_input(value):
         raise ValueError("Value cannot be empty")
     return True
 """)
-    
+
     # Create a subdirectory with more files
     subdir = repo_path / "lib"
     subdir.mkdir()
-    
+
     (subdir / "helper.py").write_text("""
 def format_output(text):
     '''Format text for output.'''
@@ -98,15 +99,15 @@ def format_output(text):
 
 class Logger:
     '''Simple logging class.'''
-    
+
     def __init__(self, name):
         self.name = name
-    
+
     def log(self, message):
         '''Log a message.'''
         print(f"[{self.name}] {message}")
 """)
-    
+
     yield repo_path
 
 
@@ -114,6 +115,7 @@ class Logger:
 def dummy_embed_fn():
     """Create a deterministic embedding function for testing."""
     import hashlib
+
     from numpy.random import default_rng
 
     def embed_fn(texts):
@@ -216,11 +218,11 @@ def test_config_file(temp_dir):
             "path": str(temp_dir / ".test_index")
         }
     }
-    
+
     import json
     with open(config_path, 'w') as f:
         json.dump(config_data, f, indent=2)
-    
+
     yield config_path
 
 
@@ -234,9 +236,9 @@ def clean_auth_file():
     if path.exists():
         backup = path.read_text()
         path.unlink()
-    
+
     yield
-    
+
     if backup:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(backup)
@@ -253,14 +255,14 @@ def clean_oauth_files():
         if file.exists():
             backups[file] = file.read_text()
             file.unlink()
-    
+
     yield
-    
+
     # Restore or cleanup
     for file, content in backups.items():
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(content)
-    
+
     # Cleanup test files
     for file in [CLIENT_FILE, TOKENS_FILE]:
         if file.exists() and file not in backups:

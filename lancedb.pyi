@@ -1,4 +1,5 @@
-from typing import Any, Sequence, Iterable
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 class Table:
     def count_rows(self) -> int: ...

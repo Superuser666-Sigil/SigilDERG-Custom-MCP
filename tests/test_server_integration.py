@@ -5,7 +5,6 @@
 import json
 import types
 from io import BytesIO
-from pathlib import Path
 
 import pytest
 from starlette.applications import Starlette

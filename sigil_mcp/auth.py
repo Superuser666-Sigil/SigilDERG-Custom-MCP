@@ -8,23 +8,22 @@ Authentication middleware for Sigil MCP Server.
 Provides API key authentication to secure the MCP server when exposed via ngrok.
 """
 
-import os
-import secrets
 import hashlib
 import logging
+import os
+import secrets
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_api_key_path: Optional[Path] = None
+_api_key_path: Path | None = None
 _WORKSPACE_FALLBACK = Path.cwd() / ".sigil_mcp_server" / "api_key"
 
 
 def get_api_key_path() -> Path:
     """
     Resolve the API key file path with environment overrides and sandbox fallback.
-    
+
     Priority:
     1) SIGIL_MCP_API_KEY_FILE (absolute or relative path)
     2) SIGIL_MCP_HOME/<api_key> (defaults to ~/.sigil_mcp_server/api_key)
@@ -68,26 +67,26 @@ def hash_api_key(api_key: str) -> str:
     return hashlib.sha256(api_key.encode()).hexdigest()
 
 
-def initialize_api_key() -> Optional[str]:
+def initialize_api_key() -> str | None:
     """
     Initialize API key authentication.
-    
+
     Returns the API key (only time it's displayed in plaintext).
     Returns None if key already exists.
     """
     path = get_api_key_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     if path.exists():
         logger.info(f"API key file already exists at {path}")
         logger.warning("If you've lost your API key, delete this file and restart the server")
-        with open(path, 'r') as f:
+        with open(path) as f:
             return None  # Don't return existing key
-    
+
     # Generate new API key
     api_key = generate_api_key()
     api_key_hash = hash_api_key(api_key)
-    
+
     # Store hash with fallback for sandboxed environments
     try:
         with open(path, 'w') as f:
@@ -113,10 +112,10 @@ def initialize_api_key() -> Optional[str]:
 def verify_api_key(provided_key: str) -> bool:
     """
     Verify an API key against the stored hash.
-    
+
     Args:
         provided_key: The API key to verify
-    
+
     Returns:
         True if the key is valid, False otherwise
     """
@@ -125,14 +124,14 @@ def verify_api_key(provided_key: str) -> bool:
     if not path.exists():
         logger.warning("No API key file found - authentication disabled")
         return True  # Allow access if auth not configured
-    
+
     try:
-        with open(path, 'r') as f:
+        with open(path) as f:
             stored_hash = f.read().strip()
-        
+
         provided_hash = hash_api_key(provided_key)
         return secrets.compare_digest(stored_hash, provided_hash)
-    
+
     except PermissionError:
         logger.error("Permission denied reading API key file at %s", path)
         return False
@@ -141,6 +140,6 @@ def verify_api_key(provided_key: str) -> bool:
         return False
 
 
-def get_api_key_from_env() -> Optional[str]:
+def get_api_key_from_env() -> str | None:
     """Get API key from environment variable."""
     return os.environ.get("SIGIL_MCP_API_KEY")

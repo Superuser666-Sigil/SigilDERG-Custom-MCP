@@ -10,7 +10,7 @@ import logging
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
@@ -21,7 +21,7 @@ from ..indexer import SigilIndex
 logger = logging.getLogger(__name__)
 
 
-def _find_config_path() -> Optional[Path]:
+def _find_config_path() -> Path | None:
     """
     Locate config.json for CLI runs.
 
@@ -93,7 +93,7 @@ def rebuild_embeddings_for_repo(
     return stats
 
 
-def _setup_index_for_rebuild(index: Optional[SigilIndex], wipe_index: bool) -> SigilIndex:
+def _setup_index_for_rebuild(index: SigilIndex | None, wipe_index: bool) -> SigilIndex:
     """Initialize or prepare index for rebuild."""
     config_path = _find_config_path()
     config = load_config(config_path) if config_path else get_config()
@@ -129,10 +129,10 @@ def _resolve_repo_path(repo_value: Any) -> Path:
     return Path(repo_path)
 
 
-def _rebuild_trigrams_for_all_repos(index: SigilIndex, repos: Dict[str, Any]) -> Dict[str, dict]:
+def _rebuild_trigrams_for_all_repos(index: SigilIndex, repos: dict[str, Any]) -> dict[str, dict]:
     """Rebuild trigrams for all configured repositories."""
     logger.info("Rebuilding trigrams for all repositories...")
-    trigram_stats: Dict[str, dict] = {}
+    trigram_stats: dict[str, dict] = {}
     for repo_name, repo_value in repos.items():
         repo_path = _resolve_repo_path(repo_value)
         if not repo_path.exists():
@@ -178,13 +178,13 @@ def _setup_embedding_function(config) -> tuple:
 
 def _rebuild_embeddings_for_all_repos(
     index: SigilIndex,
-    repos: Dict[str, Any],
+    repos: dict[str, Any],
     embed_fn,
     model: str,
-) -> Dict[str, dict]:
+) -> dict[str, dict]:
     """Rebuild embeddings for all repositories."""
     logger.info("Rebuilding embeddings...")
-    embedding_stats: Dict[str, dict] = {}
+    embedding_stats: dict[str, dict] = {}
 
     for repo_name, repo_value in repos.items():
         repo_path = _resolve_repo_path(repo_value)
@@ -198,10 +198,10 @@ def _rebuild_embeddings_for_all_repos(
 
 
 def rebuild_all_indexes(
-    index: Optional[SigilIndex] = None,
+    index: SigilIndex | None = None,
     wipe_index: bool = True,
     rebuild_embeddings: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Rebuild all indexes using the same logic as this CLI."""
 
     config_path = _find_config_path()
@@ -217,7 +217,7 @@ def rebuild_all_indexes(
     trigram_count = delete_all_trigrams(index)
     trigram_stats = _rebuild_trigrams_for_all_repos(index, repos)
 
-    embedding_stats: Dict[str, dict] = {}
+    embedding_stats: dict[str, dict] = {}
     if rebuild_embeddings and config.embeddings_enabled:
         embed_fn, model_name = _setup_embedding_function(config)
         index.embed_fn = embed_fn
@@ -261,7 +261,7 @@ def rebuild_single_repo_index(
     rebuild_embeddings: bool = False,
     embed_fn=None,
     model: str = "default",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Rebuild index for a single repository using script logic."""
 
     if not repo_path.exists():

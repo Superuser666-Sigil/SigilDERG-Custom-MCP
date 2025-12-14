@@ -128,7 +128,7 @@ openapi: 3.0.0
 info:
   title: Sigil MCP Server
   description: Local code repository indexer with IDE-like search and navigation
-  version: 1.0.0
+  version: 1.0.1
 servers:
   - url: https://YOUR-NGROK-URL.ngrok-free.app
     description: Sigil MCP Server via ngrok

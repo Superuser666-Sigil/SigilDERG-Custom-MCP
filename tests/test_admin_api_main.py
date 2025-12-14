@@ -70,7 +70,7 @@ def test_admin_api_main_inserts_parent_on_reload(monkeypatch):
     parent = admin_api_main.Path(admin_api_main.__file__).parent.parent
     filtered = [p for p in sys.path if p != str(parent)]
     monkeypatch.setattr(sys, "path", filtered, raising=False)
-    reloaded = importlib.reload(admin_api_main)
+    importlib.reload(admin_api_main)
     assert str(parent) in sys.path
 
 

@@ -351,7 +351,6 @@ def test_admin_vector_rebuild_handles_locked(monkeypatch, admin_app):
 
 def test_admin_logs_tail_handles_read_error(monkeypatch, admin_app):
     client = admin_app["client"]
-    log_path = admin_app["log_path"]
 
     def fail_open(*_args, **_kwargs):
         raise OSError("cannot read")

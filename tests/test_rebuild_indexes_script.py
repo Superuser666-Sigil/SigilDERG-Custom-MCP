@@ -8,9 +8,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import sigil_mcp.config as sigil_config
 from sigil_mcp.indexer import SigilIndex
 from sigil_mcp.scripts import rebuild_indexes as script
-import sigil_mcp.config as sigil_config
 
 
 @pytest.fixture

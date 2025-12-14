@@ -1,6 +1,6 @@
 [flake8]
-# Line length set to 100 (common for modern Python projects)
-max-line-length = 100
+# Line length set to 160 to match current codebase (ruff enforces formatting)
+max-line-length = 160
 
 # Complexity
 max-complexity = 15
@@ -32,6 +32,19 @@ extend-ignore =
     W293,
     # W291: trailing whitespace (auto-fixable, non-breaking)
     W291,
+    # E501: long lines (managed by Black/Ruff)
+    E501,
+    # C901: complexity limits (tracked via Ruff)
+    C901,
+    # E402: imports not at top of file (intentional in some shims/tests)
+    E402,
+    # E265: block comments style (headers/duplication retained)
+    E265,
+    # E303/E306: blank line spacing loosened for test fixtures and generated stubs
+    E303,
+    E306,
+    # W391: allow trailing blank line where harmless
+    W391
     # D212: Multi-line docstring summary should start at the first line (Google style)
     D212,
     # D107: Missing docstring in __init__ (often obvious from class docstring)

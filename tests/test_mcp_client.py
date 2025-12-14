@@ -3,9 +3,9 @@
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
 import pytest
+from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
 
-from sigil_mcp.mcp_client import MCPClientManager, ExternalMCPConfigError
-from mcp.types import Tool, ListToolsResult, CallToolResult, TextContent
+from sigil_mcp.mcp_client import ExternalMCPConfigError, MCPClientManager
 
 
 class DummyClient:

@@ -2,47 +2,55 @@
 # Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
-import logging
-import threading
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union, cast
-from urllib.parse import urlencode
-import numpy as np
-import os
 import asyncio
-import subprocess
+import logging
+import os
+import threading
+from collections.abc import Sequence
+from pathlib import Path, PurePosixPath
+from typing import Any, cast
+from urllib.parse import urlencode
 
-from starlette.requests import Request
-from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
+import numpy as np
+from fastmcp.server.http import create_sse_app
+from starlette.applications import Starlette
+from starlette.datastructures import UploadFile
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.datastructures import UploadFile
-from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount
-from pathlib import PurePosixPath
-from fastmcp.server.http import create_sse_app
-from .indexer import SigilIndex
-from .auth import initialize_api_key
-from .oauth import get_oauth_manager
-from .config import get_config
-from .watcher import FileWatchManager, WATCHDOG_AVAILABLE
-from .app_factory import build_mcp_app
-from .mcp_client import (
-    MCPClientManager,
-    ExternalMCPConfigError,
-    set_global_manager,
-    get_global_manager,
-)
-from .admin_ui import start_admin_ui, stop_admin_ui
+
 from . import mcp_installer
-from .security import (
-    AuthSettings,
-    check_authentication as _security_check_authentication,
-    check_ip_whitelist as _security_check_ip_whitelist,
-    is_local_connection as _security_is_local_connection,
-    is_redirect_uri_allowed as _security_is_redirect_uri_allowed,
+from .admin_ui import start_admin_ui, stop_admin_ui
+from .app_factory import build_mcp_app
+from .auth import initialize_api_key
+from .config import get_config
+from .indexer import SigilIndex
+from .mcp_client import (
+    ExternalMCPConfigError,
+    MCPClientManager,
+    get_global_manager,
+    set_global_manager,
 )
 from .middleware.header_logging import HeaderLoggingASGIMiddleware
+from .oauth import get_oauth_manager
+from .security import (
+    AuthSettings,
+)
+from .security import (
+    check_authentication as _security_check_authentication,
+)
+from .security import (
+    check_ip_whitelist as _security_check_ip_whitelist,
+)
+from .security import (
+    is_local_connection as _security_is_local_connection,
+)
+from .security import (
+    is_redirect_uri_allowed as _security_is_redirect_uri_allowed,
+)
+from .watcher import WATCHDOG_AVAILABLE, FileWatchManager
 
 # Import Admin API app (conditional to avoid circular imports)
 _admin_app = None
@@ -61,14 +69,14 @@ def _get_admin_app():
 # Helper Functions
 # --------------------------------------------------------------------
 
-def get_form_value(value: Union[str, UploadFile, None]) -> Optional[str]:
+def get_form_value(value: str | UploadFile | None) -> str | None:
     """
     Extract string value from form data.
     Starlette form() can return str | UploadFile, but OAuth params are always strings.
-    
+
     Args:
         value: Form value which might be str, UploadFile, or None
-        
+
     Returns:
         String value or None
     """
@@ -89,10 +97,10 @@ RUN_MODE = config.mode
 
 logger = logging.getLogger("sigil_repos_mcp")
 mcp = build_mcp_app(config)
-_MCP_CLIENT_MANAGER: Optional[MCPClientManager] = None
+_MCP_CLIENT_MANAGER: MCPClientManager | None = None
 
 # Track readiness across subsystems
-READINESS: Dict[str, bool] = {
+READINESS: dict[str, bool] = {
     "config": True,
     "index": False,
     "embeddings": not config.embeddings_enabled,  # ready when disabled
@@ -133,7 +141,6 @@ _log_configuration_summary()
 
 def _check_dependencies() -> None:
     """Validate native/optional dependencies and set readiness flags."""
-    global READINESS
     deps_ok = True
     # Trigram backend (rocksdict) is required
     try:
@@ -175,6 +182,16 @@ def _check_dependencies() -> None:
 
 
 _check_dependencies()
+
+
+def _external_base_url(request: Request) -> str:
+    """Derive an externally reachable base URL, honoring proxy headers."""
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host")
+    host = forwarded_host or request.headers.get("host") or request.url.hostname or ""
+    scheme = forwarded_proto or request.url.scheme
+    return f"{scheme}://{host}".rstrip("/")
+
 
 # --------------------------------------------------------------------
 # Security Configuration
@@ -258,10 +275,11 @@ def _get_auth_settings_override() -> AuthSettings:
     )
 
 
-def is_local_connection(client_ip: Optional[str] = None) -> bool:
+def is_local_connection(client_ip: str | None = None) -> bool:
     """Compatibility wrapper around sigil_mcp.security.is_local_connection."""
 
     return _security_is_local_connection(client_ip)
+
 
 def _initialize_external_mcp():
     """Initialize external MCP servers and register their tools."""
@@ -290,7 +308,7 @@ def _initialize_external_mcp():
         logger.warning("Failed to initialize external MCP servers: %s", exc)
 
 
-def external_mcp_status_op() -> Dict[str, Any]:
+def external_mcp_status_op() -> dict[str, Any]:
     mgr = get_global_manager()
     if mgr is None:
         return {"enabled": False, "detail": "No external MCP servers configured"}
@@ -299,7 +317,7 @@ def external_mcp_status_op() -> Dict[str, Any]:
     return status
 
 
-def refresh_external_mcp_op() -> Dict[str, Any]:
+def refresh_external_mcp_op() -> dict[str, Any]:
     mgr = get_global_manager()
     if mgr is None:
         raise RuntimeError("External MCP manager not initialized")
@@ -313,7 +331,7 @@ class MCPBearerAuthMiddleware(BaseHTTPMiddleware):
     token when require_token is enabled. Local bypass respects the existing auth flag.
     """
 
-    def __init__(self, app, *, token: Optional[str], require_token: bool, allow_local_bypass: bool):
+    def __init__(self, app, *, token: str | None, require_token: bool, allow_local_bypass: bool):
         super().__init__(app)
         self.token = token
         self.require_token = require_token
@@ -352,16 +370,16 @@ class MCPBearerAuthMiddleware(BaseHTTPMiddleware):
 
 
 def check_authentication(
-    request_headers: Optional[Dict[str, str]] = None,
-    client_ip: Optional[str] = None
+    request_headers: dict[str, str] | None = None,
+    client_ip: str | None = None
 ) -> bool:
     """
     Check if request is authenticated.
-    
+
     Args:
         request_headers: HTTP request headers (if available)
         client_ip: Client IP address
-    
+
     Returns:
         True if authenticated or auth disabled, False otherwise
     """
@@ -373,13 +391,13 @@ def check_authentication(
     )
 
 
-def check_ip_whitelist(client_ip: Optional[str] = None) -> bool:
+def check_ip_whitelist(client_ip: str | None = None) -> bool:
     """
     Check if client IP is whitelisted.
-    
+
     Args:
         client_ip: Client IP address
-    
+
     Returns:
         True if IP is allowed or whitelist is empty, False otherwise
     """
@@ -401,8 +419,8 @@ def check_ip_whitelist(client_ip: Optional[str] = None) -> bool:
 # Load repositories from config
 # Backwards-compatible: build simple REPOS mapping name->Path and
 # REPO_OPTIONS mapping name->{path, respect_gitignore}
-REPO_OPTIONS: Dict[str, dict] = {}
-REPOS: Dict[str, Path] = {}
+REPO_OPTIONS: dict[str, dict] = {}
+REPOS: dict[str, Path] = {}
 for name, info in config.repositories_config.items():
     try:
         p = Path(info.get("path")).expanduser().resolve()
@@ -436,7 +454,7 @@ def _get_repo_root(name: str) -> Path:
         if isinstance(root, str):
             return Path(root)
         return root
-    except KeyError:
+    except KeyError as exc:
         # Fallback: try to read from the index database if present
         try:
             index = _get_index()
@@ -448,7 +466,7 @@ def _get_repo_root(name: str) -> Path:
             # Ignore and raise the original error below
             pass
 
-        raise ValueError(f"Unknown repo {name!r}. Known repos: {sorted(REPOS.keys())}")
+        raise ValueError(f"Unknown repo {name!r}. Known repos: {sorted(REPOS.keys())}") from exc
 
 
 def _resolve_under_repo(repo: str, rel_path: str) -> Path:
@@ -463,11 +481,11 @@ def _resolve_under_repo(repo: str, rel_path: str) -> Path:
     # Ensure candidate is under root (prevent directory traversal)
     try:
         candidate.relative_to(root)
-    except ValueError:
+    except ValueError as exc:
         raise ValueError(
             f"Resolved path {candidate} escapes repo root {root} "
             f"(rel_path={rel_path!r})"
-        )
+        ) from exc
 
     return candidate
 
@@ -484,8 +502,8 @@ def _ensure_repos_configured() -> None:
 # Index instance (lazy initialization)
 # --------------------------------------------------------------------
 
-_INDEX: Optional[SigilIndex] = None
-_WATCHER: Optional[FileWatchManager] = None
+_INDEX: SigilIndex | None = None
+_WATCHER: FileWatchManager | None = None
 
 
 # --------------------------------------------------------------------
@@ -493,9 +511,9 @@ _WATCHER: Optional[FileWatchManager] = None
 # --------------------------------------------------------------------
 
 def rebuild_index_op(
-    repo: Optional[str] = None,
+    repo: str | None = None,
     force_rebuild: bool = False,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """
     Rebuild the trigram/symbol index for one or all repositories.
     Uses the same logic as scripts/rebuild_indexes.py script.
@@ -503,7 +521,7 @@ def rebuild_index_op(
     """
     _ensure_repos_configured()
     index = _get_index()
-    
+
     # Wait a moment for any active file watcher operations to complete
     # This helps prevent database lock conflicts
     import time
@@ -530,10 +548,10 @@ def rebuild_index_op(
 
 
 def build_vector_index_op(
-    repo: Optional[str] = None,
+    repo: str | None = None,
     force_rebuild: bool = False,
     model: str = "default",
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """
     Build or refresh the vector index for one or all repositories.
     Uses the same logic as scripts/rebuild_indexes.py script.
@@ -560,32 +578,42 @@ def build_vector_index_op(
             "reason": "lancedb_missing",
             "message": "Install lancedb optional dependencies to enable vector indexing.",
         }
-    
+
     # Wait a moment for any active file watcher operations to complete
     # This helps prevent database lock conflicts
     import time
     time.sleep(0.5)
 
-    # Ensure embeddings are configured
-    if index.embed_fn is None:
-        from .embeddings import create_embedding_provider
+    # Ensure embeddings are configured (and refresh if provider/model changes)
+    current_provider = None
+    if index.embed_model and ":" in str(index.embed_model):
+        current_provider = str(index.embed_model).split(":", 1)[0]
+
+    should_refresh_embeddings = (
+        index.embed_fn is None
+        or (cfg.embeddings_provider and current_provider and current_provider != cfg.embeddings_provider)
+    )
+
+    if should_refresh_embeddings:
         import numpy as np
-        
+
+        from .embeddings import create_embedding_provider
+
         if not cfg.embeddings_enabled:
             raise RuntimeError("Embeddings not enabled in configuration")
-        
+
         provider = cfg.embeddings_provider
         model_name = cfg.embeddings_model or model
-        
+
         if not provider or not model_name:
             raise RuntimeError("Embedding provider/model not configured")
-        
+
         kwargs = dict(cfg.embeddings_kwargs)
         if cfg.embeddings_cache_dir:
             kwargs["cache_dir"] = cfg.embeddings_cache_dir
         if provider == "openai" and cfg.embeddings_api_key:
             kwargs["api_key"] = cfg.embeddings_api_key
-        
+
         try:
             embedding_provider = create_embedding_provider(
                 provider=provider,
@@ -604,13 +632,17 @@ def build_vector_index_op(
                 "reason": "embeddings_unavailable",
                 "message": str(exc),
             }
-        
+
         def embed_fn(texts):
             embeddings_list = embedding_provider.embed_documents(list(texts))
             return np.array(embeddings_list, dtype="float32")
-        
+
         index.embed_fn = embed_fn
         index.embed_model = f"{provider}:{model_name}"
+        index.embedding_provider = provider
+        # Ensure the wrapped fn used by indexer points at the refreshed embedder
+        index._raw_embed_fn = embed_fn
+        index._wrapped_embed_fn = embed_fn
 
     if repo is not None:
         repo_path = _get_repo_root(repo)
@@ -637,7 +669,7 @@ def build_vector_index_op(
             **repo_stats,
         }
 
-    embedding_stats: Dict[str, Dict[str, object]] = {}
+    embedding_stats: dict[str, dict[str, object]] = {}
     total_docs = 0
     for repo_name in REPOS.keys():
         try:
@@ -671,7 +703,7 @@ def build_vector_index_op(
     }
 
 
-def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
+def get_index_stats_op(repo: str | None = None) -> dict[str, object]:
     """
     Thin wrapper around SigilIndex.get_index_stats.
     Returns stats in format expected by Admin UI frontend.
@@ -681,7 +713,7 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
 
     vector_count_failed = False
 
-    def _count_vectors(filter_expr: Optional[str] = None) -> int:
+    def _count_vectors(filter_expr: str | None = None) -> int:
         """Count vectors without materializing the table."""
         if index.vectors is None:
             return 0
@@ -692,7 +724,7 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
         # Fallback: best-effort zero when count_rows API missing
         return 0
 
-    def _get_vector_count(repo_name: Optional[str] = None) -> int:
+    def _get_vector_count(repo_name: str | None = None) -> int:
         """Count vectors stored in LanceDB, optionally filtered by repo."""
         nonlocal vector_count_failed
 
@@ -751,11 +783,11 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
             return 0
 
     stats = index.get_index_stats(repo=repo)
-    
+
     # Handle error response
     if isinstance(stats, dict) and "error" in stats:
         return dict(stats)  # type: ignore[return-value]
-    
+
     # Transform to match frontend expectations
     if isinstance(stats, dict):
         # If repo-specific, return as-is but ensure structure
@@ -768,7 +800,7 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
                 if repo_path.exists()
                 else 0
             )
-            
+
             # compute stale vectors count for this repo from repos.db
             try:
                 cur = index.repos_db.cursor()
@@ -821,7 +853,7 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
             total_vectors_stale = 0
 
         # Get per-repo stats and per-repo stale counts
-        repos_dict: Dict[str, Dict[str, int]] = {}
+        repos_dict: dict[str, dict[str, int]] = {}
         from .server import REPOS
         for repo_name in REPOS.keys():
             repo_stats = index.get_index_stats(repo=repo_name)
@@ -866,24 +898,22 @@ def get_index_stats_op(repo: Optional[str] = None) -> Dict[str, object]:
             "total_vectors_stale": total_vectors_stale,
             "repos": repos_dict
         }
-    
+
     return {"error": "invalid_response", "detail": "Unexpected stats format"}
 
 
 def _create_embedding_function():
     """
     Create embedding function based on configuration.
-    
+
     Returns:
         Tuple of (embed_fn, model_name) or (None, None) if embeddings disabled
     """
-    global READINESS
-
     if not config.embeddings_enabled:
         logger.info("Embeddings disabled in config")
         READINESS["embeddings"] = True
         return None, None
-    
+
     provider = config.embeddings_provider
     if not provider:
         logger.warning(
@@ -891,10 +921,10 @@ def _create_embedding_function():
             "Set embeddings.provider in config.json. Embeddings disabled."
         )
         return None, None
-    
+
     try:
         from sigil_mcp.embeddings import create_embedding_provider
-        
+
         model = config.embeddings_model
         if not model:
             logger.error(
@@ -902,16 +932,16 @@ def _create_embedding_function():
                 "Set embeddings.model in config.json. Embeddings disabled."
             )
             return None, None
-        
+
         dimension = config.embeddings_dimension
-        
+
         # Build kwargs for provider
         kwargs = dict(config.embeddings_kwargs)
         if config.embeddings_cache_dir:
             kwargs["cache_dir"] = config.embeddings_cache_dir
         if provider == "openai" and config.embeddings_api_key:
             kwargs["api_key"] = config.embeddings_api_key
-        
+
         logger.info(f"Initializing {provider} embedding provider with model: {model}")
         embedding_provider = create_embedding_provider(
             provider=provider,
@@ -919,17 +949,17 @@ def _create_embedding_function():
             dimension=dimension,
             **kwargs
         )
-        
+
         # Create wrapper function that matches SigilIndex expectations
         def embed_fn(texts: Sequence[str]) -> np.ndarray:
             embeddings_list = embedding_provider.embed_documents(list(texts))
             return np.array(embeddings_list, dtype="float32")
-        
+
         model_name = f"{provider}:{model}"
         logger.info(f"Embeddings initialized: {model_name} (dim={dimension})")
         READINESS["embeddings"] = True
         return embed_fn, model_name
-        
+
     except ImportError as e:
         logger.error(
             f"Failed to import embedding provider '{provider}': {e}. "
@@ -1089,14 +1119,14 @@ def _on_file_change(repo_name: str, file_path: Path, event_type: str):
         logger.error(f"Error re-indexing after {event_type}: {e}")
 
 
-def _get_watcher() -> Optional[FileWatchManager]:
+def _get_watcher() -> FileWatchManager | None:
     """Get or create the global file watcher."""
     global _WATCHER
-    
+
     if not config.watch_enabled:
         READINESS["watcher"] = True
         return None
-    
+
     if _WATCHER is None:
         _WATCHER = FileWatchManager(
             on_change=_on_file_change,
@@ -1108,7 +1138,7 @@ def _get_watcher() -> Optional[FileWatchManager]:
         READINESS["watcher"] = bool(getattr(_WATCHER, "enabled", True))
     else:
         READINESS["watcher"] = bool(_WATCHER and getattr(_WATCHER, "enabled", True))
-    
+
     return _WATCHER
 
 
@@ -1134,11 +1164,8 @@ def _start_watching_repos():
 @mcp.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
 async def oauth_metadata(request: Request) -> JSONResponse:
     """OAuth 2.0 Authorization Server Metadata (RFC 8414)."""
-    if not OAUTH_ENABLED:
-        return JSONResponse({"error": "OAuth not enabled"}, status_code=501)
-    
-    base_url = str(request.base_url).rstrip('/')
-    
+    base_url = _external_base_url(request)
+
     response = JSONResponse({
         "issuer": base_url,
         "authorization_endpoint": f"{base_url}/oauth/authorize",
@@ -1151,7 +1178,7 @@ async def oauth_metadata(request: Request) -> JSONResponse:
         ],
         "code_challenge_methods_supported": ["S256", "plain"]
     })
-    
+
     # Add ngrok bypass header
     response.headers["ngrok-skip-browser-warning"] = "true"
     return response
@@ -1160,25 +1187,40 @@ async def oauth_metadata(request: Request) -> JSONResponse:
 @mcp.custom_route("/.well-known/openid-configuration", methods=["GET"])
 async def openid_configuration(request: Request) -> JSONResponse:
     """OpenID Connect Discovery (for ChatGPT compatibility)."""
-    if not OAUTH_ENABLED:
-        return JSONResponse({"error": "OAuth not enabled"}, status_code=501)
-    
-    base_url = str(request.base_url).rstrip('/')
-    
+    base_url = _external_base_url(request)
+
     response = JSONResponse({
         "issuer": base_url,
         "authorization_endpoint": f"{base_url}/oauth/authorize",
         "token_endpoint": f"{base_url}/oauth/token",
         "revocation_endpoint": f"{base_url}/oauth/revoke",
+        "jwks_uri": f"{base_url}/.well-known/jwks.json",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
+        "scopes_supported": ["openid", "profile", "email", "repo", "code"],
         "token_endpoint_auth_methods_supported": [
             "client_secret_post", "client_secret_basic", "none"
         ],
         "code_challenge_methods_supported": ["S256", "plain"]
     })
-    
+
     # Add ngrok bypass header
+    response.headers["ngrok-skip-browser-warning"] = "true"
+    return response
+
+
+@mcp.custom_route("/.well-known/jwks.json", methods=["GET"])
+async def jwks(request: Request) -> JSONResponse:
+    """JWKS endpoint (empty set since tokens are opaque)."""
+    response = JSONResponse({"keys": []})
+    response.headers["ngrok-skip-browser-warning"] = "true"
+    return response
+
+
+@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+async def oauth_protected_resource(request: Request) -> JSONResponse:
+    """Discovery stub for OAuth protected resource metadata."""
+    response = JSONResponse({"resource": _external_base_url(request)})
     response.headers["ngrok-skip-browser-warning"] = "true"
     return response
 
@@ -1193,7 +1235,7 @@ async def healthz(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"}, status_code=200)
 
 
-def _is_ready() -> Dict[str, bool]:
+def _is_ready() -> dict[str, bool]:
     """Return readiness flags and attempt lazy initialization if needed."""
 
     if not READINESS.get("index"):
@@ -1223,10 +1265,10 @@ async def oauth_authorize_http(
     logger.info(f"OAuth authorization request received - Method: {request.method}")
     logger.info(f"Request URL: {request.url}")
     # Headers are now logged by HeaderLoggingASGIMiddleware (redacted)
-    
+
     if not OAUTH_ENABLED:
         return JSONResponse({"error": "oauth_not_enabled"}, status_code=501)
-    
+
     # Get parameters from query string or form data
     if request.method == "GET":
         params = dict(request.query_params)
@@ -1234,7 +1276,7 @@ async def oauth_authorize_http(
         form = await request.form()
         # Convert form values to strings (form() returns str | UploadFile)
         params = {k: get_form_value(v) for k, v in form.items()}
-    
+
     client_id = params.get("client_id")
     redirect_uri = params.get("redirect_uri")
     response_type = params.get("response_type", "code")
@@ -1242,20 +1284,20 @@ async def oauth_authorize_http(
     scope = params.get("scope")
     code_challenge = params.get("code_challenge")
     code_challenge_method = params.get("code_challenge_method")
-    
+
     # Validate required parameters
     if not client_id or not redirect_uri:
         return JSONResponse({
             "error": "invalid_request",
             "error_description": "client_id and redirect_uri are required"
         }, status_code=400)
-    
+
     if response_type != "code":
         return JSONResponse({
             "error": "unsupported_response_type",
             "error_description": "Only 'code' response type is supported"
         }, status_code=400)
-    
+
     # Verify client
     oauth_manager = get_oauth_manager()
     if not oauth_manager.verify_client(client_id):
@@ -1263,7 +1305,7 @@ async def oauth_authorize_http(
             "error": "invalid_client",
             "error_description": "Invalid client_id"
         }, status_code=401)
-    
+
     # Verify redirect_uri
     client = oauth_manager.get_client()
     if not client:
@@ -1271,7 +1313,7 @@ async def oauth_authorize_http(
             "error": "server_error",
             "error_description": "OAuth client not configured"
         }, status_code=500)
-    
+
     if not _security_is_redirect_uri_allowed(
         redirect_uri,
         client.redirect_uris,
@@ -1281,7 +1323,7 @@ async def oauth_authorize_http(
             "error": "invalid_request",
             "error_description": "Redirect URI must be registered or in allow list"
         }, status_code=400)
-    
+
     # Check if this is a consent approval (POST with approve=true)
     logger.info(f"All params: {params}")
     if request.method == "POST" and params.get("approve") == "true":
@@ -1294,21 +1336,21 @@ async def oauth_authorize_http(
             code_challenge=code_challenge,
             code_challenge_method=code_challenge_method
         )
-        
+
         # Build redirect URL
         redirect_params = {"code": code}
         if state:
             redirect_params["state"] = state
-        
+
         redirect_url = f"{redirect_uri}?{urlencode(redirect_params)}"
-        
+
         logger.info(f"Redirecting to: {redirect_url}")
         logger.info(f"Authorization code: {code[:20]}...")
         logger.info("="*80)
         return RedirectResponse(redirect_url, status_code=302)
-    
+
     # Show consent screen (GET request or initial POST)
-    
+
     # Build approval form
     consent_html = f"""
     <!DOCTYPE html>
@@ -1391,7 +1433,7 @@ async def oauth_authorize_http(
         <div class="container">
             <h1>馃攼 Authorize Access</h1>
             <p><strong>ChatGPT</strong> is requesting access to your Sigil MCP Server.</p>
-            
+
             <div class="info">
                 <p><strong>Client:</strong> {client_id[:20]}...</p>
                 <p><strong>Scope:</strong> {scope or "Default access"}</p>
@@ -1402,7 +1444,7 @@ async def oauth_authorize_http(
                     <li>Accessing configured tools</li>
                 </ul>
             </div>
-            
+
             <form method="POST" action="/oauth/authorize">
                 <input type="hidden" name="client_id" value="{client_id}">
                 <input type="hidden" name="redirect_uri" value="{redirect_uri}">
@@ -1410,10 +1452,10 @@ async def oauth_authorize_http(
                 <input type="hidden" name="state" value="{state or ''}">
                 <input type="hidden" name="scope" value="{scope or ''}">
                 <input type="hidden" name="code_challenge" value="{code_challenge or ''}">
-                <input type="hidden" name="code_challenge_method" 
+                <input type="hidden" name="code_challenge_method"
                        value="{code_challenge_method or ''}">
                 <input type="hidden" name="approve" value="true">
-                
+
                 <div class="buttons">
                     <button type="submit" class="approve">Authorize</button>
                     <button type="button" class="deny" onclick="window.close()">Deny</button>
@@ -1423,7 +1465,7 @@ async def oauth_authorize_http(
     </body>
     </html>
     """
-    
+
     return HTMLResponse(content=consent_html, status_code=200)
 
 
@@ -1435,10 +1477,10 @@ async def oauth_token_http(request: Request) -> JSONResponse:
     logger.info(f"Request method: {request.method}")
     logger.info(f"Request URL: {request.url}")
     # Headers are now logged by HeaderLoggingASGIMiddleware (redacted)
-    
+
     if not OAUTH_ENABLED:
         return JSONResponse({"error": "oauth_not_enabled"}, status_code=501)
-    
+
     # Parse form data
     form = await request.form()
     grant_type = get_form_value(form.get("grant_type"))
@@ -1448,7 +1490,7 @@ async def oauth_token_http(request: Request) -> JSONResponse:
     client_secret = get_form_value(form.get("client_secret"))
     code_verifier = get_form_value(form.get("code_verifier"))
     refresh_token = get_form_value(form.get("refresh_token"))
-    
+
     logger.info(
         f"Form data: grant_type={grant_type}, code={code[:20] if code else None}..., "
         f"redirect_uri={redirect_uri}, client_id={client_id}, "
@@ -1456,7 +1498,7 @@ async def oauth_token_http(request: Request) -> JSONResponse:
         f"code_verifier={code_verifier[:20] if code_verifier else None}..., "
         f"refresh_token={refresh_token[:20] if refresh_token else None}..."
     )
-    
+
     # Check for client credentials in Authorization header
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Basic "):
@@ -1468,42 +1510,42 @@ async def oauth_token_http(request: Request) -> JSONResponse:
             client_secret = client_secret or header_client_secret
         except Exception:
             pass
-    
+
     if not client_id:
         return JSONResponse({
             "error": "invalid_request",
             "error_description": "client_id is required"
         }, status_code=400)
-    
+
     oauth_manager = get_oauth_manager()
-    
+
     # Verify client (public clients don't need secret)
     if not oauth_manager.verify_client(client_id, client_secret):
         return JSONResponse({
             "error": "invalid_client",
             "error_description": "Invalid client credentials"
         }, status_code=401)
-    
+
     if grant_type == "authorization_code":
         if not code or not redirect_uri:
             return JSONResponse({
                 "error": "invalid_request",
                 "error_description": "code and redirect_uri are required"
             }, status_code=400)
-        
+
         token = oauth_manager.exchange_code_for_token(
             code=code,
             client_id=client_id,
             redirect_uri=redirect_uri,
             code_verifier=code_verifier
         )
-        
+
         if not token:
             return JSONResponse({
                 "error": "invalid_grant",
                 "error_description": "Invalid authorization code"
             }, status_code=400)
-        
+
         return JSONResponse({
             "access_token": token.access_token,
             "token_type": token.token_type,
@@ -1511,22 +1553,22 @@ async def oauth_token_http(request: Request) -> JSONResponse:
             "refresh_token": token.refresh_token,
             "scope": token.scope
         })
-    
+
     elif grant_type == "refresh_token":
         if not refresh_token:
             return JSONResponse({
                 "error": "invalid_request",
                 "error_description": "refresh_token is required"
             }, status_code=400)
-        
+
         token = oauth_manager.refresh_access_token(refresh_token)
-        
+
         if not token:
             return JSONResponse({
                 "error": "invalid_grant",
                 "error_description": "Invalid refresh token"
             }, status_code=400)
-        
+
         return JSONResponse({
             "access_token": token.access_token,
             "token_type": token.token_type,
@@ -1534,7 +1576,7 @@ async def oauth_token_http(request: Request) -> JSONResponse:
             "refresh_token": token.refresh_token,
             "scope": token.scope
         })
-    
+
     else:
         return JSONResponse({
             "error": "unsupported_grant_type",
@@ -1546,32 +1588,32 @@ async def oauth_token_http(request: Request) -> JSONResponse:
 async def oauth_revoke_http(request: Request) -> JSONResponse:
     """OAuth 2.0 Token Revocation Endpoint (RFC 7009)."""
     logger.info("OAuth revocation request received")
-    
+
     if not OAUTH_ENABLED:
         return JSONResponse({"error": "oauth_not_enabled"}, status_code=501)
-    
+
     form = await request.form()
     token = get_form_value(form.get("token"))
     client_id = get_form_value(form.get("client_id"))
     client_secret = get_form_value(form.get("client_secret"))
-    
+
     if not token or not client_id:
         return JSONResponse({
             "error": "invalid_request",
             "error_description": "token and client_id are required"
         }, status_code=400)
-    
+
     oauth_manager = get_oauth_manager()
-    
+
     # Verify client
     if not oauth_manager.verify_client(client_id, client_secret):
         return JSONResponse({
             "error": "invalid_client",
             "error_description": "Invalid client credentials"
         }, status_code=401)
-    
+
     oauth_manager.revoke_token(token)
-    
+
     # RFC 7009: The revocation endpoint returns 200 even if token doesn't exist
     return JSONResponse({"status": "revoked"})
 
@@ -1590,17 +1632,17 @@ def oauth_authorize(
     client_id: str,
     redirect_uri: str,
     response_type: str = "code",
-    state: Optional[str] = None,
-    scope: Optional[str] = None,
-    code_challenge: Optional[str] = None,
-    code_challenge_method: Optional[str] = None
-) -> Dict[str, str]:
+    state: str | None = None,
+    scope: str | None = None,
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None
+) -> dict[str, str]:
     """
     OAuth2 authorization endpoint.
-    
+
     Initiates the OAuth2 authorization code flow. This should be called
     by the OAuth client (e.g., ChatGPT) to request authorization.
-    
+
     Args:
         client_id: OAuth client ID
         redirect_uri: URI to redirect to after authorization
@@ -1609,10 +1651,10 @@ def oauth_authorize(
         scope: Requested permissions (optional)
         code_challenge: PKCE code challenge (recommended)
         code_challenge_method: PKCE method, "S256" or "plain"
-    
+
     Returns:
         Authorization response with redirect URL or error
-    
+
     Example:
         oauth_authorize(
             client_id="sigil_xxx",
@@ -1626,20 +1668,20 @@ def oauth_authorize(
         client_id,
         redirect_uri
     )
-    
+
     if not OAUTH_ENABLED:
         return {
             "error": "oauth_not_enabled",
             "error_description": "OAuth is disabled on this server"
         }
-    
+
     # Verify response_type
     if response_type != "code":
         return {
             "error": "unsupported_response_type",
             "error_description": "Only 'code' response type is supported"
         }
-    
+
     # Verify client
     oauth_manager = get_oauth_manager()
     if not oauth_manager.verify_client(client_id):
@@ -1647,7 +1689,7 @@ def oauth_authorize(
             "error": "invalid_client",
             "error_description": "Invalid client_id"
         }
-    
+
     # Verify redirect_uri
     client = oauth_manager.get_client()
     allowed_redirects = config.oauth_redirect_allow_list
@@ -1660,7 +1702,7 @@ def oauth_authorize(
             "error": "invalid_request",
             "error_description": "Redirect URI not registered or allowed for this client"
         }
-    
+
     # Auto-approve (for trusted clients)
     # In production, you might want a consent screen here
     code = oauth_manager.create_authorization_code(
@@ -1670,39 +1712,39 @@ def oauth_authorize(
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method
     )
-    
+
     # Build redirect URL
     params = {"code": code}
     if state:
         params["state"] = state
-    
+
     redirect_url = f"{redirect_uri}?{urlencode(params)}"
-    
-    result: Dict[str, str] = {
+
+    result: dict[str, str] = {
         "redirect_url": redirect_url,
         "code": code
     }
     if state:
         result["state"] = state
-    
+
     return result
 
 
 def oauth_token(
     grant_type: str,
-    code: Optional[str] = None,
-    redirect_uri: Optional[str] = None,
-    client_id: Optional[str] = None,
-    client_secret: Optional[str] = None,
-    code_verifier: Optional[str] = None,
-    refresh_token: Optional[str] = None
-) -> Dict[str, object]:
+    code: str | None = None,
+    redirect_uri: str | None = None,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    code_verifier: str | None = None,
+    refresh_token: str | None = None
+) -> dict[str, object]:
     """
     OAuth2 token endpoint.
-    
+
     Exchange an authorization code for an access token, or refresh
     an existing access token.
-    
+
     Args:
         grant_type: "authorization_code" or "refresh_token"
         code: Authorization code (for authorization_code grant)
@@ -1711,10 +1753,10 @@ def oauth_token(
         client_secret: OAuth client secret (for confidential clients)
         code_verifier: PKCE code verifier
         refresh_token: Refresh token (for refresh_token grant)
-    
+
     Returns:
         Token response with access_token, expires_in, etc.
-    
+
     Example:
         # Exchange authorization code
         oauth_token(
@@ -1724,7 +1766,7 @@ def oauth_token(
             client_id="sigil_xxx",
             code_verifier="verifier_string"
         )
-        
+
         # Refresh token
         oauth_token(
             grant_type="refresh_token",
@@ -1733,49 +1775,49 @@ def oauth_token(
         )
     """
     logger.info("oauth_token called (grant_type=%r)", grant_type)
-    
+
     if not OAUTH_ENABLED:
         return {
             "error": "oauth_not_enabled",
             "error_description": "OAuth is disabled on this server"
         }
-    
+
     oauth_manager = get_oauth_manager()
-    
+
     # Validate client_id
     if not client_id:
         return {
             "error": "invalid_request",
             "error_description": "client_id is required"
         }
-    
+
     # Verify client (public clients only need client_id)
     if not oauth_manager.verify_client(client_id, client_secret):
         return {
             "error": "invalid_client",
             "error_description": "Invalid client credentials"
         }
-    
+
     if grant_type == "authorization_code":
         if not code or not redirect_uri:
             return {
                 "error": "invalid_request",
                 "error_description": "code and redirect_uri are required"
             }
-        
+
         token = oauth_manager.exchange_code_for_token(
             code=code,
             client_id=client_id,
             redirect_uri=redirect_uri,
             code_verifier=code_verifier
         )
-        
+
         if not token:
             return {
                 "error": "invalid_grant",
                 "error_description": "Invalid authorization code"
             }
-        
+
         return {
             "access_token": token.access_token,
             "token_type": token.token_type,
@@ -1783,22 +1825,22 @@ def oauth_token(
             "refresh_token": token.refresh_token,
             "scope": token.scope
         }
-    
+
     elif grant_type == "refresh_token":
         if not refresh_token:
             return {
                 "error": "invalid_request",
                 "error_description": "refresh_token is required"
             }
-        
+
         token = oauth_manager.refresh_access_token(refresh_token)
-        
+
         if not token:
             return {
                 "error": "invalid_grant",
                 "error_description": "Invalid refresh token"
             }
-        
+
         return {
             "access_token": token.access_token,
             "token_type": token.token_type,
@@ -1806,7 +1848,7 @@ def oauth_token(
             "refresh_token": token.refresh_token,
             "scope": token.scope
         }
-    
+
     else:
         return {
             "error": "unsupported_grant_type",
@@ -1817,21 +1859,21 @@ def oauth_token(
 def oauth_revoke(
     token: str,
     client_id: str,
-    client_secret: Optional[str] = None
-) -> Dict[str, str]:
+    client_secret: str | None = None
+) -> dict[str, str]:
     """
     OAuth2 token revocation endpoint.
-    
+
     Revoke an access token or refresh token, immediately invalidating it.
-    
+
     Args:
         token: Access token or refresh token to revoke
         client_id: OAuth client ID
         client_secret: OAuth client secret (optional)
-    
+
     Returns:
         Status of revocation
-    
+
     Example:
         oauth_revoke(
             token="access_token_here",
@@ -1839,61 +1881,61 @@ def oauth_revoke(
         )
     """
     logger.info("oauth_revoke called")
-    
+
     if not OAUTH_ENABLED:
         return {
             "error": "oauth_not_enabled",
             "error_description": "OAuth is disabled on this server"
         }
-    
+
     oauth_manager = get_oauth_manager()
-    
+
     # Verify client
     if not oauth_manager.verify_client(client_id, client_secret):
         return {
             "error": "invalid_client",
             "error_description": "Invalid client credentials"
         }
-    
+
     revoked = oauth_manager.revoke_token(token)
-    
+
     if revoked:
         return {"status": "revoked"}
     else:
         return {"status": "not_found"}
 
 
-def oauth_client_info() -> Dict[str, object]:
+def oauth_client_info() -> dict[str, object]:
     """
     Get OAuth client configuration.
-    
+
     Returns the client_id and allowed redirect_uris for this server.
     Use this to get the credentials needed to configure ChatGPT or
     other OAuth clients.
-    
+
     Returns:
         OAuth client configuration
-    
+
     Example:
         oauth_client_info()
     """
     logger.info("oauth_client_info called")
-    
+
     if not OAUTH_ENABLED:
         return {
             "error": "oauth_not_enabled",
             "error_description": "OAuth is disabled on this server"
         }
-    
+
     oauth_manager = get_oauth_manager()
     client = oauth_manager.get_client()
-    
+
     if not client:
         return {
             "error": "not_configured",
             "error_description": "OAuth client not yet configured. Restart server to initialize."
         }
-    
+
     return {
         "client_id": client.client_id,
         "redirect_uris": client.redirect_uris,
@@ -1922,7 +1964,7 @@ def oauth_client_info() -> Dict[str, object]:
         "audience": ["assistant", "user"],
     },
 )
-def ping() -> Dict[str, object]:
+def ping() -> dict[str, object]:
     """
     Healthcheck endpoint.
 
@@ -1955,7 +1997,7 @@ def ping() -> Dict[str, object]:
         "audience": ["assistant", "user"],
     },
 )
-def list_repos() -> List[Dict[str, str]]:
+def list_repos() -> list[dict[str, str]]:
     """
     List all configured repositories.
 
@@ -1981,15 +2023,15 @@ def _collect_file_entries(
     max_depth: int,
     include_hidden: bool,
     max_entries: int,
-) -> tuple[List[Dict[str, str]], bool]:
+) -> tuple[list[dict[str, str]], bool]:
     """
     Collect file and directory entries from a repository.
-    
+
     Returns:
         Tuple of (entries list, truncated flag)
     """
     base_parts = len(root.relative_to(base_root).parts)
-    entries: List[Dict[str, str]] = []
+    entries: list[dict[str, str]] = []
     truncated = False
 
     for dirpath, dirnames, filenames in os.walk(root):
@@ -2039,7 +2081,7 @@ def list_repo_files(
     max_depth: int = 4,
     include_hidden: bool = False,
     max_entries: int = 1000,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """
     List files and directories under a subdirectory of a given repo.
 
@@ -2089,14 +2131,14 @@ def list_repo_files(
 
     # Sort dirs before files, then by repo, then by path
     entries.sort(key=lambda e: (e["type"], e["repo"], e["path"]))
-    
+
     total_found = len(entries)
-    
+
     logger.debug(
         f"list_repo_files returning {len(entries)} entries "
         f"(truncated={truncated}, first 5: {entries[:5] if entries else []})"
     )
-    
+
     return {
         "entries": entries,
         "total_found": total_found,
@@ -2194,10 +2236,10 @@ def read_repo_file(
 )
 def search_repo(
     query: str,
-    repo: Optional[str] = None,
+    repo: str | None = None,
     file_glob: str = "*.rs",
     max_results: int = 50,
-) -> List[Dict[str, object]]:
+) -> list[dict[str, object]]:
     """
     Naive full-text search across one repo or all repos.
 
@@ -2225,7 +2267,7 @@ def search_repo(
     )
     _ensure_repos_configured()
 
-    matches: List[Dict[str, object]] = []
+    matches: list[dict[str, object]] = []
 
     if repo is None:
         targets = REPOS
@@ -2237,7 +2279,7 @@ def search_repo(
         # Ensure repo_root is a Path object
         if not isinstance(repo_root, Path):
             repo_root = Path(repo_root)
-        
+
         # rglob relative to root
         for path in repo_root.rglob(file_glob):
             if not path.is_file():
@@ -2297,10 +2339,10 @@ def search_repo(
 )
 def search(
     query: str,
-    repo: Optional[str] = None,
+    repo: str | None = None,
     file_glob: str = "*",
     max_results: int = 50,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """
     Deep Research-compatible search tool.
 
@@ -2320,7 +2362,7 @@ def search(
         max_results=max_results,
     )
 
-    results: List[Dict[str, str]] = []
+    results: list[dict[str, str]] = []
 
     for m in raw_matches:
         repo_name = str(m["repo"])
@@ -2344,7 +2386,7 @@ def search(
     return {"results": results}
 
 
-def fetch(doc_id: str) -> Dict[str, object]:
+def fetch(doc_id: str) -> dict[str, object]:
     """
     Deep Research-compatible fetch tool.
 
@@ -2393,18 +2435,18 @@ def fetch(doc_id: str) -> Dict[str, object]:
 def index_repository(
     repo: str,
     force_rebuild: bool = False
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """
     Build or rebuild the search index for a repository.
-    
+
     This enables fast code search and IDE-like features (go-to-definition,
     symbol search, file outline). The index includes both text search
     (trigrams) and semantic information (symbols extracted via ctags).
-    
+
     Args:
       repo: Logical repo name (as defined in SIGIL_REPO_MAP)
       force_rebuild: If true, rebuild index from scratch (default: false)
-    
+
     Returns:
       Statistics about the indexing operation:
       - files_indexed: Number of files processed
@@ -2412,11 +2454,11 @@ def index_repository(
       - trigrams_built: Number of trigram entries for text search
       - bytes_indexed: Total bytes processed
       - duration_seconds: Time taken to build index
-    
+
     Example:
       To index the 'runtime' repository:
       index_repository(repo="runtime")
-      
+
       To force a full rebuild:
       index_repository(repo="runtime", force_rebuild=True)
     """
@@ -2426,12 +2468,12 @@ def index_repository(
         force_rebuild
     )
     _ensure_repos_configured()
-    
+
     repo_path = _get_repo_root(repo)
     index = _get_index()
-    
+
     stats = index.index_repository(repo, repo_path, force=force_rebuild)
-    
+
     return {
         "status": "completed",
         "repo": repo,
@@ -2465,20 +2507,20 @@ def index_repository(
 )
 def search_code(
     query: str,
-    repo: Optional[str] = None,
+    repo: str | None = None,
     max_results: int = 50
-) -> List[Dict[str, object]]:
+) -> list[dict[str, object]]:
     """
     Fast indexed code search across repositories.
-    
+
     Uses trigram-based indexing for substring search, much faster than
     grep-style search. Returns results with line numbers and context.
-    
+
     Args:
       query: Text to search for (case-insensitive substring match)
       repo: Optional repo name to restrict search (searches all repos if omitted)
       max_results: Maximum number of results to return (default: 50)
-    
+
     Returns:
       List of matches, each containing:
       - repo: Repository name
@@ -2486,11 +2528,11 @@ def search_code(
       - line: Line number where match was found
       - text: The matching line of code
       - doc_id: Document ID for fetching full file (use with fetch tool)
-    
+
     Example:
       Search for "async def" across all repositories:
       search_code(query="async def")
-      
+
       Search only in the 'runtime' repository:
       search_code(query="async def", repo="runtime")
     """
@@ -2501,10 +2543,10 @@ def search_code(
         max_results
     )
     _ensure_repos_configured()
-    
+
     index = _get_index()
     results = index.search_code(query, repo=repo, max_results=max_results)
-    
+
     return [
         {
             "repo": r.repo,
@@ -2519,16 +2561,16 @@ def search_code(
 
 def goto_definition(
     symbol_name: str,
-    repo: Optional[str] = None,
-    kind: Optional[str] = None
-) -> List[Dict[str, object]]:
+    repo: str | None = None,
+    kind: str | None = None
+) -> list[dict[str, object]]:
     """
     Find where a symbol is defined (IDE "Go to Definition" feature).
-    
+
     Searches the symbol index to find definitions of functions, classes,
     methods, variables, etc. This provides semantic search beyond simple
     text matching.
-    
+
     Args:
       symbol_name: Name of the symbol to find (e.g., "MyClass", "process_data")
       repo: Optional repo name to restrict search
@@ -2538,7 +2580,7 @@ def goto_definition(
             - "method" or "m": Class methods
             - "variable" or "v": Variables
             - Other values: member, macro, struct, enum, etc.
-    
+
     Returns:
       List of symbol definitions, each containing:
       - name: Symbol name
@@ -2547,11 +2589,11 @@ def goto_definition(
       - line: Line number where defined
       - signature: Function/method signature (if available)
       - scope: Containing scope like class name (if available)
-    
+
     Example:
       Find where "HttpClient" class is defined:
       goto_definition(symbol_name="HttpClient", kind="class")
-      
+
       Find all definitions of "process" function:
       goto_definition(symbol_name="process", kind="function")
     """
@@ -2562,10 +2604,10 @@ def goto_definition(
         kind
     )
     _ensure_repos_configured()
-    
+
     index = _get_index()
     symbols = index.find_symbol(symbol_name, kind=kind, repo=repo)
-    
+
     return [
         {
             "name": s.name,
@@ -2581,22 +2623,22 @@ def goto_definition(
 
 def list_symbols(
     repo: str,
-    file_path: Optional[str] = None,
-    kind: Optional[str] = None
-) -> List[Dict[str, object]]:
+    file_path: str | None = None,
+    kind: str | None = None
+) -> list[dict[str, object]]:
     """
     List symbols in a file or repository (IDE "Outline" or "Structure" view).
-    
+
     Shows an overview of code structure including functions, classes, methods,
     and other symbols. Useful for understanding a file's contents or getting
     a high-level view of a codebase.
-    
+
     Args:
       repo: Repository name
       file_path: Optional file path to show symbols for (relative to repo root)
                  If omitted, shows symbols from entire repository
       kind: Optional symbol type filter (function, class, method, etc.)
-    
+
     Returns:
       List of symbols sorted by file path and line number, each containing:
       - name: Symbol name
@@ -2605,14 +2647,14 @@ def list_symbols(
       - line: Line number
       - signature: Function/method signature (if available)
       - scope: Containing scope (if available)
-    
+
     Example:
       Show all symbols in a specific file:
       list_symbols(repo="runtime", file_path="src/main.rs")
-      
+
       Show all functions in the runtime repository:
       list_symbols(repo="runtime", kind="function")
-      
+
       Show all classes across the repository:
       list_symbols(repo="runtime", kind="class")
     """
@@ -2623,10 +2665,10 @@ def list_symbols(
         kind
     )
     _ensure_repos_configured()
-    
+
     index = _get_index()
     symbols = index.list_symbols(repo, file_path=file_path, kind=kind)
-    
+
     return [
         {
             "name": s.name,
@@ -2640,62 +2682,62 @@ def list_symbols(
     ]
 
 
-def get_index_stats(repo: Optional[str] = None) -> Dict[str, object]:
+def get_index_stats(repo: str | None = None) -> dict[str, object]:
     """
     Get statistics about the code index.
-    
+
     Shows information about indexed repositories, number of files,
     symbols extracted, and when the index was last updated.
-    
+
     Args:
       repo: Optional repo name to get stats for specific repository
             If omitted, returns global statistics across all repos
-    
+
     Returns:
       For specific repo:
       - repo: Repository name
       - documents: Number of indexed files
       - symbols: Number of extracted symbols
       - indexed_at: Timestamp of last indexing
-      
+
       For all repos:
       - repositories: Number of indexed repositories
       - documents: Total number of indexed files
       - symbols: Total number of symbols
       - trigrams: Number of trigram index entries
-    
+
     Example:
       Get global stats:
       get_index_stats()
-      
+
       Get stats for specific repo:
       get_index_stats(repo="runtime")
     """
     logger.info("get_index_stats tool called (repo=%r)", repo)
     _ensure_repos_configured()
-    
+
     index = _get_index()
     stats = index.get_index_stats(repo=repo)
     # Cast to Dict[str, object] to satisfy type checker
-    return {k: v for k, v in stats.items()}
+    return dict(stats)
 
 
 def build_vector_index(
     repo: str,
     force_rebuild: bool = False,
     model: str = "default",
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """
     Build or refresh the vector (semantic) index for a repository.
-    
+
     This computes embeddings for code chunks and stores them in the index
     for fast semantic search.
-    
+
     Args:
       repo: Repository name to index
       force_rebuild: If True, rebuild all embeddings (default: False)
       model: Embedding model identifier (default: "default")
-    
+
     Returns:
       Statistics about the indexing operation:
       - status: "completed"
@@ -2703,11 +2745,11 @@ def build_vector_index(
       - model: Model identifier used
       - chunks_indexed: Number of code chunks embedded
       - documents_processed: Number of files processed
-    
+
     Example:
       Build vector index for 'runtime' repository:
       build_vector_index(repo="runtime")
-      
+
       Force rebuild with custom model:
       build_vector_index(repo="runtime", force_rebuild=True, model="custom-model")
     """
@@ -2718,20 +2760,20 @@ def build_vector_index(
         model,
     )
     _ensure_repos_configured()
-    
+
     index = _get_index()
-    
+
     # Ensure the basic index exists first
     repo_path = _get_repo_root(repo)
     index.index_repository(repo, repo_path, force=False)
-    
+
     stats = index.build_vector_index(
         repo=repo,
         embed_fn=index.embed_fn,
         model=model,
         force=force_rebuild,
     )
-    
+
     return {
         "status": "completed",
         "repo": repo,
@@ -2769,18 +2811,18 @@ def build_vector_index(
 )
 def semantic_search(
     query: str,
-    repo: Optional[str] = None,
+    repo: str | None = None,
     k: int = 20,
     model: str = "default",
     code_only: bool = False,
     prefer_code: bool = False,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """
     Semantic code search using vector embeddings.
-    
+
     Search for code based on meaning and intent rather than exact text matching.
     Uses vector embeddings to find semantically similar code chunks.
-    
+
     Args:
       query: Natural language or code-like query describing what you're looking for
       repo: Repository name (optional; when omitted searches across all indexed repos)
@@ -2788,7 +2830,7 @@ def semantic_search(
       model: Embedding model identifier (default: "default")
       code_only: When true, hard-filter results to code chunks
       prefer_code: When true, rerank to favor code while still allowing docs/config
-    
+
     Returns:
       {
         "matches": [
@@ -2803,14 +2845,14 @@ def semantic_search(
           ...
         ]
       }
-    
+
     Example:
       Find authentication-related code:
       semantic_search(
           query="user authentication and login handlers",
           repo="runtime"
       )
-      
+
       Find error handling code:
       semantic_search(
           query="error handling middleware",
@@ -2866,7 +2908,7 @@ def semantic_search(
             "status": "error",
             "error": f"semantic_search failed: {exc}",
         }
-    
+
     return {
         "status": "completed",
         "repo": repo,
@@ -2881,16 +2923,16 @@ def _setup_authentication():
         logger.info("=" * 60)
         logger.info("AUTHENTICATION ENABLED")
         logger.info("=" * 60)
-        
+
         # Initialize OAuth if enabled
         if OAUTH_ENABLED:
             logger.info("")
             logger.info("馃攼 OAuth2 Authentication")
             logger.info("=" * 60)
-            
+
             oauth_manager = get_oauth_manager()
             credentials = oauth_manager.initialize_client()
-            
+
             if credentials:
                 client_id, client_secret = credentials
                 logger.info("馃啎 NEW OAuth client created!")
@@ -2906,16 +2948,16 @@ def _setup_authentication():
                     logger.info(f"Using existing OAuth client: {client.client_id}")
                     logger.info("(Client secret stored securely)")
                 logger.info("")
-            
+
             logger.info("OAuth Endpoints:")
             logger.info("  - Authorization: /oauth/authorize")
             logger.info("  - Token:         /oauth/token")
             logger.info("  - Revoke:        /oauth/revoke")
             logger.info("")
-        
+
         # Initialize API key
         api_key = initialize_api_key()
-        
+
         if api_key:
             logger.info(" NEW API Key Generated")
             logger.info("=" * 60)
@@ -2930,11 +2972,11 @@ def _setup_authentication():
             logger.info("Using existing API key from ~/.sigil_mcp_server/api_key")
             logger.info("(Fallback for local development)")
             logger.info("")
-        
+
         if ALLOW_LOCAL_BYPASS:
             logger.info("[YES] Local connections (127.0.0.1) bypass authentication")
             logger.info("")
-        
+
         if ALLOWED_IPS:
             logger.info(f"IP Whitelist enabled: {', '.join(ALLOWED_IPS)}")
             logger.info("")
@@ -2981,7 +3023,7 @@ def _build_sse_app(*, sse_route_path: str, message_route_path: str):
     additional_routes = getattr(mcp, "_additional_http_routes", None)
     if not hasattr(mcp, "_get_additional_http_routes"):
         # FastMCP versions prior to exposing _get_additional_http_routes require a shim
-        setattr(mcp, "_get_additional_http_routes", lambda: [])  # type: ignore[attr-defined]
+        mcp._get_additional_http_routes = lambda: []  # type: ignore[attr-defined]
 
     return create_sse_app(
         server=mcp,
@@ -2994,7 +3036,7 @@ def _build_sse_app(*, sse_route_path: str, message_route_path: str):
     )
 
 
-def build_parent_app(include_admin: Optional[bool] = None) -> Starlette:
+def build_parent_app(include_admin: bool | None = None) -> Starlette:
     """
     Create parent ASGI app that combines FastMCP, optional Admin API, and SSE transport.
     """

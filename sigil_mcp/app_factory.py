@@ -14,7 +14,6 @@ from .config import Config, get_config
 from .logging_setup import get_log_file_path, setup_logging
 from .middleware.header_logging import HeaderLoggingASGIMiddleware
 
-
 logger = logging.getLogger("sigil_repos_mcp")
 
 
@@ -75,11 +74,7 @@ def _wrap_for_chatgpt(mcp_server: FastMCP) -> None:
     if underlying_asgi_app is not None and not isinstance(
         underlying_asgi_app, ChatGPTComplianceMiddleware
     ):
-        setattr(
-            mcp_server,
-            "asgi_app",
-            ChatGPTComplianceMiddleware(underlying_asgi_app),
-        )
+        mcp_server.asgi_app = ChatGPTComplianceMiddleware(underlying_asgi_app)
 
 
 def build_mcp_app(

@@ -1,15 +1,14 @@
-from pathlib import Path
-from typing import List
 import fnmatch
-from typing import Optional, Iterable
+from collections.abc import Iterable
+from pathlib import Path
 
 
-def load_gitignore(repo_root: Path) -> List[str]:
+def load_gitignore(repo_root: Path) -> list[str]:
     """Load .gitignore-style patterns from repo root (simple support).
 
     Returns a list of patterns in order. Supports negation (!) lines.
     """
-    patterns: List[str] = []
+    patterns: list[str] = []
     try:
         gitignore = repo_root / '.gitignore'
         if gitignore.exists():
@@ -37,7 +36,7 @@ def load_gitignore(repo_root: Path) -> List[str]:
     return patterns
 
 
-def load_include_patterns(repo_root: Path) -> List[str]:
+def load_include_patterns(repo_root: Path) -> list[str]:
     """Load explicit include patterns from repository to override .gitignore.
 
     Supported filenames (checked in order):
@@ -48,7 +47,7 @@ def load_include_patterns(repo_root: Path) -> List[str]:
     Patterns here act as explicit includes: if a path matches any include pattern,
     it will be considered for indexing/watching even if .gitignore would ignore it.
     """
-    patterns: List[str] = []
+    patterns: list[str] = []
     try:
         for fname in ('.sigil_mcp_include', '.sigil_index_include'):
             fpath = repo_root / fname
@@ -102,7 +101,7 @@ def _match_pattern(rel_path: str, pattern: str) -> bool:
     return False
 
 
-def is_ignored_by_gitignore(path: Path, repo_root: Path, patterns: List[str]) -> bool:
+def is_ignored_by_gitignore(path: Path, repo_root: Path, patterns: list[str]) -> bool:
     """Return True if path is ignored according to provided gitignore patterns.
 
     Patterns are processed in order; later negation (!pattern) overrides previous matches.
@@ -133,14 +132,14 @@ def is_ignored_by_gitignore(path: Path, repo_root: Path, patterns: List[str]) ->
 
 def should_ignore(
     path: Path,
-    repo_root: Optional[Path] = None,
+    repo_root: Path | None = None,
     *,
-    config_ignore_patterns: Optional[List[str]] = None,
-    repo_ignore_patterns: Optional[List[str]] = None,
-    include_patterns: Optional[List[str]] = None,
-    gitignore_patterns: Optional[List[str]] = None,
-    ignore_dirs: Optional[Iterable[str]] = None,
-    ignore_extensions: Optional[Iterable[str]] = None,
+    config_ignore_patterns: list[str] | None = None,
+    repo_ignore_patterns: list[str] | None = None,
+    include_patterns: list[str] | None = None,
+    gitignore_patterns: list[str] | None = None,
+    ignore_dirs: Iterable[str] | None = None,
+    ignore_extensions: Iterable[str] | None = None,
     max_size_bytes: int = 1_000_000,
 ) -> bool:
     """Unified ignore decision used by both watcher and indexer.
@@ -185,9 +184,9 @@ def should_ignore(
                 pass
 
         # Helper to split patterns into allows (negations) and positives
-        def _split_patterns(pats: Optional[List[str]]):
-            allows: List[str] = []
-            pos: List[str] = []
+        def _split_patterns(pats: list[str] | None):
+            allows: list[str] = []
+            pos: list[str] = []
             if not pats:
                 return allows, pos
             for p in pats:
@@ -206,7 +205,7 @@ def should_ignore(
         global_allows, global_pos = _split_patterns(config_ignore_patterns)
 
         # Matching helper using fnmatch against rel, full path, and basename
-        def _match_any(patterns: List[str]) -> bool:
+        def _match_any(patterns: list[str]) -> bool:
             for pat in patterns:
                 try:
                     if rel:
@@ -238,7 +237,7 @@ def should_ignore(
 
         # Legacy heuristics: ignore dirs, extensions, hidden files, timestamp tokens, backup names
         skip_dirs = set(ignore_dirs or [])
-        skip_exts = set((ignore_extensions or []))
+        skip_exts = set(ignore_extensions or [])
 
         # Check if any parent directory matches configured ignore dirs
         for parent in path.parents:

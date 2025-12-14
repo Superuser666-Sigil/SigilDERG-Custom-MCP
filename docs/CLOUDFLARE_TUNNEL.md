@@ -211,7 +211,7 @@ Update your ChatGPT GPT Action with:
   "openapi": "3.1.0",
   "info": {
     "title": "Sigil MCP Server",
-    "version": "1.0.0"
+    "version": "1.0.1"
   },
   "servers": [
     {

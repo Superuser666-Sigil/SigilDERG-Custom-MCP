@@ -16,11 +16,11 @@ Provides IDE-like code search and navigation capabilities via MCP, including:
 - OAuth 2.0 authentication for remote access
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __author__ = "Sigil DERG"
 
-from sigil_mcp.indexer import SigilIndex, Symbol, SearchResult
 from sigil_mcp.config import get_config
+from sigil_mcp.indexer import SearchResult, SigilIndex, Symbol
 
 __all__ = [
     "SigilIndex",

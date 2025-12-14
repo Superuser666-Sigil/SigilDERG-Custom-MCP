@@ -8,16 +8,16 @@ Configuration loader for Sigil MCP Server.
 Loads configuration from config.json file with fallback to environment variables.
 """
 
-import os
 import json
-from pathlib import Path
-from typing import Dict, Any, Optional
 import logging
+import os
+from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_csv_list(raw_value: Optional[str]) -> list[str]:
+def _parse_csv_list(raw_value: str | None) -> list[str]:
     """Parse comma-separated environment variable values into a list."""
     if not raw_value:
         return []
@@ -26,25 +26,25 @@ def _parse_csv_list(raw_value: Optional[str]) -> list[str]:
 
 class Config:
     """Configuration manager for Sigil MCP Server."""
-    
-    def __init__(self, config_path: Optional[Path] = None):
+
+    def __init__(self, config_path: Path | None = None):
         """
         Initialize configuration.
-        
+
         Args:
             config_path: Path to config.json file. If None, searches in:
                 1. ./config.json (current directory)
                 2. ~/.sigil_mcp_server/config.json
                 3. Falls back to environment variables
         """
-        self.config_data: Dict[str, Any] = {}
-        self._config_path: Optional[Path] = None
+        self.config_data: dict[str, Any] = {}
+        self._config_path: Path | None = None
         self._load_config(config_path)
         self._mode = self._resolve_mode()
         self._apply_mode_defaults()
         self._validate_embeddings_dimension()
         self._warn_if_insecure_prod()
-    
+
     def _resolve_mode(self) -> str:
         """Resolve deployment mode from env or config with a safe default."""
 
@@ -147,7 +147,7 @@ class Config:
                 "all client IPs are permitted."
             )
 
-    def _load_config(self, config_path: Optional[Path] = None):
+    def _load_config(self, config_path: Path | None = None):
         """Load configuration from file or environment."""
         # Try specified path first
         if config_path:
@@ -162,21 +162,21 @@ class Config:
                 )
                 self._load_from_env()
                 return
-        
+
         # Try current directory
         local_config = Path("config.json")
         if local_config.exists():
             self._load_from_file(local_config)
             self._config_path = local_config
             return
-        
+
         # Try user config directory
         user_config = Path.home() / ".sigil_mcp_server" / "config.json"
         if user_config.exists():
             self._load_from_file(user_config)
             self._config_path = user_config
             return
-        
+
         # Fall back to environment variables
         logger.info("No config.json found, using environment variables")
         self._load_from_env()
@@ -208,18 +208,18 @@ class Config:
             )
 
         self.config_data.setdefault("embeddings", {})["dimension"] = dimension
-    
+
     def _load_from_file(self, path: Path):
         """Load configuration from JSON file."""
         try:
-            with open(path, 'r') as f:
+            with open(path) as f:
                 self.config_data = json.load(f)
             logger.info(f"Loaded configuration from {path}")
             self._config_path = path
         except Exception as e:
             logger.error(f"Error loading config from {path}: {e}")
             self._load_from_env()
-    
+
     def _load_from_env(self):
         """Load configuration from environment variables (backward compatibility)."""
         self.config_data = {
@@ -291,7 +291,7 @@ class Config:
             "admin": self._load_admin_from_env(),
         }
 
-    def _load_admin_from_env(self) -> Dict[str, Any]:
+    def _load_admin_from_env(self) -> dict[str, Any]:
         """Load admin config from environment variables."""
         allowed_ips_raw = os.getenv("SIGIL_MCP_ADMIN_ALLOWED_IPS", "127.0.0.1,::1")
         return {
@@ -305,7 +305,7 @@ class Config:
             "allowed_ips": _parse_csv_list(allowed_ips_raw),
         }
 
-    def _load_mcp_server_from_env(self) -> Dict[str, Any]:
+    def _load_mcp_server_from_env(self) -> dict[str, Any]:
         """Load MCP transport settings from environment variables."""
         return {
             "sse_path": os.getenv("SIGIL_MCP_SSE_PATH", "/mcp/sse"),
@@ -315,7 +315,7 @@ class Config:
             "token": os.getenv("SIGIL_MCP_SERVER_TOKEN"),
         }
 
-    def _load_admin_ui_from_env(self) -> Dict[str, Any]:
+    def _load_admin_ui_from_env(self) -> dict[str, Any]:
         """Load admin UI autostart settings from environment variables."""
         args_raw = os.getenv("SIGIL_ADMIN_UI_ARGS", "")
         args = [a for a in args_raw.split() if a] if args_raw else []
@@ -342,22 +342,22 @@ class Config:
         except Exception as exc:
             logger.warning("Failed to parse SIGIL_MCP_SERVERS: %s", exc)
         return []
-    
-    def _parse_repo_map(self, repo_map_str: str) -> Dict[str, str]:
+
+    def _parse_repo_map(self, repo_map_str: str) -> dict[str, str]:
         """Parse SIGIL_REPO_MAP environment variable format."""
         repos = {}
         if not repo_map_str:
             return repos
-        
+
         for entry in repo_map_str.split(";"):
             entry = entry.strip()
             if not entry or ":" not in entry:
                 continue
             name, path = entry.split(":", 1)
             repos[name.strip()] = path.strip()
-        
+
         return repos
-    
+
     # Getters for easy access
     def get(self, key: str, default: Any = None) -> Any:
         """Get configuration value by dot-notation key."""
@@ -369,19 +369,19 @@ class Config:
             else:
                 return default
         return value if value is not None else default
-    
+
     @property
     def server_name(self) -> str:
         return self.get("server.name", "sigil_repos")
-    
+
     @property
     def server_host(self) -> str:
         return self.get("server.host", "127.0.0.1")
-    
+
     @property
     def server_port(self) -> int:
         return self.get("server.port", 8000)
-    
+
     @property
     def log_level(self) -> str:
         return self.get("server.log_level", "INFO")
@@ -393,9 +393,9 @@ class Config:
     @property
     def header_logging_enabled(self) -> bool:
         return bool(self.get("server.header_logging_enabled", True))
-    
+
     @property
-    def log_file(self) -> Optional[str]:
+    def log_file(self) -> str | None:
         """Get log file path from config or environment."""
         # Check environment variable first
         env_log_file = os.getenv("SIGIL_MCP_LOG_FILE")
@@ -403,7 +403,7 @@ class Config:
             return env_log_file
         # Then check config
         return self.get("server.log_file") or None
-    
+
     @property
     def allowed_hosts(self) -> list[str]:
         """Get allowed Host header values for DNS rebinding protection."""
@@ -430,7 +430,7 @@ class Config:
         return bool(self.get("mcp_server.require_token", False))
 
     @property
-    def mcp_server_token(self) -> Optional[str]:
+    def mcp_server_token(self) -> str | None:
         """Bearer token required for MCP transports when enabled."""
         token = self.get("mcp_server.token")
         if not token:
@@ -472,26 +472,26 @@ class Config:
     @property
     def mode(self) -> str:
         return self._mode
-    
+
     @property
     def auth_enabled(self) -> bool:
         default = False if self._mode == "dev" else True
         return bool(self.get("authentication.enabled", default))
-    
+
     @property
     def oauth_enabled(self) -> bool:
         default = True
         return bool(self.get("authentication.oauth_enabled", default))
-    
+
     @property
     def allow_local_bypass(self) -> bool:
         default = True if self._mode == "dev" else False
         return bool(self.get("authentication.allow_local_bypass", default))
-    
+
     @property
     def allowed_ips(self) -> list:
         return self.get("authentication.allowed_ips", [])
-    
+
     @property
     def oauth_redirect_allow_list(self) -> list[str]:
         default_allow_list = [
@@ -506,17 +506,17 @@ class Config:
         if isinstance(value, str):
             value = [value]
         return [str(item).strip() for item in value if str(item).strip()]
-    
+
     @property
     def watch_enabled(self) -> bool:
         """Get whether file watching is enabled."""
         return self.get("watch.enabled", True)
-    
+
     @property
     def watch_debounce_seconds(self) -> float:
         """Get file watch debounce time in seconds."""
         return self.get("watch.debounce_seconds", 2.0)
-    
+
     @property
     def watch_ignore_dirs(self) -> list[str]:
         """Get directories to ignore when watching."""
@@ -541,7 +541,7 @@ class Config:
             # Coverage/testing
             "coverage", ".coverage", ".cache",
         ])
-    
+
     @property
     def watch_ignore_extensions(self) -> list[str]:
         """Get file extensions to ignore when watching."""
@@ -567,19 +567,19 @@ class Config:
             # OS files
             ".DS_Store",
         ])
-    
+
     @property
     def embeddings_enabled(self) -> bool:
         """Get whether embeddings are enabled."""
         return self.get("embeddings.enabled", False)
-    
+
     @property
-    def embeddings_provider(self) -> Optional[str]:
+    def embeddings_provider(self) -> str | None:
         """Get embedding provider name."""
         return self.get("embeddings.provider", "llamacpp")
 
     @property
-    def embeddings_model(self) -> Optional[str]:
+    def embeddings_model(self) -> str | None:
         """Get embedding model name or path."""
         return self.get(
             "embeddings.model",
@@ -597,21 +597,21 @@ class Config:
                 "Invalid embeddings.dimension '%s', defaulting to 768", value
             )
             return 768
-    
+
     @property
-    def embeddings_cache_dir(self) -> Optional[str]:
+    def embeddings_cache_dir(self) -> str | None:
         """Get embeddings cache directory."""
         return self.get("embeddings.cache_dir")
-    
+
     @property
-    def embeddings_api_key(self) -> Optional[str]:
+    def embeddings_api_key(self) -> str | None:
         """Get embeddings API key (for OpenAI)."""
         api_key = self.get("embeddings.api_key")
         if not api_key:
             # Fall back to OPENAI_API_KEY environment variable
             api_key = os.getenv("OPENAI_API_KEY")
         return api_key
-    
+
     @property
     def embeddings_kwargs(self) -> dict:
         """Get additional embeddings provider kwargs."""
@@ -720,13 +720,13 @@ class Config:
                 "Invalid embeddings.n_gpu_layers '%s', defaulting to 999", raw
             )
             return 999
-    
+
     @property
-    def repositories(self) -> Dict[str, str]:
+    def repositories(self) -> dict[str, str]:
         return self.get("repositories", {})
 
     @property
-    def repositories_config(self) -> Dict[str, dict]:
+    def repositories_config(self) -> dict[str, dict]:
         """Return repositories configured with optional per-repo options.
 
         Accepts two forms in config.json:
@@ -736,7 +736,7 @@ class Config:
         The returned mapping is: name -> {"path": str, "respect_gitignore": bool}
         """
         raw = self.get("repositories", {}) or {}
-        parsed: Dict[str, dict] = {}
+        parsed: dict[str, dict] = {}
         for name, value in raw.items():
             try:
                 if isinstance(value, str):
@@ -756,7 +756,7 @@ class Config:
             except Exception:
                 continue
         return parsed
-    
+
     @property
     def index_path(self) -> Path:
         path_str = self.get("index.path", "~/.sigil_index")
@@ -845,7 +845,7 @@ class Config:
     def index_allow_vector_schema_overwrite(self) -> bool:
         """Allow overwriting the vector table on embedding dimension mismatch."""
         return bool(self.get("index.allow_vector_schema_overwrite", True))
-    
+
     # --- Admin API configuration ---
 
     @property
@@ -861,7 +861,7 @@ class Config:
         return int(self.get("admin.port", 8765))
 
     @property
-    def admin_api_key(self) -> Optional[str]:
+    def admin_api_key(self) -> str | None:
         return self.get("admin.api_key")
 
     @property
@@ -875,8 +875,8 @@ class Config:
 
 
 # Global config instance
-_config: Optional[Config] = None
-_config_env_signature: Optional[tuple[str, ...]] = None
+_config: Config | None = None
+_config_env_signature: tuple[str, ...] | None = None
 _ENV_SENSITIVE_KEYS = [
     "SIGIL_MCP_MODE",
     "SIGIL_INDEX_PATH",
@@ -913,7 +913,7 @@ def get_config() -> Config:
     return _config
 
 
-def load_config(config_path: Optional[Path] = None):
+def load_config(config_path: Path | None = None):
     """Load configuration from specified path."""
     global _config, _config_env_signature
     _config = Config(config_path)
@@ -921,7 +921,7 @@ def load_config(config_path: Optional[Path] = None):
     return _config
 
 
-def save_config(cfg: Config, target_path: Optional[Path] = None) -> Path:
+def save_config(cfg: Config, target_path: Path | None = None) -> Path:
     """Persist the given Config object's data to a JSON file.
 
     By default, this will write to ./config.json if it exists, otherwise
