@@ -40,6 +40,7 @@ from .ignore_utils import (
 # Trigram store requires rocksdict (RocksDB-backed Python bindings).
 try:
     from rocksdict import Rdict  # type: ignore
+
     ROCKSDICT_AVAILABLE = True
 except Exception:
     Rdict = None  # type: ignore
@@ -48,6 +49,7 @@ except Exception:
 try:
     import lancedb  # type: ignore
     import pyarrow as pa  # type: ignore
+
     LANCEDB_AVAILABLE = True
 except ImportError:
     lancedb = None  # type: ignore
@@ -60,6 +62,7 @@ from .schema import get_code_chunk_model
 # Optional tokenizer support
 try:
     import tiktoken  # type: ignore
+
     TIKTOKEN_AVAILABLE = True
 except Exception:
     tiktoken = None  # type: ignore
@@ -83,8 +86,8 @@ DEFAULT_EMBED_CHUNK_LINES = 80
 DEFAULT_EMBED_CHUNK_OVERLAP = 20
 
 # Files/extensions/names we should never send to the embedder by default
-EMBED_SKIP_EXTS = {'.ipynb', '.jsonl'}
-EMBED_SKIP_NAMES = {'package-lock.json', 'Cargo.lock', '.coverage'}
+EMBED_SKIP_EXTS = {".ipynb", ".jsonl"}
+EMBED_SKIP_NAMES = {"package-lock.json", "Cargo.lock", ".coverage"}
 DEFAULT_EMBED_MAX_CHARS = 4000
 DEFAULT_EMBED_MAX_BYTES = 1_000_000
 EMBED_SKIP_SUFFIXES = {".jsonl", ".log"}
@@ -101,24 +104,76 @@ EMBED_SKIP_FILENAMES = {
 EMBED_SKIP_DIRS = {"coverage", "htmlcov", "test_logs", "output", "outputs", "backups"}
 # File-type heuristics for semantic search weighting
 CODE_LIKE_EXTS = {
-    ".py", ".pyw", ".pyi", ".pyx",
-    ".js", ".jsx", ".ts", ".tsx",
-    ".mjs", ".cjs",
-    ".rs", ".go", ".java", ".kt", ".kts",
-    ".cs", ".cpp", ".cxx", ".cc", ".c", ".h", ".hpp",
-    ".m", ".mm", ".swift", ".scala",
-    ".rb", ".php", ".pl", ".pm",
-    ".sql", ".psql",
-    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".psm1",
-    ".lua", ".hs", ".ml", ".ex", ".exs", ".dart", ".groovy",
-    ".r", ".jl",
-    ".jsonnet", ".cue",
+    ".py",
+    ".pyw",
+    ".pyi",
+    ".pyx",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".mjs",
+    ".cjs",
+    ".rs",
+    ".go",
+    ".java",
+    ".kt",
+    ".kts",
+    ".cs",
+    ".cpp",
+    ".cxx",
+    ".cc",
+    ".c",
+    ".h",
+    ".hpp",
+    ".m",
+    ".mm",
+    ".swift",
+    ".scala",
+    ".rb",
+    ".php",
+    ".pl",
+    ".pm",
+    ".sql",
+    ".psql",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".fish",
+    ".ps1",
+    ".psm1",
+    ".lua",
+    ".hs",
+    ".ml",
+    ".ex",
+    ".exs",
+    ".dart",
+    ".groovy",
+    ".r",
+    ".jl",
+    ".jsonnet",
+    ".cue",
 }
 DOC_LIKE_EXTS = {
-    ".md", ".mdx", ".rst", ".adoc", ".txt",
-    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
-    ".csv", ".tsv", ".log",
-    ".pdf", ".doc", ".docx", ".rtf",
+    ".md",
+    ".mdx",
+    ".rst",
+    ".adoc",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".csv",
+    ".tsv",
+    ".log",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".rtf",
 }
 CONFIG_LIKE_EXTS = {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf"}
 DATA_LIKE_EXTS = {".csv", ".tsv", ".jsonl", ".ndjson", ".parquet"}
@@ -377,7 +432,9 @@ class InMemoryLanceDB:
     def open_table(self, name: str) -> InMemoryLanceTable:
         return self.tables[name]
 
-    def create_table(self, name: str, schema=None, mode: str | None = None, **_kwargs) -> InMemoryLanceTable:
+    def create_table(
+        self, name: str, schema=None, mode: str | None = None, **_kwargs
+    ) -> InMemoryLanceTable:
         if mode == "overwrite" or name not in self.tables:
             dimension = self.default_dimension
             if schema is not None and hasattr(schema, "__name__"):
@@ -397,6 +454,7 @@ _STUB_LANCEDB_REGISTRY: dict[str, InMemoryLanceDB] = {}
 @dataclass
 class Symbol:
     """Represents a code symbol (function, class, variable, etc.)."""
+
     name: str
     kind: str  # function, class, method, variable, etc.
     file_path: str
@@ -408,6 +466,7 @@ class Symbol:
 @dataclass
 class SearchResult:
     """Represents a search result."""
+
     repo: str
     path: str
     line: int
@@ -420,10 +479,7 @@ class SigilIndex:
     """Hybrid index supporting both text and symbol search."""
 
     def __init__(
-        self,
-        index_path: Path,
-        embed_fn: EmbeddingFn | None = None,
-        embed_model: str = "local"
+        self, index_path: Path, embed_fn: EmbeddingFn | None = None, embed_model: str = "local"
     ):
         self.index_path = index_path
 
@@ -556,14 +612,12 @@ class SigilIndex:
         self.repos_db = sqlite3.connect(
             self.index_path / "repos.db",
             check_same_thread=False,
-            timeout=60.0  # 60 second timeout for database locks
+            timeout=60.0,  # 60 second timeout for database locks
         )
         # Enable WAL + sane defaults for concurrent readers / writers
         self.repos_db.execute("PRAGMA journal_mode=WAL;")
         self.repos_db.execute("PRAGMA synchronous=NORMAL;")
-        self.repos_db.execute(
-            "PRAGMA busy_timeout=60000;"
-        )  # 60 seconds in milliseconds
+        self.repos_db.execute("PRAGMA busy_timeout=60000;")  # 60 seconds in milliseconds
 
         # Initialize trigram store (rocksdict required)
         if not ROCKSDICT_AVAILABLE:
@@ -594,7 +648,7 @@ class SigilIndex:
         """
         fn = getattr(self, "_wrapped_embed_fn", None) or getattr(self, "embed_fn", None)
         if fn is None:
-            return np.zeros((0, self.embedding_dimension), dtype='float32')
+            return np.zeros((0, self.embedding_dimension), dtype="float32")
         try:
             if self.embedding_provider == "llamacpp":
                 with self._embed_lock:
@@ -602,7 +656,7 @@ class SigilIndex:
             return fn(list(texts))
         except Exception:
             # Fail-open: return empty array on error
-            return np.zeros((0, self.embedding_dimension), dtype='float32')
+            return np.zeros((0, self.embedding_dimension), dtype="float32")
 
     def _auto_initialize_embed_fn_from_config(self, config) -> None:
         """Initialize an embedding function from config when none is provided."""
@@ -719,7 +773,9 @@ class SigilIndex:
                 try:
                     repo_db = lancedb.connect(str(path)) if lancedb else None
                 except Exception:
-                    logger.exception("Failed to connect to LanceDB at %s for repo %s", path, repo_name)
+                    logger.exception(
+                        "Failed to connect to LanceDB at %s for repo %s", path, repo_name
+                    )
                     repo_db = None
 
             repo_table = None
@@ -733,9 +789,13 @@ class SigilIndex:
                         target_table = "code_chunks"
                         repo_table = repo_db.open_table(target_table)
                     else:
-                        repo_table = repo_db.create_table(target_table, schema=get_code_chunk_model(self.embedding_dimension))
+                        repo_table = repo_db.create_table(
+                            target_table, schema=get_code_chunk_model(self.embedding_dimension)
+                        )
                 except Exception:
-                    logger.exception("Failed to open/create vector table for repo %s at %s", repo_name, path)
+                    logger.exception(
+                        "Failed to open/create vector table for repo %s at %s", repo_name, path
+                    )
                     repo_table = None
 
             self._repo_lance_dbs[repo_name] = repo_db
@@ -774,6 +834,7 @@ class SigilIndex:
         This reduces padding waste by grouping similarly-sized texts together
         before calling the underlying provider.
         """
+
         def wrapped(texts: Sequence[str]) -> np.ndarray:
             # Use tokenizer-based token counting when available for accurate bucketing
             thresholds = list(self._get_bucket_thresholds())
@@ -826,9 +887,9 @@ class SigilIndex:
                     process_bucket(bucket)
 
             if results:
-                return np.asarray(results, dtype='float32')
+                return np.asarray(results, dtype="float32")
             # default empty array with correct dimensionality
-            return np.zeros((0, self.embedding_dimension), dtype='float32')
+            return np.zeros((0, self.embedding_dimension), dtype="float32")
 
         return wrapped
 
@@ -866,16 +927,18 @@ class SigilIndex:
         try:
             p0 = Path(p)
             # any suffix equals .jsonl
-            if any(s.lower() == '.jsonl' for s in p0.suffixes):
+            if any(s.lower() == ".jsonl" for s in p0.suffixes):
                 return True
             s = str(p).lower()
-            if s.endswith('.jsonl'):
+            if s.endswith(".jsonl"):
                 return True
         except Exception:
             pass
         return False
 
-    def _enforce_chunk_size_limits(self, chunks: list[tuple[int, int, int, str]]) -> list[tuple[int, int, int, str]]:
+    def _enforce_chunk_size_limits(
+        self, chunks: list[tuple[int, int, int, str]]
+    ) -> list[tuple[int, int, int, str]]:
         """Ensure chunks are not excessively large. Replace any oversized chunk with hard-wrapped windows.
 
         Returns a new list of chunks with updated chunk indices and line spans (line numbers approximate when created from chars).
@@ -888,7 +951,7 @@ class SigilIndex:
 
         new_chunks: list[tuple[int, int, int, str]] = []
         next_idx = 0
-        for (_idx, start_line, end_line, chunk_text) in chunks:
+        for _idx, start_line, end_line, chunk_text in chunks:
             if not chunk_text:
                 new_chunks.append((next_idx, start_line, end_line, chunk_text))
                 next_idx += 1
@@ -916,7 +979,7 @@ class SigilIndex:
                 i = 0
                 while i < len(chunk_text):
                     win = chunk_text[i : i + window_chars]
-                    win_lines = win.count('\n') + 1
+                    win_lines = win.count("\n") + 1
                     new_chunks.append((next_idx, start_line, start_line + win_lines - 1, win))
                     next_idx += 1
                     start_line += win_lines
@@ -929,7 +992,7 @@ class SigilIndex:
                 )
                 windows = self._hard_wrap(chunk_text)
                 for win in windows:
-                    win_lines = win.count('\n') + 1
+                    win_lines = win.count("\n") + 1
                     new_chunks.append((next_idx, start_line, start_line + win_lines - 1, win))
                     next_idx += 1
                     start_line += win_lines
@@ -970,7 +1033,12 @@ class SigilIndex:
 
         # Fields to prioritize when building a canonical text block
         top_fields = [
-            "task", "prompt", "statement", "description", "text", "content",
+            "task",
+            "prompt",
+            "statement",
+            "description",
+            "text",
+            "content",
         ]
         sig_fields = ["signature", "sig", "signature_text"]
         docstring_fields = ["docstring", "doc", "explanation", "reasoning"]
@@ -1034,7 +1102,11 @@ class SigilIndex:
                 # Append solution as an optional section separated by a marker based on config
                 # Decide whether to append solution: caller may provide `include_solution`.
                 if sol:
-                    use_solution = include_solution if include_solution is not None else get_config().embeddings_include_solution
+                    use_solution = (
+                        include_solution
+                        if include_solution is not None
+                        else get_config().embeddings_include_solution
+                    )
                 else:
                     use_solution = False
 
@@ -1049,7 +1121,7 @@ class SigilIndex:
             else:
                 # As a last resort, append compact JSON without structural noise
                 try:
-                    compact = json.dumps(obj, separators=(',', ':'))
+                    compact = json.dumps(obj, separators=(",", ":"))
                 except Exception:
                     compact = str(obj)
                 out.append(compact)
@@ -1171,7 +1243,13 @@ class SigilIndex:
                         logger.debug("Failed to count rows for repo %s", repo_name, exc_info=True)
                         count = -1
                     path = self._get_repo_lance_path(repo_name)
-                    logger.info("Vector index ready (%s) for repo %s: %s indexed chunks at %s", context, repo_name, count, path)
+                    logger.info(
+                        "Vector index ready (%s) for repo %s: %s indexed chunks at %s",
+                        context,
+                        repo_name,
+                        count,
+                        path,
+                    )
                 return
 
             if self.vectors is None:
@@ -1236,11 +1314,7 @@ class SigilIndex:
             logger.exception("Failed to sample repo_ids from vector table")
             return set()
 
-        return {
-            str(r.get("repo_id"))
-            for r in rows
-            if r.get("repo_id") is not None
-        }
+        return {str(r.get("repo_id")) for r in rows if r.get("repo_id") is not None}
 
     def _check_vector_repo_alignment(self) -> None:
         """
@@ -1275,16 +1349,19 @@ class SigilIndex:
     def _init_schema(self):
         """Initialize database schema."""
         # Repos and documents
-        self.repos_db.execute("""
+        self.repos_db.execute(
+            """
             CREATE TABLE IF NOT EXISTS repos (
                 id INTEGER PRIMARY KEY,
                 name TEXT UNIQUE,
                 path TEXT,
                 indexed_at TEXT
             )
-        """)
+        """
+        )
 
-        self.repos_db.execute("""
+        self.repos_db.execute(
+            """
             CREATE TABLE IF NOT EXISTS documents (
                 id INTEGER PRIMARY KEY,
                 repo_id INTEGER,
@@ -1294,21 +1371,27 @@ class SigilIndex:
                 language TEXT,
                 FOREIGN KEY(repo_id) REFERENCES repos(id)
             )
-        """)
+        """
+        )
 
-        self.repos_db.execute("""
+        self.repos_db.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_doc_path
             ON documents(repo_id, path)
-        """)
+        """
+        )
 
         # Ensure blob_sha is indexed (but not unique) for reuse/lookups
-        self.repos_db.execute("""
+        self.repos_db.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_doc_blob_sha
             ON documents(blob_sha)
-        """)
+        """
+        )
 
         # Symbol index for IDE-like features
-        self.repos_db.execute("""
+        self.repos_db.execute(
+            """
             CREATE TABLE IF NOT EXISTS symbols (
                 id INTEGER PRIMARY KEY,
                 doc_id INTEGER,
@@ -1320,17 +1403,22 @@ class SigilIndex:
                 scope TEXT,
                 FOREIGN KEY(doc_id) REFERENCES documents(id)
             )
-        """)
+        """
+        )
 
-        self.repos_db.execute("""
+        self.repos_db.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_symbol_name
             ON symbols(name)
-        """)
+        """
+        )
 
-        self.repos_db.execute("""
+        self.repos_db.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_symbol_kind
             ON symbols(kind)
-        """)
+        """
+        )
 
         # Remove legacy embeddings table now that vectors are stored in LanceDB
         try:
@@ -1347,9 +1435,7 @@ class SigilIndex:
             cols = {row[1] for row in cur.fetchall()}
             if "vector_indexed_at" not in cols:
                 try:
-                    self.repos_db.execute(
-                        "ALTER TABLE documents ADD COLUMN vector_indexed_at TEXT"
-                    )
+                    self.repos_db.execute("ALTER TABLE documents ADD COLUMN vector_indexed_at TEXT")
                 except Exception:
                     # If ALTER fails for any reason, continue; column is non-critical
                     logger.debug(
@@ -1388,7 +1474,9 @@ class SigilIndex:
         try:
             with self._db_lock:
                 cur = self.repos_db.cursor()
-                cur.execute("SELECT embeddings_include_solution FROM repos WHERE id = ?", (repo_id,))
+                cur.execute(
+                    "SELECT embeddings_include_solution FROM repos WHERE id = ?", (repo_id,)
+                )
                 row = cur.fetchone()
             if not row:
                 return None
@@ -1437,8 +1525,7 @@ class SigilIndex:
             with self._db_lock:
                 cursor = self.repos_db.cursor()
                 cursor.execute(
-                    "INSERT OR IGNORE INTO repos (name, path, indexed_at) "
-                    "VALUES (?, ?, ?)",
+                    "INSERT OR IGNORE INTO repos (name, path, indexed_at) " "VALUES (?, ?, ?)",
                     (repo_name, str(repo_path), datetime.now().isoformat()),
                 )
                 cursor.execute("SELECT id FROM repos WHERE name = ?", (repo_name,))
@@ -1446,26 +1533,41 @@ class SigilIndex:
 
             # Determine language
             file_extensions = {
-                '.py': 'python', '.rs': 'rust', '.js': 'javascript',
-                '.ts': 'typescript', '.java': 'java', '.go': 'go',
-                '.cpp': 'cpp', '.c': 'c', '.h': 'c', '.hpp': 'cpp',
-                '.rb': 'ruby', '.php': 'php', '.cs': 'csharp',
-                '.sh': 'shell', '.toml': 'toml', '.yaml': 'yaml',
-                '.yml': 'yaml', '.json': 'json', '.md': 'markdown',
+                ".py": "python",
+                ".rs": "rust",
+                ".js": "javascript",
+                ".ts": "typescript",
+                ".java": "java",
+                ".go": "go",
+                ".cpp": "cpp",
+                ".c": "c",
+                ".h": "c",
+                ".hpp": "cpp",
+                ".rb": "ruby",
+                ".php": "php",
+                ".cs": "csharp",
+                ".sh": "shell",
+                ".toml": "toml",
+                ".yaml": "yaml",
+                ".yml": "yaml",
+                ".json": "json",
+                ".md": "markdown",
             }
             ext = file_path.suffix.lower()
-            language = file_extensions.get(ext, 'unknown')
+            language = file_extensions.get(ext, "unknown")
 
             # Index the specific file (metadata + symbols)
-            result = self._index_file(
-                repo_id, repo_name, repo_path, file_path, language
-            )
+            result = self._index_file(repo_id, repo_name, repo_path, file_path, language)
             if not result:
                 with self._db_lock:
                     try:
                         self.repos_db.commit()
                     except Exception:
-                        logger.debug("Failed to commit after no-op index_file for %s", file_path, exc_info=True)
+                        logger.debug(
+                            "Failed to commit after no-op index_file for %s",
+                            file_path,
+                            exc_info=True,
+                        )
                 return False
 
             res = cast(dict, result)
@@ -1480,7 +1582,9 @@ class SigilIndex:
                 # Special-case JSONL: chunk by record (per-line), extracting useful fields
                 if self._is_jsonl_path(file_path):
                     include_sol = self._get_repo_include_solution(repo_id)
-                    records = self._parse_jsonl_records(res.get("text", ""), include_solution=include_sol)
+                    records = self._parse_jsonl_records(
+                        res.get("text", ""), include_solution=include_sol
+                    )
                     chunks = [(i, 1, 1, r) for i, r in enumerate(records)] if records else []
                 else:
                     chunks = self._chunk_text(res.get("text", ""))
@@ -1499,7 +1603,11 @@ class SigilIndex:
                                 )
                                 self.repos_db.commit()
                             except Exception:
-                                logger.debug("Failed to record vector_index_error for doc %s", doc_id, exc_info=True)
+                                logger.debug(
+                                    "Failed to record vector_index_error for doc %s",
+                                    doc_id,
+                                    exc_info=True,
+                                )
                         embeddings = None
             else:
                 # If embedding was skipped by policy, mark it explicitly.
@@ -1512,7 +1620,11 @@ class SigilIndex:
                             )
                             self.repos_db.commit()
                         except Exception:
-                            logger.debug("Failed to record embed_skipped flag for doc %s", doc_id, exc_info=True)
+                            logger.debug(
+                                "Failed to record embed_skipped flag for doc %s",
+                                doc_id,
+                                exc_info=True,
+                            )
                 else:
                     # Vector store or embed function not available — record reason
                     reason = None
@@ -1529,7 +1641,11 @@ class SigilIndex:
                                 )
                                 self.repos_db.commit()
                             except Exception:
-                                logger.debug("Failed to record vector_index_error for doc %s", doc_id, exc_info=True)
+                                logger.debug(
+                                    "Failed to record vector_index_error for doc %s",
+                                    doc_id,
+                                    exc_info=True,
+                                )
 
             if embeddings is not None and chunks:
                 self._index_file_vectors(
@@ -1562,7 +1678,7 @@ class SigilIndex:
             cursor = self.repos_db.cursor()
             cursor.execute(
                 "SELECT id, blob_sha FROM documents WHERE repo_id = ? AND path = ?",
-                (repo_id, rel_path)
+                (repo_id, rel_path),
             )
             row = cursor.fetchone()
         if not row:
@@ -1580,7 +1696,7 @@ class SigilIndex:
             )
             return
 
-        text = content.decode('utf-8', errors='replace').lower()
+        text = content.decode("utf-8", errors="replace").lower()
         new_trigrams = self._extract_trigrams(text)
         prior_trigrams = self._load_doc_trigrams(doc_id)
         logger.debug(
@@ -1599,10 +1715,7 @@ class SigilIndex:
         self._store_doc_trigrams(doc_id, new_trigrams)
 
     def index_repository(
-        self,
-        repo_name: str,
-        repo_path: Path,
-        force: bool = False
+        self, repo_name: str, repo_path: Path, force: bool = False
     ) -> dict[str, int]:
         """
         Index a repository for both text and symbol search.
@@ -1622,7 +1735,7 @@ class SigilIndex:
             "files_indexed": 0,
             "symbols_extracted": 0,
             "trigrams_built": 0,
-            "bytes_indexed": 0
+            "bytes_indexed": 0,
         }
 
         # Register or update repo
@@ -1635,8 +1748,7 @@ class SigilIndex:
                 ON CONFLICT(name) DO UPDATE SET
                     path=excluded.path,
                     indexed_at=excluded.indexed_at
-                """
-                ,
+                """,
                 (repo_name, str(repo_path), datetime.now().isoformat()),
             )
             # Preserve stable repo_id (INSERT ... ON CONFLICT does not replace row)
@@ -1661,9 +1773,7 @@ class SigilIndex:
                         f"DELETE FROM symbols WHERE doc_id IN ({placeholders})",
                         tuple(old_doc_ids),
                     )
-                    cursor.execute(
-                        "DELETE FROM documents WHERE repo_id = ?", (repo_id,)
-                    )
+                    cursor.execute("DELETE FROM documents WHERE repo_id = ?", (repo_id,))
                     # Remove only this repo's postings from trigram index
                     self._remove_trigrams_for_doc_ids(old_doc_ids)
                 else:
@@ -1674,12 +1784,25 @@ class SigilIndex:
 
         # Index all files (parallel CPU prep; DB writes stay serialized by locks in _index_file)
         file_extensions = {
-            '.py': 'python', '.rs': 'rust', '.js': 'javascript',
-            '.ts': 'typescript', '.java': 'java', '.go': 'go',
-            '.cpp': 'cpp', '.c': 'c', '.h': 'c', '.hpp': 'cpp',
-            '.rb': 'ruby', '.php': 'php', '.cs': 'csharp',
-            '.sh': 'shell', '.toml': 'toml', '.yaml': 'yaml',
-            '.yml': 'yaml', '.json': 'json', '.md': 'markdown',
+            ".py": "python",
+            ".rs": "rust",
+            ".js": "javascript",
+            ".ts": "typescript",
+            ".java": "java",
+            ".go": "go",
+            ".cpp": "cpp",
+            ".c": "c",
+            ".h": "c",
+            ".hpp": "cpp",
+            ".rb": "ruby",
+            ".php": "php",
+            ".cs": "csharp",
+            ".sh": "shell",
+            ".toml": "toml",
+            ".yaml": "yaml",
+            ".yml": "yaml",
+            ".json": "json",
+            ".md": "markdown",
         }
 
         file_paths: list[Path] = []
@@ -1701,8 +1824,13 @@ class SigilIndex:
                 continue
             file_paths.append(file_path)
 
-        logger.info("Index scan summary: scanned=%s skipped=%s included=%s sample_skipped=%s",
-                    total_scanned, skipped, len(file_paths), skipped_examples)
+        logger.info(
+            "Index scan summary: scanned=%s skipped=%s included=%s sample_skipped=%s",
+            total_scanned,
+            skipped,
+            len(file_paths),
+            skipped_examples,
+        )
         # Report top-level directory breakdown to help tune ignore patterns
         try:
             by_top: dict[str, int] = {}
@@ -1729,15 +1857,15 @@ class SigilIndex:
         else:
             max_workers = max(1, (os.cpu_count() or 2) - 1)
 
-        logger.info("Indexing %s files for %s with %s workers", len(file_paths), repo_name, max_workers)
+        logger.info(
+            "Indexing %s files for %s with %s workers", len(file_paths), repo_name, max_workers
+        )
 
         if max_workers == 1 or len(file_paths) <= 1:
             for file_path in file_paths:
                 ext = file_path.suffix.lower()
-                language = file_extensions.get(ext, 'unknown')
-                file_stats = self._index_file(
-                    repo_id, repo_name, repo_path, file_path, language
-                )
+                language = file_extensions.get(ext, "unknown")
+                file_stats = self._index_file(repo_id, repo_name, repo_path, file_path, language)
                 if file_stats:
                     stats["files_indexed"] += 1
                     stats["symbols_extracted"] += cast(int, file_stats.get("symbols", 0))
@@ -1747,7 +1875,7 @@ class SigilIndex:
                 futures = []
                 for file_path in file_paths:
                     ext = file_path.suffix.lower()
-                    language = file_extensions.get(ext, 'unknown')
+                    language = file_extensions.get(ext, "unknown")
                     futures.append(
                         executor.submit(
                             self._index_file,
@@ -1790,12 +1918,7 @@ class SigilIndex:
         return stats
 
     def _index_file(
-        self,
-        repo_id: int,
-        repo_name: str,
-        repo_root: Path,
-        file_path: Path,
-        language: str
+        self, repo_id: int, repo_name: str, repo_root: Path, file_path: Path, language: str
     ) -> dict[str, object] | None:
         """Index a single file."""
         try:
@@ -1812,23 +1935,24 @@ class SigilIndex:
             # Don't embed backup/timestamped files even if they appear in the documents table
             try:
                 nl = name.lower()
-                if ".backup" in nl or nl.endswith('.bak') or nl.endswith('~'):
+                if ".backup" in nl or nl.endswith(".bak") or nl.endswith("~"):
                     embed_allowed = False
             except Exception:
                 pass
 
             # Special-case: notebooks — extract cell sources (code + markdown) for embeddings
-            if ext == '.ipynb':
+            if ext == ".ipynb":
                 try:
                     import json as _json
+
                     nb = _json.loads(raw_text)
                     parts = []
-                    for cell in nb.get('cells', []):
-                        if cell.get('cell_type') in ('markdown', 'code'):
-                            src = ''.join(cell.get('source', []) or [])
+                    for cell in nb.get("cells", []):
+                        if cell.get("cell_type") in ("markdown", "code"):
+                            src = "".join(cell.get("source", []) or [])
                             if src and src.strip():
                                 parts.append(src)
-                    cleaned = '\n\n'.join(parts)
+                    cleaned = "\n\n".join(parts)
                     if cleaned.strip():
                         text = cleaned
                         embed_allowed = True
@@ -1878,9 +2002,7 @@ class SigilIndex:
                         return None
 
                     # Path is the same but content changed: clean up old symbols/vectors/doc
-                    self._delete_symbols_and_embeddings_for_doc(
-                        existing_doc_id, repo_id, rel_path
-                    )
+                    self._delete_symbols_and_embeddings_for_doc(existing_doc_id, repo_id, rel_path)
                     self._remove_trigrams_for_doc_ids({existing_doc_id})
                     cursor.execute("DELETE FROM documents WHERE id = ?", (existing_doc_id,))
 
@@ -1889,22 +2011,23 @@ class SigilIndex:
                 try:
                     cursor.execute(
                         "SELECT id FROM documents WHERE repo_id = ? AND path = ?",
-                        (repo_id, rel_path)
+                        (repo_id, rel_path),
                     )
                     rows = cursor.fetchall()
                     for (old_doc_id,) in rows:
-                        self._delete_symbols_and_embeddings_for_doc(
-                            old_doc_id, repo_id, rel_path
-                        )
+                        self._delete_symbols_and_embeddings_for_doc(old_doc_id, repo_id, rel_path)
                         self._remove_trigrams_for_doc_ids({old_doc_id})
                         cursor.execute("DELETE FROM documents WHERE id = ?", (old_doc_id,))
                 except Exception:
                     logger.exception("Failed to cleanup old document rows for %s", rel_path)
 
-                cursor.execute("""
+                cursor.execute(
+                    """
                     INSERT INTO documents (repo_id, path, blob_sha, size, language)
                     VALUES (?, ?, ?, ?, ?)
-                """, (repo_id, rel_path, blob_sha, len(content), language))
+                """,
+                    (repo_id, rel_path, blob_sha, len(content), language),
+                )
                 doc_id = cursor.lastrowid
 
             # Store blob content (compressed)
@@ -1918,20 +2041,23 @@ class SigilIndex:
             if symbols:
                 with self._db_lock:
                     for symbol in symbols:
-                        self.repos_db.execute("""
+                        self.repos_db.execute(
+                            """
                             INSERT INTO symbols (
                                 doc_id, name, kind, line, character, signature, scope
                             )
                             VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            doc_id,
-                            symbol.name,
-                            symbol.kind,
-                            symbol.line,
-                            0,  # character position
-                            symbol.signature,
-                            symbol.scope
-                        ))
+                        """,
+                            (
+                                doc_id,
+                                symbol.name,
+                                symbol.kind,
+                                symbol.line,
+                                0,  # character position
+                                symbol.signature,
+                                symbol.scope,
+                            ),
+                        )
 
             return {
                 "symbols": len(symbols),
@@ -1950,11 +2076,7 @@ class SigilIndex:
         """Extract symbols from a file using universal-ctags."""
         # Check if ctags is available
         try:
-            result = subprocess.run(
-                ["ctags", "--version"],
-                capture_output=True,
-                timeout=1
-            )
+            result = subprocess.run(["ctags", "--version"], capture_output=True, timeout=1)
             if result.returncode != 0:
                 return []
         except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -1966,14 +2088,15 @@ class SigilIndex:
             result = subprocess.run(
                 [
                     "ctags",
-                    "-f", "-",
+                    "-f",
+                    "-",
                     "--output-format=json",
                     "--fields=+n+S+s",  # line number, signature, scope
-                    str(file_path)
+                    str(file_path),
                 ],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
             )
 
             if result.returncode != 0:
@@ -1987,14 +2110,16 @@ class SigilIndex:
                 try:
                     data = json.loads(line)
                     if data.get("_type") == "tag":
-                        symbols.append(Symbol(
-                            name=data.get("name", ""),
-                            kind=data.get("kind", "unknown"),
-                            file_path=str(file_path),
-                            line=data.get("line", 0),
-                            signature=data.get("signature"),
-                            scope=data.get("scope")
-                        ))
+                        symbols.append(
+                            Symbol(
+                                name=data.get("name", ""),
+                                kind=data.get("kind", "unknown"),
+                                file_path=str(file_path),
+                                line=data.get("line", 0),
+                                signature=data.get("signature"),
+                                scope=data.get("scope"),
+                            )
+                        )
                 except json.JSONDecodeError:
                     continue
 
@@ -2017,10 +2142,9 @@ class SigilIndex:
         start = perf_counter()
         with self._db_lock:
             cursor = self.repos_db.cursor()
-            docs = list(cursor.execute(
-                "SELECT id, blob_sha FROM documents WHERE repo_id = ?",
-                (repo_id,)
-            ))
+            docs = list(
+                cursor.execute("SELECT id, blob_sha FROM documents WHERE repo_id = ?", (repo_id,))
+            )
 
         trigram_map: dict[str, set[int]] = defaultdict(set)
         doc_count = 0
@@ -2029,7 +2153,7 @@ class SigilIndex:
             content = self._read_blob(blob_sha)
             if not content:
                 continue
-            text = content.decode('utf-8', errors='replace').lower()
+            text = content.decode("utf-8", errors="replace").lower()
             doc_trigrams = self._extract_trigrams(text)
             for tg in doc_trigrams:
                 trigram_map[tg].add(doc_id)
@@ -2037,11 +2161,20 @@ class SigilIndex:
             try:
                 self._store_doc_trigrams(doc_id, doc_trigrams)
             except Exception:
-                logger.debug("_build_trigram_index: failed to store doc trigrams for %s", doc_id, exc_info=True)
+                logger.debug(
+                    "_build_trigram_index: failed to store doc trigrams for %s",
+                    doc_id,
+                    exc_info=True,
+                )
 
         mid = perf_counter()
-        logger.info("_build_trigram_index: repo_id=%s docs=%s unique_trigrams=%s build_time=%.2fs",
-                    repo_id, doc_count, len(trigram_map), mid - start)
+        logger.info(
+            "_build_trigram_index: repo_id=%s docs=%s unique_trigrams=%s build_time=%.2fs",
+            repo_id,
+            doc_count,
+            len(trigram_map),
+            mid - start,
+        )
 
         # Merge with any existing postings and write into the selected backend.
         grams = list(trigram_map.keys())
@@ -2075,11 +2208,21 @@ class SigilIndex:
         try:
             trigram_count = self._trigram_count()
             if trigram_count == 0:
-                logger.error("_build_trigram_index: post-commit trigram store reports 0 keys (backend=%s). Possible persistence failure.", self._trigram_backend)
+                logger.error(
+                    "_build_trigram_index: post-commit trigram store reports 0 keys (backend=%s). Possible persistence failure.",
+                    self._trigram_backend,
+                )
             else:
-                logger.info("_build_trigram_index: post-commit persisted_trigram_keys=%d (backend=%s)", trigram_count, self._trigram_backend)
+                logger.info(
+                    "_build_trigram_index: post-commit persisted_trigram_keys=%d (backend=%s)",
+                    trigram_count,
+                    self._trigram_backend,
+                )
         except Exception:
-            logger.debug("_build_trigram_index: failed to perform post-commit trigram sanity check", exc_info=True)
+            logger.debug(
+                "_build_trigram_index: failed to perform post-commit trigram sanity check",
+                exc_info=True,
+            )
         return len(trigram_map)
 
     def _remove_trigrams_for_doc_ids(self, doc_ids: set[int]) -> None:
@@ -2138,9 +2281,7 @@ class SigilIndex:
         """Remove cached trigram record for a doc_id."""
         try:
             with self._db_lock:
-                self.repos_db.execute(
-                    "DELETE FROM doc_trigrams WHERE doc_id = ?", (doc_id,)
-                )
+                self.repos_db.execute("DELETE FROM doc_trigrams WHERE doc_id = ?", (doc_id,))
         except Exception:
             logger.debug("Failed to delete cached trigrams for doc %s", doc_id, exc_info=True)
 
@@ -2172,7 +2313,7 @@ class SigilIndex:
             self._trigram_commit()
 
     # ------------------------------------------------------------------
-        # Trigram storage helpers (RocksDB backend via rocksdict)
+    # Trigram storage helpers (RocksDB backend via rocksdict)
     # ------------------------------------------------------------------
     @staticmethod
     @staticmethod
@@ -2279,6 +2420,7 @@ class SigilIndex:
             # Prefer JSON-formatted storage (safe for arbitrary trigram characters)
             try:
                 import json
+
                 parsed = json.loads(data)
                 if isinstance(parsed, list):
                     return {str(t) for t in parsed}
@@ -2291,7 +2433,10 @@ class SigilIndex:
 
     def _trigram_commit(self) -> None:
         # Ensure on-disk durability for rocksdict-backed stores when available.
-        if self._trigram_backend == "rocksdict" and getattr(self, "_rocksdict_trigrams", None) is not None:
+        if (
+            self._trigram_backend == "rocksdict"
+            and getattr(self, "_rocksdict_trigrams", None) is not None
+        ):
             try:
                 rd = self._rocksdict_trigrams
                 if hasattr(rd, "flush_wal"):
@@ -2328,7 +2473,9 @@ class SigilIndex:
                 break
             except Exception as e:
                 last_exc = e
-                logger.warning("rocksdict write attempt %d/%d failed for %s", attempt, retries, gram)
+                logger.warning(
+                    "rocksdict write attempt %d/%d failed for %s", attempt, retries, gram
+                )
                 if attempt < retries:
                     try:
                         import time
@@ -2337,7 +2484,12 @@ class SigilIndex:
                     except Exception:
                         pass
         if last_exc is not None:
-            logger.error("Failed to write trigram %s to rocksdict after %d attempts", gram, retries, exc_info=True)
+            logger.error(
+                "Failed to write trigram %s to rocksdict after %d attempts",
+                gram,
+                retries,
+                exc_info=True,
+            )
             raise last_exc
         return
 
@@ -2435,19 +2587,50 @@ class SigilIndex:
             # Fail-open to legacy heuristics if helper errors
             pass
         skip_dirs = {
-            '.git', '__pycache__', 'node_modules', 'target',
-            'build', 'dist', '.venv', 'venv', '.tox',
-            '.mypy_cache', '.pytest_cache', '.ruff_cache', '.ruff', '.cache', 'coverage'
+            ".git",
+            "__pycache__",
+            "node_modules",
+            "target",
+            "build",
+            "dist",
+            ".venv",
+            "venv",
+            ".tox",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".ruff",
+            ".cache",
+            "coverage",
         }
         skip_dirs.update({"htmlcov", "coverage_html", ".coverage", "site-packages"})
 
         skip_extensions = {
-            '.pyc', '.so', '.o', '.a', '.dylib', '.dll',
-            '.exe', '.bin', '.pdf', '.png', '.jpg', '.gif',
-            '.svg', '.ico', '.woff', '.woff2', '.ttf',
-            '.zip', '.tar', '.gz', '.bz2', '.xz', '.mjs'
+            ".pyc",
+            ".so",
+            ".o",
+            ".a",
+            ".dylib",
+            ".dll",
+            ".exe",
+            ".bin",
+            ".pdf",
+            ".png",
+            ".jpg",
+            ".gif",
+            ".svg",
+            ".ico",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".zip",
+            ".tar",
+            ".gz",
+            ".bz2",
+            ".xz",
+            ".mjs",
         }
-        skip_extensions.update({'.html', '.htm', '.rmeta', '.rlib'})
+        skip_extensions.update({".html", ".htm", ".rmeta", ".rlib"})
 
         # Check if any parent is in skip_dirs
         for parent in path.parents:
@@ -2475,11 +2658,11 @@ class SigilIndex:
             return True
 
         # Skip files starting with .
-        if path.name.startswith('.'):
+        if path.name.startswith("."):
             return True
 
         # Skip Vite temporary build files (e.g., vite.config.ts.timestamp-*.mjs)
-        if '.timestamp-' in path.name:
+        if ".timestamp-" in path.name:
             return True
 
         # Skip large files (> 1MB)
@@ -2507,10 +2690,7 @@ class SigilIndex:
         return False
 
     def search_code(
-        self,
-        query: str,
-        repo: str | None = None,
-        max_results: int = 50
+        self, query: str, repo: str | None = None, max_results: int = 50
     ) -> list[SearchResult]:
         """
         Search for code using trigram index.
@@ -2555,15 +2735,12 @@ class SigilIndex:
 
         # Filter by repo if specified
         if repo:
-            cursor = self.repos_db.execute(
-                "SELECT id FROM repos WHERE name = ?", (repo,)
-            )
+            cursor = self.repos_db.execute("SELECT id FROM repos WHERE name = ?", (repo,))
             row = cursor.fetchone()
             if row:
                 repo_id = row[0]
-                stmt = (
-                    "SELECT id FROM documents WHERE repo_id = ? AND id IN ({})"
-                    .format(','.join('?' * len(candidate_doc_ids)))
+                stmt = "SELECT id FROM documents WHERE repo_id = ? AND id IN ({})".format(
+                    ",".join("?" * len(candidate_doc_ids))
                 )
                 cursor = self.repos_db.execute(stmt, (repo_id, *candidate_doc_ids))
                 candidate_doc_ids = {row[0] for row in cursor.fetchall()}
@@ -2576,19 +2753,21 @@ class SigilIndex:
 
             doc = self._get_document(doc_id)
             if doc:
-                content = self._read_blob(doc['blob_sha'])
+                content = self._read_blob(doc["blob_sha"])
                 if content:
-                    text = content.decode('utf-8', errors='replace')
+                    text = content.decode("utf-8", errors="replace")
                     # Find matching lines
                     for line_num, line in enumerate(text.splitlines(), start=1):
                         if query.lower() in line.lower():
-                            results.append(SearchResult(
-                                repo=doc['repo_name'],
-                                path=doc['path'],
-                                line=line_num,
-                                text=line.strip(),
-                                doc_id=f"{doc['repo_name']}::{doc['path']}"
-                            ))
+                            results.append(
+                                SearchResult(
+                                    repo=doc["repo_name"],
+                                    path=doc["path"],
+                                    line=line_num,
+                                    text=line.strip(),
+                                    doc_id=f"{doc['repo_name']}::{doc['path']}",
+                                )
+                            )
                             if len(results) >= max_results:
                                 break
 
@@ -2604,10 +2783,7 @@ class SigilIndex:
         return results
 
     def find_symbol(
-        self,
-        symbol_name: str,
-        kind: str | None = None,
-        repo: str | None = None
+        self, symbol_name: str, kind: str | None = None, repo: str | None = None
     ) -> list[Symbol]:
         """
         Find symbol definitions (IDE-like "Go to Definition").
@@ -2644,22 +2820,21 @@ class SigilIndex:
 
             symbols = []
             for row in cursor.fetchall():
-                symbols.append(Symbol(
-                    name=row[0],
-                    kind=row[1],
-                    line=row[2],
-                    signature=row[3],
-                    scope=row[4],
-                    file_path=f"{row[6]}::{row[5]}"  # repo::path
-                ))
+                symbols.append(
+                    Symbol(
+                        name=row[0],
+                        kind=row[1],
+                        line=row[2],
+                        signature=row[3],
+                        scope=row[4],
+                        file_path=f"{row[6]}::{row[5]}",  # repo::path
+                    )
+                )
 
             return symbols
 
     def list_symbols(
-        self,
-        repo: str,
-        file_path: str | None = None,
-        kind: str | None = None
+        self, repo: str, file_path: str | None = None, kind: str | None = None
     ) -> list[Symbol]:
         """
         List symbols in a file or repository (IDE-like "Outline" view).
@@ -2697,34 +2872,34 @@ class SigilIndex:
 
             symbols = []
             for row in cursor.fetchall():
-                symbols.append(Symbol(
-                    name=row[0],
-                    kind=row[1],
-                    line=row[2],
-                    signature=row[3],
-                    scope=row[4],
-                    file_path=row[5]
-                ))
+                symbols.append(
+                    Symbol(
+                        name=row[0],
+                        kind=row[1],
+                        line=row[2],
+                        signature=row[3],
+                        scope=row[4],
+                        file_path=row[5],
+                    )
+                )
 
             return symbols
 
     def _get_document(self, doc_id: int) -> dict[str, str] | None:
         """Get document metadata."""
         with self._db_lock:
-            cursor = self.repos_db.execute("""
+            cursor = self.repos_db.execute(
+                """
                 SELECT d.path, d.blob_sha, d.language, r.name as repo_name
                 FROM documents d
                 JOIN repos r ON d.repo_id = r.id
                 WHERE d.id = ?
-            """, (doc_id,))
+            """,
+                (doc_id,),
+            )
             row = cursor.fetchone()
         if row:
-            return {
-                'path': row[0],
-                'blob_sha': row[1],
-                'language': row[2],
-                'repo_name': row[3]
-            }
+            return {"path": row[0], "blob_sha": row[1], "language": row[2], "repo_name": row[3]}
         return None
 
     def _delete_symbols_and_embeddings_for_doc(
@@ -2771,15 +2946,15 @@ class SigilIndex:
                                 )
                         return
                 except Exception:
-                    logger.exception("Error deleting vectors for doc %s in repo_id %s", doc_id, repo_id)
+                    logger.exception(
+                        "Error deleting vectors for doc %s in repo_id %s", doc_id, repo_id
+                    )
 
         # Fallback: try global table if present
         if self.vectors is not None:
             delete_clauses = [f"doc_id == '{doc_id}'"]
             if repo_id is not None and rel_path is not None:
-                delete_clauses.append(
-                    f"repo_id == '{repo_id}' AND file_path == '{rel_path}'"
-                )
+                delete_clauses.append(f"repo_id == '{repo_id}' AND file_path == '{rel_path}'")
 
             for clause in delete_clauses:
                 try:
@@ -2831,10 +3006,7 @@ class SigilIndex:
                 )
 
     def _chunk_text(
-        self,
-        text: str,
-        max_lines: int = 100,
-        overlap: int = 10
+        self, text: str, max_lines: int = 100, overlap: int = 10
     ) -> list[tuple[int, int, int, str]]:
         """
         Split text into overlapping chunks with line tracking.
@@ -3016,7 +3188,8 @@ class SigilIndex:
                     if repo_db is not None:
                         vectors = cast(Any, repo_db).create_table(
                             self.vector_table_name,
-                            schema=self._code_chunk_model or get_code_chunk_model(self.embedding_dimension),
+                            schema=self._code_chunk_model
+                            or get_code_chunk_model(self.embedding_dimension),
                             mode="overwrite",
                         )
                         if repo_name:
@@ -3024,7 +3197,8 @@ class SigilIndex:
                     else:
                         self.vectors = cast(Any, self.lance_db).create_table(
                             self.vector_table_name,
-                            schema=self._code_chunk_model or get_code_chunk_model(self.embedding_dimension),
+                            schema=self._code_chunk_model
+                            or get_code_chunk_model(self.embedding_dimension),
                             mode="overwrite",
                         )
                         vectors = self.vectors
@@ -3042,23 +3216,25 @@ class SigilIndex:
         for (chunk_idx, start_line, end_line, chunk_text), vector in zip(
             chunks, embeddings, strict=False
         ):
-            records.append({
-                "vector": np.asarray(vector, dtype="float32"),
-                "doc_id": str(doc_id),
-                "repo_id": str(repo_id),
-                "file_path": rel_path,
-                "chunk_index": int(chunk_idx),
-                "start_line": int(start_line),
-                "end_line": int(end_line),
-                "content": chunk_text,
-                "is_code": bool(classify["is_code"]),
-                "is_doc": bool(classify["is_doc"]),
-                "is_config": bool(classify["is_config"]),
-                "is_data": bool(classify["is_data"]),
-                "extension": classify["extension"],
-                "language": classify["language"],
-                "last_updated": timestamp,
-            })
+            records.append(
+                {
+                    "vector": np.asarray(vector, dtype="float32"),
+                    "doc_id": str(doc_id),
+                    "repo_id": str(repo_id),
+                    "file_path": rel_path,
+                    "chunk_index": int(chunk_idx),
+                    "start_line": int(start_line),
+                    "end_line": int(end_line),
+                    "content": chunk_text,
+                    "is_code": bool(classify["is_code"]),
+                    "is_doc": bool(classify["is_doc"]),
+                    "is_config": bool(classify["is_config"]),
+                    "is_data": bool(classify["is_data"]),
+                    "extension": classify["extension"],
+                    "language": classify["language"],
+                    "last_updated": timestamp,
+                }
+            )
 
         if records:
             try:
@@ -3138,10 +3314,7 @@ class SigilIndex:
             if not row:
                 raise ValueError(f"Repository {repo!r} not indexed yet")
             repo_id = row[0]
-            cur.execute(
-                "SELECT id, blob_sha, path FROM documents WHERE repo_id = ?",
-                (repo_id,)
-            )
+            cur.execute("SELECT id, blob_sha, path FROM documents WHERE repo_id = ?", (repo_id,))
             docs = cur.fetchall()
 
         if self.vectors is None:
@@ -3152,9 +3325,7 @@ class SigilIndex:
             try:
                 cast(Any, self.vectors).delete(f"repo_id == '{repo_id}'")
             except Exception:
-                logger.exception(
-                    "Failed to clear existing vectors for repo %s", repo
-                )
+                logger.exception("Failed to clear existing vectors for repo %s", repo)
 
         for doc_id, blob_sha, rel_path in docs:
             content = self._read_blob(blob_sha)
@@ -3193,8 +3364,8 @@ class SigilIndex:
             "Built vector index for %s using model %s: %s documents, %s chunks",
             repo,
             model,
-            stats['documents_processed'],
-            stats['chunks_indexed'],
+            stats["documents_processed"],
+            stats["chunks_indexed"],
         )
         self._log_vector_index_status(context=f"rebuild:{repo}")
         return stats
@@ -3222,7 +3393,9 @@ class SigilIndex:
                 if not row:
                     continue
                 repo_id = row[0]
-                cur.execute("SELECT id, blob_sha, path FROM documents WHERE repo_id = ?", (repo_id,))
+                cur.execute(
+                    "SELECT id, blob_sha, path FROM documents WHERE repo_id = ?", (repo_id,)
+                )
                 doc_rows = cur.fetchall()
 
             for _doc_id, blob_sha, rel_path in doc_rows:
@@ -3230,7 +3403,7 @@ class SigilIndex:
                     content = self._read_blob(blob_sha)
                     if not content:
                         continue
-                    text = content.decode('utf-8', errors='replace')
+                    text = content.decode("utf-8", errors="replace")
                     if self._is_jsonl_path(rel_path):
                         include_sol = self._get_repo_include_solution(repo_id)
                         records = self._parse_jsonl_records(text, include_solution=include_sol)
@@ -3252,12 +3425,14 @@ class SigilIndex:
                         if toks > max_tokens:
                             oversized += 1
                     if oversized:
-                        results.append({
-                            "repo": repo_name,
-                            "path": rel_path,
-                            "oversized_count": oversized,
-                            "total_chunks": len(chunks),
-                        })
+                        results.append(
+                            {
+                                "repo": repo_name,
+                                "path": rel_path,
+                                "oversized_count": oversized,
+                                "total_chunks": len(chunks),
+                            }
+                        )
                 except Exception:
                     continue
         results.sort(key=lambda x: x.get("oversized_count", 0), reverse=True)
@@ -3294,8 +3469,7 @@ class SigilIndex:
             embed_fn = self.embed_fn
         if embed_fn is None or self.vectors is None:
             logger.info(
-                "Semantic search requested but embeddings are unavailable; "
-                "returning no results."
+                "Semantic search requested but embeddings are unavailable; " "returning no results."
             )
             return []
 
@@ -3424,7 +3598,12 @@ class SigilIndex:
             if repo_table is None:
                 return []
             try:
-                query_results = cast(Any, repo_table).search(q_vec.astype("float32")).limit(rerank_pool).to_list()
+                query_results = (
+                    cast(Any, repo_table)
+                    .search(q_vec.astype("float32"))
+                    .limit(rerank_pool)
+                    .to_list()
+                )
             except Exception:
                 logger.exception("Semantic search failed for repo %s", repo)
                 return []
@@ -3442,7 +3621,12 @@ class SigilIndex:
                     repo_db, repo_table = self._get_repo_lance_and_vectors(rname)
                     if repo_table is None:
                         continue
-                    rows = cast(Any, repo_table).search(q_vec.astype("float32")).limit(rerank_pool).to_list()
+                    rows = (
+                        cast(Any, repo_table)
+                        .search(q_vec.astype("float32"))
+                        .limit(rerank_pool)
+                        .to_list()
+                    )
                     for res in _rows_to_candidates(rows, rname):
                         aggregated.append(res)
                 except Exception:
@@ -3465,30 +3649,24 @@ class SigilIndex:
                     return {"error": "Repository not found"}
                 repo_id = row[0]
 
-                cursor.execute(
-                    "SELECT COUNT(*) FROM documents WHERE repo_id = ?",
-                    (repo_id,)
-                )
+                cursor.execute("SELECT COUNT(*) FROM documents WHERE repo_id = ?", (repo_id,))
                 doc_count = cursor.fetchone()[0]
 
                 cursor.execute(
                     "SELECT COUNT(*) FROM symbols WHERE doc_id IN "
                     "(SELECT id FROM documents WHERE repo_id = ?)",
-                    (repo_id,)
+                    (repo_id,),
                 )
                 symbol_count = cursor.fetchone()[0]
 
-                cursor.execute(
-                    "SELECT indexed_at FROM repos WHERE id = ?",
-                    (repo_id,)
-                )
+                cursor.execute("SELECT indexed_at FROM repos WHERE id = ?", (repo_id,))
                 indexed_at = cursor.fetchone()[0]
 
                 return {
                     "repo": repo,
                     "documents": doc_count,
                     "symbols": symbol_count,
-                    "indexed_at": indexed_at
+                    "indexed_at": indexed_at,
                 }
             else:
                 cursor.execute("SELECT COUNT(*) FROM repos")
@@ -3507,7 +3685,7 @@ class SigilIndex:
                     "repositories": repo_count,
                     "documents": doc_count,
                     "symbols": symbol_count,
-                    "trigrams": trigram_count
+                    "trigrams": trigram_count,
                 }
 
     def remove_file(
@@ -3573,9 +3751,7 @@ class SigilIndex:
                     )
 
             # Delete symbols and embeddings for this doc and clear vectors
-            self._delete_symbols_and_embeddings_for_doc(
-                doc_id, repo_id, rel_path
-            )
+            self._delete_symbols_and_embeddings_for_doc(doc_id, repo_id, rel_path)
 
             # Update trigram index to drop this doc_id
             if trigrams:
@@ -3598,8 +3774,7 @@ class SigilIndex:
 
             self._trigram_commit()
             logger.warning(
-                "remove_file: committed deletion for doc_id %s "
-                "and updated trigrams",
+                "remove_file: committed deletion for doc_id %s " "and updated trigrams",
                 doc_id,
             )
 

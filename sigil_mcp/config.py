@@ -51,9 +51,7 @@ class Config:
         raw_mode = os.getenv("SIGIL_MCP_MODE") or self.config_data.get("mode") or "dev"
         mode = str(raw_mode).strip().lower()
         if mode not in {"dev", "prod"}:
-            logger.warning(
-                "Invalid SIGIL_MCP_MODE '%s'; defaulting to 'dev'", raw_mode
-            )
+            logger.warning("Invalid SIGIL_MCP_MODE '%s'; defaulting to 'dev'", raw_mode)
             mode = "dev"
         # Persist the normalized mode back to config_data for downstream consumers
         self.config_data["mode"] = mode
@@ -157,8 +155,7 @@ class Config:
                 return
             else:
                 logger.info(
-                    f"Config path {config_path} does not exist, "
-                    "using environment variables"
+                    f"Config path {config_path} does not exist, " "using environment variables"
                 )
                 self._load_from_env()
                 return
@@ -186,17 +183,13 @@ class Config:
         dimension_value = self.get("embeddings.dimension")
         if dimension_value is None:
             # Ensure a default is present for downstream consumers
-            self.config_data.setdefault("embeddings", {}).setdefault(
-                "dimension", 768
-            )
+            self.config_data.setdefault("embeddings", {}).setdefault("dimension", 768)
             return
 
         try:
             dimension = int(dimension_value)
         except (TypeError, ValueError):
-            logger.warning(
-                "Invalid embeddings.dimension '%s', defaulting to 768", dimension_value
-            )
+            logger.warning("Invalid embeddings.dimension '%s', defaulting to 768", dimension_value)
             self.config_data.setdefault("embeddings", {})["dimension"] = 768
             return
 
@@ -230,12 +223,10 @@ class Config:
                 "port": int(os.getenv("SIGIL_MCP_PORT", "8000")),
                 "log_level": os.getenv("SIGIL_MCP_LOG_LEVEL", "INFO"),
                 "chatgpt_compliance_enabled": (
-                    os.getenv("SIGIL_MCP_CHATGPT_COMPLIANCE_ENABLED", "true").lower()
-                    == "true"
+                    os.getenv("SIGIL_MCP_CHATGPT_COMPLIANCE_ENABLED", "true").lower() == "true"
                 ),
                 "header_logging_enabled": (
-                    os.getenv("SIGIL_MCP_HEADER_LOGGING_ENABLED", "true").lower()
-                    == "true"
+                    os.getenv("SIGIL_MCP_HEADER_LOGGING_ENABLED", "true").lower() == "true"
                 ),
             },
             "authentication": {
@@ -254,38 +245,88 @@ class Config:
                 "debounce_seconds": float(os.getenv("SIGIL_MCP_WATCH_DEBOUNCE", "2.0")),
                 "ignore_dirs": [
                     # Common VCS / editor / virtualenv / cache dirs
-                    ".git", "__pycache__", "node_modules", "target",
-                    "build", "dist", ".venv", "venv", ".tox",
-                    ".mypy_cache", ".pytest_cache", "coverage", ".coverage",
-                    "htmlcov", "env", ".env", "out", "bin", "obj",
-                    "pkg", "vendor", "deps", ".gradle", ".idea", ".vscode",
+                    ".git",
+                    "__pycache__",
+                    "node_modules",
+                    "target",
+                    "build",
+                    "dist",
+                    ".venv",
+                    "venv",
+                    ".tox",
+                    ".mypy_cache",
+                    ".pytest_cache",
+                    "coverage",
+                    ".coverage",
+                    "htmlcov",
+                    "env",
+                    ".env",
+                    "out",
+                    "bin",
+                    "obj",
+                    "pkg",
+                    "vendor",
+                    "deps",
+                    ".gradle",
+                    ".idea",
+                    ".vscode",
                     # Language/tool specific build dirs
-                    "cmake-build-debug", "cmake-build-release", "dist-newstyle",
-                    "_build", "deps/_build"
+                    "cmake-build-debug",
+                    "cmake-build-release",
+                    "dist-newstyle",
+                    "_build",
+                    "deps/_build",
                 ],
                 "ignore_extensions": [
                     # Python bytecode / extension modules
-                    ".pyc", ".pyo", ".pyd",
+                    ".pyc",
+                    ".pyo",
+                    ".pyd",
                     # Native objects / archives
-                    ".so", ".o", ".a", ".dll", ".dylib", ".rlib", ".rmeta",
+                    ".so",
+                    ".o",
+                    ".a",
+                    ".dll",
+                    ".dylib",
+                    ".rlib",
+                    ".rmeta",
                     # Executables / binaries
-                    ".exe", ".bin",
+                    ".exe",
+                    ".bin",
                     # Java / JVM artifacts
-                    ".class", ".jar", ".war", ".ear",
+                    ".class",
+                    ".jar",
+                    ".war",
+                    ".ear",
                     # Web / image / fonts / assets
-                    ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg",
-                    ".ico", ".woff", ".woff2", ".ttf",
+                    ".pdf",
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                    ".gif",
+                    ".svg",
+                    ".ico",
+                    ".woff",
+                    ".woff2",
+                    ".ttf",
                     # Archives / compressed
-                    ".zip", ".tar", ".gz", ".bz2", ".xz",
+                    ".zip",
+                    ".tar",
+                    ".gz",
+                    ".bz2",
+                    ".xz",
                     # Other language/tool artifacts
-                    ".hi", ".beam", ".dll", ".so", ".rlib"
+                    ".hi",
+                    ".beam",
+                    ".dll",
+                    ".so",
+                    ".rlib",
                 ],
             },
             "repositories": self._parse_repo_map(os.getenv("SIGIL_REPO_MAP", "")),
-            "index": {
-                "path": os.getenv("SIGIL_INDEX_PATH", "~/.sigil_index")
-            },
-            "external_mcp_auto_install": os.getenv("SIGIL_MCP_AUTO_INSTALL", "false").lower() == "true",
+            "index": {"path": os.getenv("SIGIL_INDEX_PATH", "~/.sigil_index")},
+            "external_mcp_auto_install": os.getenv("SIGIL_MCP_AUTO_INSTALL", "false").lower()
+            == "true",
             "external_mcp_servers": self._load_external_mcp_servers_from_env(),
             "mcp_server": self._load_mcp_server_from_env(),
             "admin": self._load_admin_from_env(),
@@ -520,53 +561,105 @@ class Config:
     @property
     def watch_ignore_dirs(self) -> list[str]:
         """Get directories to ignore when watching."""
-        return self.get("watch.ignore_dirs", [
-            # Version control
-            ".git",
-            # Python
-            "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
-            "build", "dist", "downloads", "eggs", ".eggs", "lib", "lib64",
-            "parts", "sdist", "var", "wheels", ".installed.cfg",
-            "develop-eggs", "htmlcov",
-            # Virtual environments
-            "venv", ".venv", "ENV", "env",
-            # IDE
-            ".vscode", ".idea",
-            # Node.js
-            "node_modules",
-            # Other build systems
-            "target",
-            # Sigil runtime
-            ".sigil_index", ".sigil_mcp_server",
-            # Coverage/testing
-            "coverage", ".coverage", ".cache",
-        ])
+        return self.get(
+            "watch.ignore_dirs",
+            [
+                # Version control
+                ".git",
+                # Python
+                "__pycache__",
+                ".pytest_cache",
+                ".mypy_cache",
+                ".ruff_cache",
+                ".tox",
+                "build",
+                "dist",
+                "downloads",
+                "eggs",
+                ".eggs",
+                "lib",
+                "lib64",
+                "parts",
+                "sdist",
+                "var",
+                "wheels",
+                ".installed.cfg",
+                "develop-eggs",
+                "htmlcov",
+                # Virtual environments
+                "venv",
+                ".venv",
+                "ENV",
+                "env",
+                # IDE
+                ".vscode",
+                ".idea",
+                # Node.js
+                "node_modules",
+                # Other build systems
+                "target",
+                # Sigil runtime
+                ".sigil_index",
+                ".sigil_mcp_server",
+                # Coverage/testing
+                "coverage",
+                ".coverage",
+                ".cache",
+            ],
+        )
 
     @property
     def watch_ignore_extensions(self) -> list[str]:
         """Get file extensions to ignore when watching."""
-        return self.get("watch.ignore_extensions", [
-            # Python compiled
-            ".pyc", ".pyo", ".pyd",
-            # Native/compiled
-            ".so", ".o", ".a", ".dylib", ".dll", ".exe", ".bin",
-            # Archives
-            ".zip", ".tar", ".gz", ".bz2", ".xz", ".egg",
-            # JavaScript modules (including Vite temporary files)
-            ".mjs",
-            # Images
-            ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
-            # Fonts
-            ".woff", ".woff2", ".ttf", ".eot",
-            # Documents
-            ".pdf",
-            # Logs
-            ".log",
-            # Temp files
-            ".tmp", ".temp", ".swp", ".swo",
-            # OS files
-            ".DS_Store",
-        ])
+        return self.get(
+            "watch.ignore_extensions",
+            [
+                # Python compiled
+                ".pyc",
+                ".pyo",
+                ".pyd",
+                # Native/compiled
+                ".so",
+                ".o",
+                ".a",
+                ".dylib",
+                ".dll",
+                ".exe",
+                ".bin",
+                # Archives
+                ".zip",
+                ".tar",
+                ".gz",
+                ".bz2",
+                ".xz",
+                ".egg",
+                # JavaScript modules (including Vite temporary files)
+                ".mjs",
+                # Images
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".gif",
+                ".svg",
+                ".ico",
+                # Fonts
+                ".woff",
+                ".woff2",
+                ".ttf",
+                ".eot",
+                # Documents
+                ".pdf",
+                # Logs
+                ".log",
+                # Temp files
+                ".tmp",
+                ".temp",
+                ".swp",
+                ".swo",
+                # OS files
+                ".DS_Store",
+            ],
+        )
 
     @property
     def embeddings_enabled(self) -> bool:
@@ -593,9 +686,7 @@ class Config:
         try:
             return int(value)
         except (TypeError, ValueError):
-            logger.warning(
-                "Invalid embeddings.dimension '%s', defaulting to 768", value
-            )
+            logger.warning("Invalid embeddings.dimension '%s', defaulting to 768", value)
             return 768
 
     @property
@@ -625,7 +716,9 @@ class Config:
             "cache_dir",
             "api_key",
         }
-        kwargs = {k: v for k, v in embeddings_config.items() if k not in known_keys and v is not None}
+        kwargs = {
+            k: v for k, v in embeddings_config.items() if k not in known_keys and v is not None
+        }
         # Map convenience keys to llama.cpp arguments and drop the old names
         if "llamacpp_threads" in kwargs:
             kwargs.setdefault("n_threads", kwargs.pop("llamacpp_threads"))
@@ -716,9 +809,7 @@ class Config:
         try:
             return int(raw)
         except (TypeError, ValueError):
-            logger.warning(
-                "Invalid embeddings.n_gpu_layers '%s', defaulting to 999", raw
-            )
+            logger.warning("Invalid embeddings.n_gpu_layers '%s', defaulting to 999", raw)
             return 999
 
     @property
@@ -960,14 +1051,21 @@ def save_config(cfg: Config, target_path: Path | None = None) -> Path:
 
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_path = out_path.with_name(f"{out_path.name}.{ts}.bak")
-                with out_path.open("r", encoding="utf-8") as fsrc, backup_path.open("w", encoding="utf-8") as fdst:
+                with (
+                    out_path.open("r", encoding="utf-8") as fsrc,
+                    backup_path.open("w", encoding="utf-8") as fdst,
+                ):
                     fdst.write(fsrc.read())
                 logger.info("Backed up existing config to %s", backup_path)
 
                 # Rotate backups: keep only the most recent N backups
                 try:
                     max_backups = 5
-                    backups = sorted([p for p in out_path.parent.glob(f"{out_path.name}.*.bak") if p.is_file()], key=lambda p: p.stat().st_mtime, reverse=True)
+                    backups = sorted(
+                        [p for p in out_path.parent.glob(f"{out_path.name}.*.bak") if p.is_file()],
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
                     for old in backups[max_backups:]:
                         try:
                             old.unlink()

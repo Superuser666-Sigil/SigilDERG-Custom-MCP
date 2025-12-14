@@ -33,7 +33,12 @@ def oauth_setup(monkeypatch):
         (uri for uri in client.redirect_uris if "chatgpt.com" in uri),
         client.redirect_uris[0],
     )
-    yield {"client_id": client.client_id, "client_secret": client.client_secret, "redirect_uri": redirect_uri, "manager": mgr}
+    yield {
+        "client_id": client.client_id,
+        "client_secret": client.client_secret,
+        "redirect_uri": redirect_uri,
+        "manager": mgr,
+    }
     # Cleanup
     mgr.tokens.clear()
     mgr.codes.clear()
@@ -72,7 +77,9 @@ def test_oauth_http_flow_end_to_end(oauth_setup, monkeypatch):
     consent = client.get("/oauth/authorize", params=params)
     assert consent.status_code == 200
     # Approve via POST to get redirected with an authorization code
-    redirect = client.post("/oauth/authorize", data={**params, "approve": "true"}, follow_redirects=False)
+    redirect = client.post(
+        "/oauth/authorize", data={**params, "approve": "true"}, follow_redirects=False
+    )
     assert redirect.status_code == 302
     loc = redirect.headers["location"]
     parsed = urlparse(loc)
@@ -103,7 +110,9 @@ def test_oauth_http_flow_end_to_end(oauth_setup, monkeypatch):
     )
     assert refresh_resp.status_code == 200
 
-    revoke_app = Starlette(routes=[Route("/oauth/revoke", server.oauth_revoke_http, methods=["POST"])])
+    revoke_app = Starlette(
+        routes=[Route("/oauth/revoke", server.oauth_revoke_http, methods=["POST"])]
+    )
     revoke_client = TestClient(revoke_app)
     revoke_resp = revoke_client.post(
         "/oauth/revoke",

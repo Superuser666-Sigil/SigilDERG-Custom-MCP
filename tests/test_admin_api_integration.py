@@ -306,7 +306,9 @@ def test_admin_config_update_invalid_payload(admin_app):
 
 def test_admin_config_update_save_failure(monkeypatch, admin_app):
     client = admin_app["client"]
-    monkeypatch.setattr(admin_api, "save_config", lambda cfg: (_ for _ in ()).throw(RuntimeError("fail")))
+    monkeypatch.setattr(
+        admin_api, "save_config", lambda cfg: (_ for _ in ()).throw(RuntimeError("fail"))
+    )
     resp = client.post("/admin/config", json={"admin": {"enabled": True}})
     assert resp.status_code == 500
     assert resp.json()["error"] == "config_save_failed"
@@ -326,7 +328,11 @@ def test_admin_index_stats_database_locked(monkeypatch, admin_app):
 
 def test_admin_index_rebuild_internal_error(monkeypatch, admin_app):
     client = admin_app["client"]
-    monkeypatch.setattr(admin_api, "rebuild_index_op", lambda repo, force: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        admin_api,
+        "rebuild_index_op",
+        lambda repo, force: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
     resp = client.post("/admin/index/rebuild", json={"repo": None, "force": True})
     assert resp.status_code == 500
     assert resp.json()["error"] == "internal_error"
@@ -342,7 +348,9 @@ def test_admin_vector_rebuild_handles_locked(monkeypatch, admin_app):
     monkeypatch.setattr(
         admin_api,
         "build_vector_index_op",
-        lambda repo, force, model=None: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")),
+        lambda repo, force, model=None: (_ for _ in ()).throw(
+            sqlite3.OperationalError("database is locked")
+        ),
     )
     resp = client.post("/admin/vector/rebuild", json={"repo": None, "force": True})
     assert resp.status_code == 503
@@ -372,7 +380,9 @@ def test_admin_index_file_rebuild_success(admin_app):
 
 def test_admin_vector_rebuild_success(admin_app):
     client = admin_app["client"]
-    resp = client.post("/admin/vector/rebuild", json={"repo": "test_repo", "force": False, "model": "default"})
+    resp = client.post(
+        "/admin/vector/rebuild", json={"repo": "test_repo", "force": False, "model": "default"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] in {"completed", "skipped"}
@@ -400,7 +410,11 @@ def test_admin_config_update_success(monkeypatch, admin_app):
 
 def test_admin_index_stats_generic_error(monkeypatch, admin_app):
     client = admin_app["client"]
-    monkeypatch.setattr(admin_api, "get_index_stats_op", lambda repo=None: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        admin_api,
+        "get_index_stats_op",
+        lambda repo=None: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
     resp = client.get("/admin/index/stats")
     assert resp.status_code == 500
     assert resp.json()["error"] == "internal_error"

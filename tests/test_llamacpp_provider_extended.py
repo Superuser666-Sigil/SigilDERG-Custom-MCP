@@ -22,13 +22,16 @@ def test_llamacpp_success(monkeypatch, tmp_path):
         def __init__(self, *a, **k): ...
         def embed(self, text):
             return [0.1] * 4
+
         def n_ctx(self):
             return 4
 
     monkeypatch.setattr(lcpp, "LLAMACPP_AVAILABLE", True)
     monkeypatch.setattr(lcpp, "Llama", DummyLlama)
 
-    provider = lcpp.LlamaCppEmbeddingProvider(str(model), dimension=4, context_size=4, n_gpu_layers=0)
+    provider = lcpp.LlamaCppEmbeddingProvider(
+        str(model), dimension=4, context_size=4, n_gpu_layers=0
+    )
     docs = provider.embed_documents(["abc"])
     assert len(docs[0]) == 4
     q = provider.embed_query("abc")
@@ -44,11 +47,14 @@ def test_llamacpp_chunks_to_micro_batch(monkeypatch, tmp_path):
         def __init__(self, *a, **k): ...
         def n_ctx(self):
             return 8
+
         def tokenize(self, data, special=True):
             # Treat each byte as a token to force chunking
             return list(range(len(data)))
+
         def detokenize(self, tokens):
             return b"x" * len(tokens)
+
         def embed(self, text):
             calls.append(text)
             return [0.2] * 4

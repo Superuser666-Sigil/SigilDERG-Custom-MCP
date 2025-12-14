@@ -41,8 +41,7 @@ def setup_logging(
 
     # Create formatter
     formatter = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        fmt="%(asctime)s [%(levelname)s] %(name)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
 
     # Get root logger
@@ -62,10 +61,7 @@ def setup_logging(
 
         # Use RotatingFileHandler to prevent log files from growing too large
         file_handler = logging.handlers.RotatingFileHandler(
-            log_path,
-            maxBytes=max_bytes,
-            backupCount=backup_count,
-            encoding="utf-8"
+            log_path, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
         )
         file_handler.setLevel(numeric_level)
         file_handler.setFormatter(formatter)
@@ -122,4 +118,3 @@ def get_log_file_path(config_log_file: str | None = None) -> Path | None:
     # Default location
     default_path = Path.home() / ".sigil_mcp_server" / "logs" / "server.log"
     return default_path
-

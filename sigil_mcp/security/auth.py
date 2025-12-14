@@ -119,9 +119,7 @@ def check_authentication(
     allowed_ips = [ip for ip in settings.allowed_ips if ip]
     if allowed_ips:
         if not client_ip:
-            logger.warning(
-                "Authentication failed - client IP missing while whitelist enforced"
-            )
+            logger.warning("Authentication failed - client IP missing while whitelist enforced")
             return False
         if client_ip not in allowed_ips:
             logger.warning("Authentication failed - IP %s not allowed", client_ip)
@@ -148,9 +146,7 @@ def check_authentication(
         return True
 
     if settings.oauth_enabled and request_headers:
-        auth_header = request_headers.get("Authorization") or request_headers.get(
-            "authorization"
-        )
+        auth_header = request_headers.get("Authorization") or request_headers.get("authorization")
         if auth_header:
             parts = auth_header.split()
             if len(parts) == 2 and parts[0].lower() == "bearer":

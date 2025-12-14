@@ -24,9 +24,7 @@ def _base_cfg():
 async def _request(path: str, headers: dict | None = None):
     """Issue an HTTP request against the Admin API using an ASGI transport."""
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver"
-    ) as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         return await client.get(path, headers=headers)
 
 

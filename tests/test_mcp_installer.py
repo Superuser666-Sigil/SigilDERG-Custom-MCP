@@ -17,7 +17,12 @@ def test_auto_install_runs_known_commands(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     servers = [
-        {"name": "playwright", "command": "npx", "args": ["@playwright/mcp@latest"], "disabled": False},
+        {
+            "name": "playwright",
+            "command": "npx",
+            "args": ["@playwright/mcp@latest"],
+            "disabled": False,
+        },
         {"name": "noop", "command": "python", "args": ["tool.py"], "disabled": False},
         {"name": "explicit", "command": "python", "args": ["tool.py"], "auto_install": True},
     ]

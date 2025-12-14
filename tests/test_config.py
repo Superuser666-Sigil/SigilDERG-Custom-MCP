@@ -33,10 +33,8 @@ class TestConfigLoading:
         monkeypatch.chdir(temp_dir)
 
         config_path = temp_dir / "config.json"
-        config_data = {
-            "server": {"name": "local_server", "port": 9000}
-        }
-        with open(config_path, 'w') as f:
+        config_data = {"server": {"name": "local_server", "port": 9000}}
+        with open(config_path, "w") as f:
             json.dump(config_data, f)
 
         config = Config()
@@ -104,7 +102,7 @@ class TestConfigProperties:
         """Test that ~ is expanded in index path."""
         config_path = temp_dir / "config.json"
         config_data = {"index": {"path": "~/.test_index"}}
-        with open(config_path, 'w') as f:
+        with open(config_path, "w") as f:
             json.dump(config_data, f)
 
         config = Config(config_path)
@@ -131,16 +129,8 @@ class TestConfigGet:
     def test_get_deeply_nested(self, temp_dir):
         """Test getting deeply nested values."""
         config_path = temp_dir / "config.json"
-        config_data = {
-            "level1": {
-                "level2": {
-                    "level3": {
-                        "value": "deep"
-                    }
-                }
-            }
-        }
-        with open(config_path, 'w') as f:
+        config_data = {"level1": {"level2": {"level3": {"value": "deep"}}}}
+        with open(config_path, "w") as f:
             json.dump(config_data, f)
 
         config = Config(config_path)

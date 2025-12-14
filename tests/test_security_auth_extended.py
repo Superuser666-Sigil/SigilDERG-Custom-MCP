@@ -8,7 +8,9 @@ from sigil_mcp.security import auth as security_auth
 def test_api_key_is_valid_prefers_env(monkeypatch):
     monkeypatch.setenv("SIGIL_MCP_API_KEY", "env-key")
     called = {"verify": False}
-    monkeypatch.setattr(security_auth, "verify_api_key", lambda key: called.__setitem__("verify", True))
+    monkeypatch.setattr(
+        security_auth, "verify_api_key", lambda key: called.__setitem__("verify", True)
+    )
 
     assert security_auth.api_key_is_valid("env-key") is True
     # verify_api_key should not be called when env matches

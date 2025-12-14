@@ -77,6 +77,7 @@ class TestHeaderLoggingMiddleware:
     @pytest.fixture
     def mock_app(self):
         """Create a mock ASGI app."""
+
         async def async_app(scope, receive, send):
             # Simulate successful response
             await send({"type": "http.response.start", "status": 200})
@@ -236,6 +237,7 @@ class TestHeaderLoggingMiddleware:
     @pytest.mark.anyio
     async def test_middleware_logs_errors(self, caplog):
         """Test that middleware logs errors and re-raises them."""
+
         async def failing_app(scope, receive, send):
             raise ValueError("Test error")
 

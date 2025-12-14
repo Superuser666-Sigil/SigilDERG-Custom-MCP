@@ -22,12 +22,7 @@ class TestSymbolDataclass:
 
     def test_symbol_creation(self):
         """Test creating Symbol instance."""
-        symbol = Symbol(
-            name="test_func",
-            kind="function",
-            file_path="test.py",
-            line=10
-        )
+        symbol = Symbol(name="test_func", kind="function", file_path="test.py", line=10)
 
         assert symbol.name == "test_func"
         assert symbol.kind == "function"
@@ -44,7 +39,7 @@ class TestSymbolDataclass:
             file_path="calc.py",
             line=5,
             signature="def add(self, a, b)",
-            scope="Calculator"
+            scope="Calculator",
         )
 
         assert symbol.signature == "def add(self, a, b)"
@@ -68,7 +63,7 @@ class TestSearchResultDataclass:
             path="src/main.py",
             line=42,
             text="def hello_world():",
-            doc_id="doc_123"
+            doc_id="doc_123",
         )
 
         assert result.repo == "test_repo"
@@ -87,7 +82,7 @@ class TestSearchResultDataclass:
             line=42,
             text="def hello_world():",
             doc_id="doc_123",
-            symbol=symbol
+            symbol=symbol,
         )
 
         assert result.symbol == symbol
@@ -240,11 +235,13 @@ class TestDatabaseIntegrity:
 
         # All documents should reference valid repo
         cursor = test_index.repos_db.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COUNT(*) FROM documents d
             LEFT JOIN repos r ON d.repo_id = r.id
             WHERE r.id IS NULL
-        """)
+        """
+        )
 
         orphaned_docs = cursor.fetchone()[0]
         assert orphaned_docs == 0
@@ -254,11 +251,13 @@ class TestDatabaseIntegrity:
         index = indexed_repo["index"]
 
         cursor = index.repos_db.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COUNT(*) FROM symbols s
             LEFT JOIN documents d ON s.doc_id = d.id
             WHERE d.id IS NULL
-        """)
+        """
+        )
 
         orphaned_symbols = cursor.fetchone()[0]
         assert orphaned_symbols == 0
@@ -297,11 +296,13 @@ class TestRemoveFile:
 
         embedding_count_before = 0
         if index.vectors is not None:
-            embedding_count_before = len([
-                row
-                for row in index.vectors.to_arrow().to_pylist()
-                if row.get("doc_id") == str(doc_id)
-            ])
+            embedding_count_before = len(
+                [
+                    row
+                    for row in index.vectors.to_arrow().to_pylist()
+                    if row.get("doc_id") == str(doc_id)
+                ]
+            )
 
         # Removing the file should return True
         removed = index.remove_file(repo_name, test_repo_path, target_file)
@@ -348,12 +349,7 @@ class TestRemoveFile:
         doc_id, blob_sha = row
 
         # Simulate a missing/corrupted blob on disk
-        blob_file = (
-            index.index_path
-            / "blobs"
-            / blob_sha[:2]
-            / blob_sha[2:]
-        )
+        blob_file = index.index_path / "blobs" / blob_sha[:2] / blob_sha[2:]
         if blob_file.exists():
             blob_file.unlink()
 
@@ -365,9 +361,7 @@ class TestRemoveFile:
         for _gram, doc_ids in index._trigram_iter_items():
             assert doc_id not in doc_ids
 
-    def test_remove_file_clears_lancedb_rows(
-        self, embeddings_enabled_index
-    ):
+    def test_remove_file_clears_lancedb_rows(self, embeddings_enabled_index):
         """Removing a file should clear matching LanceDB rows by repo/path."""
 
         index = embeddings_enabled_index["index"]
@@ -424,7 +418,9 @@ class TestEmbeddingDimensions:
         index = indexed_repo["index"]
         index.build_vector_index(repo="test_repo", force=True)
 
-        vectors = [row["vector"] for row in index._repo_vectors["test_repo"].to_arrow().to_pylist()[:5]]
+        vectors = [
+            row["vector"] for row in index._repo_vectors["test_repo"].to_arrow().to_pylist()[:5]
+        ]
         for vector in vectors:
             norm = np.linalg.norm(np.array(vector, dtype="float32"))
             assert 0.95 <= norm <= 1.05

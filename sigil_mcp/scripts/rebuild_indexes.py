@@ -222,9 +222,7 @@ def rebuild_all_indexes(
         embed_fn, model_name = _setup_embedding_function(config)
         index.embed_fn = embed_fn
         index.embed_model = model_name
-        embedding_stats = _rebuild_embeddings_for_all_repos(
-            index, repos, embed_fn, model_name
-        )
+        embedding_stats = _rebuild_embeddings_for_all_repos(index, repos, embed_fn, model_name)
     elif not config.embeddings_enabled:
         logger.info("Embeddings disabled in config - skipping embedding rebuild")
 
@@ -273,9 +271,7 @@ def rebuild_single_repo_index(
     if rebuild_embeddings:
         if embed_fn is None:
             raise ValueError("embed_fn required for rebuilding embeddings")
-        embedding_stats = rebuild_embeddings_for_repo(
-            index, repo_name, embed_fn, model
-        )
+        embedding_stats = rebuild_embeddings_for_repo(index, repo_name, embed_fn, model)
 
     return {
         "success": True,
@@ -318,10 +314,7 @@ def main() -> int:
         print()
         print("Trigram rebuild summary:")
         for repo_name, stats in result["repos"].items():
-            print(
-                f"  {repo_name}: {stats['files']} files, "
-                f"{stats['trigrams']} trigrams"
-            )
+            print(f"  {repo_name}: {stats['files']} files, " f"{stats['trigrams']} trigrams")
 
         if result.get("embedding_stats"):
             print()

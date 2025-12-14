@@ -68,19 +68,25 @@ def test_should_ignore_precedence_and_heuristics(tmp_path: Path):
     include_patterns = ["keep.py"]
     repo_ignore_patterns = ["*.py"]  # would normally ignore keep.py
 
-    assert should_ignore(
-        keep_file,
-        repo_root=repo,
-        include_patterns=include_patterns,
-        repo_ignore_patterns=repo_ignore_patterns,
-    ) is False
+    assert (
+        should_ignore(
+            keep_file,
+            repo_root=repo,
+            include_patterns=include_patterns,
+            repo_ignore_patterns=repo_ignore_patterns,
+        )
+        is False
+    )
 
     # Directory heuristic should ignore child paths
-    assert should_ignore(
-        ignored_file,
-        repo_root=repo,
-        ignore_dirs=["build"],
-    ) is True
+    assert (
+        should_ignore(
+            ignored_file,
+            repo_root=repo,
+            ignore_dirs=["build"],
+        )
+        is True
+    )
 
     # Hidden file heuristic
     hidden = repo / ".secret"
@@ -134,12 +140,15 @@ def test_should_ignore_includes_and_whitelists(tmp_path: Path):
     target.write_text("x")
     includes = ["keep.md"]
     repo_patterns = ["*.md"]
-    assert should_ignore(
-        target,
-        repo_root=repo,
-        include_patterns=includes,
-        repo_ignore_patterns=repo_patterns,
-    ) is False
+    assert (
+        should_ignore(
+            target,
+            repo_root=repo,
+            include_patterns=includes,
+            repo_ignore_patterns=repo_patterns,
+        )
+        is False
+    )
 
 
 def test_should_ignore_pattern_lists_and_heuristics(tmp_path: Path, monkeypatch):
@@ -149,20 +158,26 @@ def test_should_ignore_pattern_lists_and_heuristics(tmp_path: Path, monkeypatch)
     target = nested / "file.log"
     target.write_text("x")
     # Trigger repo ignore patterns
-    assert should_ignore(
-        target,
-        repo_root=repo,
-        repo_ignore_patterns=["*.log"],
-    ) is True
+    assert (
+        should_ignore(
+            target,
+            repo_root=repo,
+            repo_ignore_patterns=["*.log"],
+        )
+        is True
+    )
 
     allowed = repo / "allowed.txt"
     allowed.write_text("x")
-    assert should_ignore(
-        allowed,
-        repo_root=repo,
-        repo_ignore_patterns=["!allowed.txt"],
-        config_ignore_patterns=["*.txt"],
-    ) is False
+    assert (
+        should_ignore(
+            allowed,
+            repo_root=repo,
+            repo_ignore_patterns=["!allowed.txt"],
+            config_ignore_patterns=["*.txt"],
+        )
+        is False
+    )
 
     cargo = Path("/tmp/CARGO_TARGET_CACHE/file")
     assert should_ignore(cargo, repo_root=repo) is True
@@ -231,4 +246,7 @@ def test_should_ignore_when_loader_raises(monkeypatch, tmp_path: Path):
         lambda root: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
-    assert should_ignore(target, repo_root=repo, include_patterns=None, gitignore_patterns=None) is False
+    assert (
+        should_ignore(target, repo_root=repo, include_patterns=None, gitignore_patterns=None)
+        is False
+    )

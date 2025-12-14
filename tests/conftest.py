@@ -53,7 +53,8 @@ def test_repo_path(temp_dir):
     repo_path.mkdir(parents=True, exist_ok=True)
 
     # Create sample Python files
-    (repo_path / "main.py").write_text("""
+    (repo_path / "main.py").write_text(
+        """
 def hello_world():
     '''Say hello to the world.'''
     print("Hello, World!")
@@ -71,9 +72,11 @@ class Calculator:
 
 if __name__ == "__main__":
     hello_world()
-""")
+"""
+    )
 
-    (repo_path / "utils.py").write_text("""
+    (repo_path / "utils.py").write_text(
+        """
 def process_data(data):
     '''Process input data.'''
     result = []
@@ -86,13 +89,15 @@ def validate_input(value):
     if not value:
         raise ValueError("Value cannot be empty")
     return True
-""")
+"""
+    )
 
     # Create a subdirectory with more files
     subdir = repo_path / "lib"
     subdir.mkdir()
 
-    (subdir / "helper.py").write_text("""
+    (subdir / "helper.py").write_text(
+        """
 def format_output(text):
     '''Format text for output.'''
     return text.upper()
@@ -106,7 +111,8 @@ class Logger:
     def log(self, message):
         '''Log a message.'''
         print(f"[{self.name}] {message}")
-""")
+"""
+    )
 
     yield repo_path
 
@@ -145,9 +151,7 @@ def test_index(test_index_path, dummy_embed_fn, monkeypatch):
     monkeypatch.setattr(sigil_config, "_config", cfg)
 
     index = SigilIndex(
-        index_path=test_index_path,
-        embed_fn=dummy_embed_fn,
-        embed_model="test-model"
+        index_path=test_index_path, embed_fn=dummy_embed_fn, embed_model="test-model"
     )
     yield index
     # Cleanup
@@ -162,7 +166,7 @@ def indexed_repo(test_index, test_repo_path):
         "index": test_index,
         "repo_path": test_repo_path,
         "repo_name": "test_repo",
-        "stats": stats
+        "stats": stats,
     }
 
 
@@ -199,28 +203,20 @@ def test_config_file(temp_dir):
     """Create a temporary config file for testing."""
     config_path = temp_dir / "config.json"
     config_data = {
-        "server": {
-            "name": "test_server",
-            "host": "127.0.0.1",
-            "port": 8000,
-            "log_level": "DEBUG"
-        },
+        "server": {"name": "test_server", "host": "127.0.0.1", "port": 8000, "log_level": "DEBUG"},
         "authentication": {
             "enabled": True,
             "oauth_enabled": True,
             "allow_local_bypass": True,
-            "allowed_ips": ["192.168.1.1"]
+            "allowed_ips": ["192.168.1.1"],
         },
-        "repositories": {
-            "test_repo": "/path/to/test/repo"
-        },
-        "index": {
-            "path": str(temp_dir / ".test_index")
-        }
+        "repositories": {"test_repo": "/path/to/test/repo"},
+        "index": {"path": str(temp_dir / ".test_index")},
     }
 
     import json
-    with open(config_path, 'w') as f:
+
+    with open(config_path, "w") as f:
         json.dump(config_data, f, indent=2)
 
     yield config_path

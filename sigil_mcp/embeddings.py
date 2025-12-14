@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 # Optional dependencies - import at top level
 try:
     from sentence_transformers import SentenceTransformer
+
     SENTENCE_TRANSFORMERS_AVAILABLE = True
 except ImportError:
     SentenceTransformer = None  # type: ignore
@@ -24,6 +25,7 @@ except ImportError:
 
 try:
     from openai import OpenAI
+
     OPENAI_AVAILABLE = True
 except ImportError:
     OpenAI = None  # type: ignore
@@ -109,8 +111,7 @@ def create_embedding_provider(  # noqa: C901
             openai_available = OPENAI_AVAILABLE or OpenAI is not None
             if not openai_available:
                 raise ImportError(
-                    "openai is required for this provider. "
-                    "Install it with: pip install openai"
+                    "openai is required for this provider. " "Install it with: pip install openai"
                 )
 
             api_key = kwargs.get("api_key")
@@ -122,23 +123,17 @@ def create_embedding_provider(  # noqa: C901
             client = OpenAI(api_key=api_key)
 
             class OpenAIProvider:
-                def __init__(
-                    self, client: "OpenAIType", model: str, dim: int
-                ) -> None:
+                def __init__(self, client: "OpenAIType", model: str, dim: int) -> None:
                     self.client = client
                     self.model = model
                     self.dimension = dim
 
                 def embed_documents(self, texts: list[str]) -> list[list[float]]:
-                    response = self.client.embeddings.create(
-                        input=texts, model=self.model
-                    )
+                    response = self.client.embeddings.create(input=texts, model=self.model)
                     return [item.embedding for item in response.data]
 
                 def embed_query(self, text: str) -> list[float]:
-                    response = self.client.embeddings.create(
-                        input=[text], model=self.model
-                    )
+                    response = self.client.embeddings.create(input=[text], model=self.model)
                     return response.data[0].embedding
 
                 def get_dimension(self) -> int:

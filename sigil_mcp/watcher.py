@@ -31,6 +31,7 @@ from .ignore_utils import (
 try:
     from watchdog.events import FileSystemEvent, FileSystemEventHandler
     from watchdog.observers import Observer
+
     WATCHDOG_AVAILABLE = True
 except ImportError:
     WATCHDOG_AVAILABLE = False
@@ -144,9 +145,7 @@ class RepositoryWatcher(FileSystemEventHandler):
                     path_obj = Path(path_str)
                     self.on_change(self.repo_name, path_obj, event_type)
                 except Exception as e:
-                    logger.error(
-                        f"Error processing change for {path_str} in {self.repo_name}: {e}"
-                    )
+                    logger.error(f"Error processing change for {path_str} in {self.repo_name}: {e}")
 
     def _should_ignore(self, path: Path) -> bool:
         """Check if file should be ignored, honoring configured ignore rules."""
@@ -159,9 +158,9 @@ class RepositoryWatcher(FileSystemEventHandler):
             path,
             self.repo_path,
             config_ignore_patterns=(cfg.index_ignore_patterns if cfg is not None else None),
-            repo_ignore_patterns=getattr(self, '_repo_ignore_patterns', None),
-            include_patterns=getattr(self, '_include_patterns', None),
-            gitignore_patterns=getattr(self, '_gitignore_patterns', None),
+            repo_ignore_patterns=getattr(self, "_repo_ignore_patterns", None),
+            include_patterns=getattr(self, "_include_patterns", None),
+            gitignore_patterns=getattr(self, "_gitignore_patterns", None),
             ignore_dirs=self.ignore_dirs,
             ignore_extensions=self.ignore_extensions,
         )
@@ -198,14 +197,18 @@ class RepositoryWatcher(FileSystemEventHandler):
 
     def _should_ignore_path(self, path_str: str) -> bool:
         """Quick check to ignore paths before any processing."""
-        normalized = path_str.replace('\\', '/')
-        parts = normalized.split('/')
+        normalized = path_str.replace("\\", "/")
+        parts = normalized.split("/")
         # Fast include check: if explicitly included, do not ignore
         try:
             p = Path(normalized)
-            if getattr(self, '_include_patterns', None) and is_ignored_by_gitignore(p, self.repo_path, self._include_patterns):
+            if getattr(self, "_include_patterns", None) and is_ignored_by_gitignore(
+                p, self.repo_path, self._include_patterns
+            ):
                 return False
-            if self._gitignore_patterns and is_ignored_by_gitignore(p, self.repo_path, self._gitignore_patterns):
+            if self._gitignore_patterns and is_ignored_by_gitignore(
+                p, self.repo_path, self._gitignore_patterns
+            ):
                 return True
         except Exception:
             pass
@@ -217,14 +220,13 @@ class RepositoryWatcher(FileSystemEventHandler):
             normalized_ignore = set()
             for ignore_dir in self.ignore_dirs:
                 normalized_ignore.add(ignore_dir)
-                if ignore_dir.startswith('.'):
-                    normalized_ignore.add(ignore_dir.lstrip('.'))
+                if ignore_dir.startswith("."):
+                    normalized_ignore.add(ignore_dir.lstrip("."))
                 else:
-                    normalized_ignore.add(f'.{ignore_dir}')
+                    normalized_ignore.add(f".{ignore_dir}")
 
             # Check if any path component matches an ignored directory
-            if any(part in normalized_ignore or f'.{part}' in normalized_ignore
-                   for part in parts):
+            if any(part in normalized_ignore or f".{part}" in normalized_ignore for part in parts):
                 return True
 
         return False
@@ -339,6 +341,7 @@ class FileWatchManager:
             try:
                 # local import to avoid circular top-level import
                 from sigil_mcp import server as _server
+
                 if repo_name not in getattr(_server, "REPOS", {}):
                     _server.REPOS[repo_name] = repo_path
             except Exception:

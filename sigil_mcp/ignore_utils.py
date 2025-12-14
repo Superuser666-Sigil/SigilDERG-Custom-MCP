@@ -10,11 +10,11 @@ def load_gitignore(repo_root: Path) -> list[str]:
     """
     patterns: list[str] = []
     try:
-        gitignore = repo_root / '.gitignore'
+        gitignore = repo_root / ".gitignore"
         if gitignore.exists():
-            for line in gitignore.read_text(encoding='utf-8', errors='ignore').splitlines():
+            for line in gitignore.read_text(encoding="utf-8", errors="ignore").splitlines():
                 line = line.strip()
-                if not line or line.startswith('#'):
+                if not line or line.startswith("#"):
                     continue
                 patterns.append(line)
     except Exception:
@@ -23,11 +23,11 @@ def load_gitignore(repo_root: Path) -> list[str]:
 
     # Also consider .git/info/exclude if present
     try:
-        info_exclude = repo_root / '.git' / 'info' / 'exclude'
+        info_exclude = repo_root / ".git" / "info" / "exclude"
         if info_exclude.exists():
-            for line in info_exclude.read_text(encoding='utf-8', errors='ignore').splitlines():
+            for line in info_exclude.read_text(encoding="utf-8", errors="ignore").splitlines():
                 line = line.strip()
-                if not line or line.startswith('#'):
+                if not line or line.startswith("#"):
                     continue
                 patterns.append(line)
     except Exception:
@@ -49,12 +49,12 @@ def load_include_patterns(repo_root: Path) -> list[str]:
     """
     patterns: list[str] = []
     try:
-        for fname in ('.sigil_mcp_include', '.sigil_index_include'):
+        for fname in (".sigil_mcp_include", ".sigil_index_include"):
             fpath = repo_root / fname
             if fpath.exists():
-                for line in fpath.read_text(encoding='utf-8', errors='ignore').splitlines():
+                for line in fpath.read_text(encoding="utf-8", errors="ignore").splitlines():
                     line = line.strip()
-                    if not line or line.startswith('#'):
+                    if not line or line.startswith("#"):
                         continue
                     patterns.append(line)
     except Exception:
@@ -73,17 +73,17 @@ def _match_pattern(rel_path: str, pattern: str) -> bool:
     - basename matches
     It does not implement every gitignore nuance but is sufficient for typical use.
     """
-    if pattern.endswith('/'):
+    if pattern.endswith("/"):
         # directory pattern
-        p = pattern.rstrip('/')
+        p = pattern.rstrip("/")
         # match if rel_path equals p or is inside p/
-        if rel_path == p or rel_path.startswith(p + '/'):
+        if rel_path == p or rel_path.startswith(p + "/"):
             return True
         # also allow matching with glob
         return fnmatch.fnmatch(rel_path, p) or fnmatch.fnmatch(rel_path, f"**/{p}")
 
-    anchored = pattern.startswith('/')
-    pat = pattern.lstrip('/')
+    anchored = pattern.startswith("/")
+    pat = pattern.lstrip("/")
 
     # direct match
     if fnmatch.fnmatch(rel_path, pat):
@@ -119,7 +119,7 @@ def is_ignored_by_gitignore(path: Path, repo_root: Path, patterns: list[str]) ->
     for pat in patterns:
         if not pat:
             continue
-        if pat.startswith('!'):
+        if pat.startswith("!"):
             sub = pat[1:]
             if _match_pattern(rel, sub):
                 ignored = False
@@ -178,7 +178,7 @@ def should_ignore(
         # Explicit includes (if match, never ignore)
         if include_patterns:
             try:
-                if is_ignored_by_gitignore(path, repo_root or Path('.'), include_patterns):
+                if is_ignored_by_gitignore(path, repo_root or Path("."), include_patterns):
                     return False
             except Exception:
                 pass
@@ -193,9 +193,9 @@ def should_ignore(
                 if not p or not isinstance(p, str):
                     continue
                 s = p.strip()
-                if not s or s.startswith('#'):
+                if not s or s.startswith("#"):
                     continue
-                if s.startswith('!'):
+                if s.startswith("!"):
                     allows.append(s[1:].strip())
                 else:
                     pos.append(s)
@@ -241,7 +241,7 @@ def should_ignore(
 
         # Check if any parent directory matches configured ignore dirs
         for parent in path.parents:
-            if parent.name in skip_dirs or ('.' + parent.name) in skip_dirs:
+            if parent.name in skip_dirs or ("." + parent.name) in skip_dirs:
                 return True
 
         # Cargo target cache special-case
@@ -268,11 +268,11 @@ def should_ignore(
             pass
 
         # Hidden files/dirs
-        if any(part.startswith('.') for part in path.parts):
+        if any(part.startswith(".") for part in path.parts):
             return True
 
         # Vite timestamp filenames
-        if '.timestamp-' in path.name:
+        if ".timestamp-" in path.name:
             return True
 
         # Large files

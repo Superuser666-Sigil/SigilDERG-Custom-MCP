@@ -34,7 +34,7 @@ def dummy_embed_fn(texts):
     """
     # Fixed dimensionality for consistency
     dim = 384
-    embeddings = np.random.randn(len(texts), dim).astype('float32')
+    embeddings = np.random.randn(len(texts), dim).astype("float32")
     # Normalize to unit vectors (common for cosine similarity)
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
     embeddings = embeddings / (norms + 1e-8)
@@ -44,11 +44,7 @@ def dummy_embed_fn(texts):
 def main():
     # Initialize index with embedding function
     index_path = Path.home() / ".sigil-index"
-    index = SigilIndex(
-        index_path=index_path,
-        embed_fn=dummy_embed_fn,
-        embed_model="dummy-v1"
-    )
+    index = SigilIndex(index_path=index_path, embed_fn=dummy_embed_fn, embed_model="dummy-v1")
 
     # First, index a repository (if not already indexed)
     repo_name = "my-project"
@@ -57,17 +53,13 @@ def main():
     print(f"Indexing repository: {repo_name}")
     try:
         stats = index.index_repository(repo_name, repo_path, force=False)
-        print(f"Indexed {stats['files_indexed']} files, "
-              f"{stats['symbols_extracted']} symbols")
+        print(f"Indexed {stats['files_indexed']} files, " f"{stats['symbols_extracted']} symbols")
     except Exception as e:
         print(f"Note: Repository may already be indexed ({e})")
 
     # Build vector index
     print(f"\nBuilding vector index for {repo_name}...")
-    vector_stats = index.build_vector_index(
-        repo=repo_name,
-        force=False  # Set True to rebuild
-    )
+    vector_stats = index.build_vector_index(repo=repo_name, force=False)  # Set True to rebuild
 
     print("Vector index complete:")
     print(f"  Documents processed: {vector_stats['documents_processed']}")
@@ -91,21 +83,19 @@ def example_with_sentence_transformers():
     try:
         # Use the built-in provider factory
         provider = create_embedding_provider(
-            provider='sentence-transformers',
-            model='all-MiniLM-L6-v2',
-            dimension=384
+            provider="sentence-transformers", model="all-MiniLM-L6-v2", dimension=384
         )
 
         def embed_fn(texts):
             # Returns list[list[float]], convert to numpy array
             embeddings = provider.embed_documents(texts)
-            return np.array(embeddings, dtype='float32')
+            return np.array(embeddings, dtype="float32")
 
         # Create index with real embeddings
         index = SigilIndex(
             index_path=Path.home() / ".sigil-index",
             embed_fn=embed_fn,
-            embed_model="all-MiniLM-L6-v2"
+            embed_model="all-MiniLM-L6-v2",
         )
 
         print("Using sentence-transformers for embeddings")
@@ -135,22 +125,22 @@ def example_with_openai():
 
         # Use the built-in provider factory
         provider = create_embedding_provider(
-            provider='openai',
-            model='text-embedding-3-small',
+            provider="openai",
+            model="text-embedding-3-small",
             dimension=1536,  # text-embedding-3-small dimension
-            api_key=api_key
+            api_key=api_key,
         )
 
         def embed_fn(texts):
             # Returns list[list[float]], convert to numpy array
             embeddings = provider.embed_documents(texts)
-            return np.array(embeddings, dtype='float32')
+            return np.array(embeddings, dtype="float32")
 
         # Create index with OpenAI embeddings
         index = SigilIndex(
             index_path=Path.home() / ".sigil-index",
             embed_fn=embed_fn,
-            embed_model="text-embedding-3-small"
+            embed_model="text-embedding-3-small",
         )
 
         print("Using OpenAI embeddings")
@@ -183,23 +173,23 @@ def example_with_llamacpp():
 
         # Use the built-in provider factory
         provider = create_embedding_provider(
-            provider='llamacpp',
+            provider="llamacpp",
             model=str(model_path),
             dimension=768,  # nomic-embed dimension
             n_ctx=8192,
-            n_batch=512
+            n_batch=512,
         )
 
         def embed_fn(texts):
             # Returns list[list[float]], convert to numpy array
             embeddings = provider.embed_documents(texts)
-            return np.array(embeddings, dtype='float32')
+            return np.array(embeddings, dtype="float32")
 
         # Create index with llamacpp embeddings
         index = SigilIndex(
             index_path=Path.home() / ".sigil-index",
             embed_fn=embed_fn,
-            embed_model="nomic-embed-text-v1.5"
+            embed_model="nomic-embed-text-v1.5",
         )
 
         print("Using llamacpp for local embeddings")
@@ -217,9 +207,9 @@ def example_with_llamacpp():
 if __name__ == "__main__":
     main()
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("For production use, consider:")
     print("1. sentence-transformers: example_with_sentence_transformers()")
     print("2. OpenAI embeddings: example_with_openai()")
     print("3. Local GGUF models: example_with_llamacpp()")
-    print("="*60)
+    print("=" * 60)

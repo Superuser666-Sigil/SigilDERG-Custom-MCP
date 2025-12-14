@@ -21,11 +21,14 @@ class TestAPIKeyAuthentication:
         # Any value returned from verify_api_key should fail since no header present
         monkeypatch.setattr(security_auth, "verify_api_key", lambda key: False, raising=False)
 
-        assert security_auth.check_authentication(
-            request_headers={},
-            client_ip="203.0.113.10",
-            settings=_make_settings(),
-        ) is False
+        assert (
+            security_auth.check_authentication(
+                request_headers={},
+                client_ip="203.0.113.10",
+                settings=_make_settings(),
+            )
+            is False
+        )
 
     def test_header_api_key_matches_env_value(self, monkeypatch):
         monkeypatch.setenv("SIGIL_MCP_API_KEY", "env-secret")
@@ -36,24 +39,33 @@ class TestAPIKeyAuthentication:
 
         monkeypatch.setattr(security_auth, "verify_api_key", _fail_verify, raising=False)
 
-        assert security_auth.check_authentication(
-            request_headers={"x-api-key": "env-secret"},
-            client_ip="203.0.113.20",
-            settings=_make_settings(),
-        ) is True
+        assert (
+            security_auth.check_authentication(
+                request_headers={"x-api-key": "env-secret"},
+                client_ip="203.0.113.20",
+                settings=_make_settings(),
+            )
+            is True
+        )
 
 
 class TestRedirectValidation:
     def test_allowed_redirect_in_allow_list(self):
-        assert security_auth.is_redirect_uri_allowed(
-            "https://chat.openai.com/aip/oauth/callback",
-            registered_redirects=[],
-            allow_list=["https://chat.openai.com"],
-        ) is True
+        assert (
+            security_auth.is_redirect_uri_allowed(
+                "https://chat.openai.com/aip/oauth/callback",
+                registered_redirects=[],
+                allow_list=["https://chat.openai.com"],
+            )
+            is True
+        )
 
     def test_rejects_unlisted_redirect(self):
-        assert security_auth.is_redirect_uri_allowed(
-            "https://malicious.example.com/callback",
-            registered_redirects=["https://trusted.example.com/callback"],
-            allow_list=["https://chat.openai.com"],
-        ) is False
+        assert (
+            security_auth.is_redirect_uri_allowed(
+                "https://malicious.example.com/callback",
+                registered_redirects=["https://trusted.example.com/callback"],
+                allow_list=["https://chat.openai.com"],
+            )
+            is False
+        )

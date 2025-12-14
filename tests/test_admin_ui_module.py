@@ -34,7 +34,9 @@ def test_admin_ui_start_missing_command(monkeypatch, tmp_path):
     ui_dir.mkdir()
     cfg = DummyCfg(path=str(ui_dir))
     monkeypatch.setattr(admin_ui, "get_config", lambda: cfg)
-    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError())
+    )
     admin_ui.start_admin_ui()
     # No exception and process remains None
     assert admin_ui._ADMIN_UI_PROCESS.proc is None
@@ -45,7 +47,9 @@ def test_admin_ui_start_and_stop(monkeypatch, tmp_path):
     ui_dir.mkdir()
     cfg = DummyCfg(path=str(ui_dir))
     monkeypatch.setattr(admin_ui, "get_config", lambda: cfg)
-    fake_proc = type("P", (), {"pid": 1, "terminate": lambda self: None, "wait": lambda self, timeout=5: None})
+    fake_proc = type(
+        "P", (), {"pid": 1, "terminate": lambda self: None, "wait": lambda self, timeout=5: None}
+    )
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: fake_proc())
     admin_ui.start_admin_ui()
     assert admin_ui._ADMIN_UI_PROCESS.proc is not None
@@ -59,7 +63,9 @@ def test_admin_ui_start_generic_exception(monkeypatch, tmp_path):
     cfg = DummyCfg(path=str(ui_dir))
     monkeypatch.setattr(admin_ui, "_ADMIN_UI_PROCESS", admin_ui.AdminUIProcess())
     monkeypatch.setattr(admin_ui, "get_config", lambda: cfg)
-    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
     admin_ui.start_admin_ui()
     assert admin_ui._ADMIN_UI_PROCESS.proc is None
 
@@ -128,11 +134,17 @@ def test_admin_ui_env_points_to_admin_backend(monkeypatch, tmp_path):
 
     def fake_popen(cmd, cwd=None, env=None, stdout=None, stderr=None):
         captured["env"] = env
+
         class P:
             def __init__(self):
                 self.pid = 1
-            def terminate(self): pass
-            def wait(self, timeout=5): pass
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=5):
+                pass
+
         return P()
 
     monkeypatch.setattr(admin_ui, "get_config", lambda: cfg)

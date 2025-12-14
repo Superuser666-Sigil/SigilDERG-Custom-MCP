@@ -94,9 +94,7 @@ def build_mcp_app(
         else enable_chatgpt_compliance
     )
     apply_header_logging = (
-        config.header_logging_enabled
-        if enable_header_logging is None
-        else enable_header_logging
+        config.header_logging_enabled if enable_header_logging is None else enable_header_logging
     )
 
     transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
@@ -129,8 +127,6 @@ def build_mcp_app(
                 "Check FastMCP API for correct attribute name."
             )
     else:
-        logger.info(
-            "Header logging middleware disabled or admin API enabled - skipping"
-        )
+        logger.info("Header logging middleware disabled or admin API enabled - skipping")
 
     return mcp

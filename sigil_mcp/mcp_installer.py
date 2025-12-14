@@ -38,11 +38,17 @@ def auto_install(servers: Iterable[dict[str, Any]]) -> None:
 
         cmdline = [command, *args]
         try:
-            logger.info("Auto-installing MCP server '%s' via: %s", server.get("name"), " ".join(cmdline))
+            logger.info(
+                "Auto-installing MCP server '%s' via: %s", server.get("name"), " ".join(cmdline)
+            )
             subprocess.run(cmdline, check=True)
         except FileNotFoundError:
-            logger.warning("Install command not found for server '%s': %s", server.get("name"), command)
+            logger.warning(
+                "Install command not found for server '%s': %s", server.get("name"), command
+            )
         except subprocess.CalledProcessError as exc:
             logger.warning("Install command failed for server '%s': %s", server.get("name"), exc)
         except Exception as exc:
-            logger.warning("Unexpected error auto-installing server '%s': %s", server.get("name"), exc)
+            logger.warning(
+                "Unexpected error auto-installing server '%s': %s", server.get("name"), exc
+            )

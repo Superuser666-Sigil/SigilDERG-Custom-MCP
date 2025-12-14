@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 try:
     from llama_cpp import Llama
+
     LLAMACPP_AVAILABLE = True
 except ImportError:
     Llama = None  # type: ignore
@@ -118,11 +119,19 @@ class LlamaCppEmbeddingProvider:
 
         cfg = get_config()
         cores = _os.cpu_count() or 1
-        env_threads = _os.getenv("SIGIL_MCP_LLAMA_THREADS") or _os.getenv("SIGIL_MCP_LLAMACPP_THREADS")
+        env_threads = _os.getenv("SIGIL_MCP_LLAMA_THREADS") or _os.getenv(
+            "SIGIL_MCP_LLAMACPP_THREADS"
+        )
         env_batch = _os.getenv("SIGIL_MCP_LLAMA_BATCH")
-        env_threads_batch = _os.getenv("SIGIL_MCP_LLAMA_THREADS_BATCH") or _os.getenv("SIGIL_MCP_LLAMACPP_THREADS_BATCH")
-        env_n_batch = _os.getenv("SIGIL_MCP_LLAMA_N_BATCH") or _os.getenv("SIGIL_MCP_LLAMACPP_N_BATCH")
-        env_n_ubatch = _os.getenv("SIGIL_MCP_LLAMA_N_UBATCH") or _os.getenv("SIGIL_MCP_LLAMACPP_N_UBATCH")
+        env_threads_batch = _os.getenv("SIGIL_MCP_LLAMA_THREADS_BATCH") or _os.getenv(
+            "SIGIL_MCP_LLAMACPP_THREADS_BATCH"
+        )
+        env_n_batch = _os.getenv("SIGIL_MCP_LLAMA_N_BATCH") or _os.getenv(
+            "SIGIL_MCP_LLAMACPP_N_BATCH"
+        )
+        env_n_ubatch = _os.getenv("SIGIL_MCP_LLAMA_N_UBATCH") or _os.getenv(
+            "SIGIL_MCP_LLAMACPP_N_UBATCH"
+        )
         if _os.getenv("SIGIL_MCP_LLAMA_NO_LOG_FILTER", "").lower() not in {"1", "true", "yes"}:
             _install_llama_log_filter()
 
@@ -135,10 +144,15 @@ class LlamaCppEmbeddingProvider:
                 self.n_threads = max(1, int(env_threads))
                 threads_source = "env"
             except (TypeError, ValueError):
-                logger.warning("Invalid SIGIL_MCP_LLAMA_THREADS '%s', falling back to config/default", env_threads)
+                logger.warning(
+                    "Invalid SIGIL_MCP_LLAMA_THREADS '%s', falling back to config/default",
+                    env_threads,
+                )
                 cfg_threads = cfg.embeddings_llamacpp_threads
                 self.n_threads = int(cfg_threads) if cfg_threads is not None else max(1, cores - 1)
-                threads_source = "config" if cfg.embeddings_llamacpp_threads is not None else "default"
+                threads_source = (
+                    "config" if cfg.embeddings_llamacpp_threads is not None else "default"
+                )
         else:
             cfg_threads = cfg.embeddings_llamacpp_threads
             self.n_threads = int(cfg_threads) if cfg_threads is not None else max(1, cores - 1)
@@ -152,10 +166,14 @@ class LlamaCppEmbeddingProvider:
                 self.batch_size = max(1, int(env_batch))
                 batch_source = "env"
             except (TypeError, ValueError):
-                logger.warning("Invalid SIGIL_MCP_LLAMA_BATCH '%s', falling back to config/default", env_batch)
+                logger.warning(
+                    "Invalid SIGIL_MCP_LLAMA_BATCH '%s', falling back to config/default", env_batch
+                )
                 cfg_batch = cfg.embeddings_llamacpp_batch_size
                 self.batch_size = int(cfg_batch) if cfg_batch is not None else 32
-                batch_source = "config" if cfg.embeddings_llamacpp_batch_size is not None else "default"
+                batch_source = (
+                    "config" if cfg.embeddings_llamacpp_batch_size is not None else "default"
+                )
         else:
             cfg_batch = cfg.embeddings_llamacpp_batch_size
             self.batch_size = int(cfg_batch) if cfg_batch is not None else 32
@@ -170,14 +188,23 @@ class LlamaCppEmbeddingProvider:
                 self.n_threads_batch = max(1, int(env_threads_batch))
                 threads_batch_source = "env"
             except (TypeError, ValueError):
-                logger.warning("Invalid SIGIL_MCP_LLAMA_THREADS_BATCH '%s', falling back to config/default", env_threads_batch)
+                logger.warning(
+                    "Invalid SIGIL_MCP_LLAMA_THREADS_BATCH '%s', falling back to config/default",
+                    env_threads_batch,
+                )
                 cfg_threads_batch = cfg.embeddings_llamacpp_threads_batch
-                self.n_threads_batch = int(cfg_threads_batch) if cfg_threads_batch is not None else None
-                threads_batch_source = "config" if cfg.embeddings_llamacpp_threads_batch is not None else "default"
+                self.n_threads_batch = (
+                    int(cfg_threads_batch) if cfg_threads_batch is not None else None
+                )
+                threads_batch_source = (
+                    "config" if cfg.embeddings_llamacpp_threads_batch is not None else "default"
+                )
         else:
             cfg_threads_batch = cfg.embeddings_llamacpp_threads_batch
             self.n_threads_batch = int(cfg_threads_batch) if cfg_threads_batch is not None else None
-            threads_batch_source = "config" if cfg.embeddings_llamacpp_threads_batch is not None else "default"
+            threads_batch_source = (
+                "config" if cfg.embeddings_llamacpp_threads_batch is not None else "default"
+            )
 
         # Control llama.cpp token batching (n_batch/n_ubatch) to reduce native-level spikes
         if llama_n_batch is not None:
@@ -188,10 +215,15 @@ class LlamaCppEmbeddingProvider:
                 self.llama_n_batch = max(1, int(env_n_batch))
                 n_batch_source = "env"
             except (TypeError, ValueError):
-                logger.warning("Invalid SIGIL_MCP_LLAMA_N_BATCH '%s', falling back to config/default", env_n_batch)
+                logger.warning(
+                    "Invalid SIGIL_MCP_LLAMA_N_BATCH '%s', falling back to config/default",
+                    env_n_batch,
+                )
                 cfg_n_batch = cfg.embeddings_llamacpp_n_batch
                 self.llama_n_batch = int(cfg_n_batch) if cfg_n_batch is not None else 2048
-                n_batch_source = "config" if cfg.embeddings_llamacpp_n_batch is not None else "default"
+                n_batch_source = (
+                    "config" if cfg.embeddings_llamacpp_n_batch is not None else "default"
+                )
         else:
             cfg_n_batch = cfg.embeddings_llamacpp_n_batch
             self.llama_n_batch = int(cfg_n_batch) if cfg_n_batch is not None else 2048
@@ -206,14 +238,23 @@ class LlamaCppEmbeddingProvider:
                 self.llama_n_ubatch = max(1, int(env_n_ubatch))
                 n_ubatch_source = "env"
             except (TypeError, ValueError):
-                logger.warning("Invalid SIGIL_MCP_LLAMA_N_UBATCH '%s', falling back to config/default", env_n_ubatch)
+                logger.warning(
+                    "Invalid SIGIL_MCP_LLAMA_N_UBATCH '%s', falling back to config/default",
+                    env_n_ubatch,
+                )
                 cfg_n_ubatch = cfg.embeddings_llamacpp_n_ubatch
-                self.llama_n_ubatch = int(cfg_n_ubatch) if cfg_n_ubatch is not None else default_ubatch
-                n_ubatch_source = "config" if cfg.embeddings_llamacpp_n_ubatch is not None else "default"
+                self.llama_n_ubatch = (
+                    int(cfg_n_ubatch) if cfg_n_ubatch is not None else default_ubatch
+                )
+                n_ubatch_source = (
+                    "config" if cfg.embeddings_llamacpp_n_ubatch is not None else "default"
+                )
         else:
             cfg_n_ubatch = cfg.embeddings_llamacpp_n_ubatch
             self.llama_n_ubatch = int(cfg_n_ubatch) if cfg_n_ubatch is not None else default_ubatch
-            n_ubatch_source = "config" if cfg.embeddings_llamacpp_n_ubatch is not None else "default"
+            n_ubatch_source = (
+                "config" if cfg.embeddings_llamacpp_n_ubatch is not None else "default"
+            )
 
         # llama.cpp hard-aborts if n_ubatch < tokens_per_embed; keep n_batch in sync
         if self.llama_n_ubatch is not None:
@@ -330,7 +371,10 @@ class LlamaCppEmbeddingProvider:
                             chunk_text = None
                     if not chunk_text:
                         approx_chars = max_tokens * 3
-                        chunk_text = text[start * 3 : start * 3 + approx_chars] or text[start : start + approx_chars]
+                        chunk_text = (
+                            text[start * 3 : start * 3 + approx_chars]
+                            or text[start : start + approx_chars]
+                        )
                     segments.append(chunk_text)
 
                 if len(segments) > 1:
@@ -341,7 +385,9 @@ class LlamaCppEmbeddingProvider:
                     )
                 return segments or [text]
             except Exception:
-                logger.debug("Token-based chunking failed; falling back to character slicing", exc_info=True)
+                logger.debug(
+                    "Token-based chunking failed; falling back to character slicing", exc_info=True
+                )
 
         max_chars = max_tokens * 3
         return [text[j : j + max_chars] for j in range(0, len(text), max_chars)] or [text]
@@ -483,5 +529,5 @@ class LlamaCppEmbeddingProvider:
 
     def __del__(self) -> None:
         """Cleanup llama.cpp resources."""
-        if hasattr(self, 'llm'):
+        if hasattr(self, "llm"):
             del self.llm

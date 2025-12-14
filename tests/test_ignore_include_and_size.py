@@ -15,7 +15,12 @@ def test_include_overrides_gitignore(tmp_path: Path):
     gitignore_patterns = ["*.txt"]
     include_patterns = ["a/b/c.txt"]
 
-    assert should_ignore(target, repo, include_patterns=include_patterns, gitignore_patterns=gitignore_patterns) is False
+    assert (
+        should_ignore(
+            target, repo, include_patterns=include_patterns, gitignore_patterns=gitignore_patterns
+        )
+        is False
+    )
 
 
 def test_large_file_ignored_by_size(tmp_path: Path):

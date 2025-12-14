@@ -31,9 +31,7 @@ class TestEndToEndIndexing:
 
         # Semantic search
         semantic_results = index.semantic_search(
-            query="function that processes data",
-            repo="test_repo",
-            k=3
+            query="function that processes data", repo="test_repo", k=3
         )
         assert isinstance(semantic_results, list)
 
@@ -79,11 +77,13 @@ class TestEndToEndIndexing:
 
         # Add new file to repo
         new_file = test_repo_path / "new_module.py"
-        new_file.write_text("""
+        new_file.write_text(
+            """
 def new_function():
     '''A new function.'''
     return "new"
-""")
+"""
+        )
 
         # Re-index
         stats2 = test_index.index_repository("test_repo", test_repo_path, force=True)
@@ -102,9 +102,7 @@ class TestSearchAccuracy:
 
         # Search for concept
         results = index.semantic_search(
-            query="mathematical operations addition subtraction",
-            repo="test_repo",
-            k=5
+            query="mathematical operations addition subtraction", repo="test_repo", k=5
         )
 
         # Should return results (relevance hard to test without real embeddings)

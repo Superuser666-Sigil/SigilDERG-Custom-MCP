@@ -39,9 +39,7 @@ def get_api_key_path() -> Path:
         _api_key_path = Path(env_path).expanduser().resolve()
         return _api_key_path
 
-    base_dir = Path(
-        os.getenv("SIGIL_MCP_HOME", Path.home() / ".sigil_mcp_server")
-    ).expanduser()
+    base_dir = Path(os.getenv("SIGIL_MCP_HOME", Path.home() / ".sigil_mcp_server")).expanduser()
     _api_key_path = (base_dir / "api_key").resolve()
     return _api_key_path
 
@@ -89,7 +87,7 @@ def initialize_api_key() -> str | None:
 
     # Store hash with fallback for sandboxed environments
     try:
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             f.write(api_key_hash)
         path.chmod(0o600)
         logger.info(f"Generated new API key and stored hash at {path}")
@@ -97,7 +95,7 @@ def initialize_api_key() -> str | None:
     except PermissionError:
         fallback = _WORKSPACE_FALLBACK.resolve()
         fallback.parent.mkdir(parents=True, exist_ok=True)
-        with open(fallback, 'w') as f:
+        with open(fallback, "w") as f:
             f.write(api_key_hash)
         fallback.chmod(0o600)
         _update_api_key_path(fallback)

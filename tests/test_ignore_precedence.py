@@ -10,13 +10,14 @@ def test_repositories_config_includes_ignore_patterns(tmp_path):
                 "respect_gitignore": True,
                 "ignore_patterns": ["target/", "!keep/"],
             },
-            "projB": str(tmp_path / "projB")
+            "projB": str(tmp_path / "projB"),
         }
     }
     cfg_file = tmp_path / "config.json"
     cfg_file.write_text("""{""" + "\n" + "\n".join([]) + """}""")
     # write a combined JSON with repositories only
     import json
+
     cfg_file.write_text(json.dumps(cfg_data))
 
     cfg = Config(cfg_file)
@@ -34,7 +35,7 @@ def test_repositories_config_includes_ignore_patterns(tmp_path):
 def test_per_repo_allow_overrides_global_ignore(tmp_path):
     repo = tmp_path / "repo"
     (repo / "node_modules" / "a.js").mkdir(parents=True, exist_ok=True)
-    p = (repo / "node_modules" / "a.js")
+    p = repo / "node_modules" / "a.js"
 
     # Global ignores node_modules/, repo explicitly allows it via !node_modules/
     assert not ignore_utils.should_ignore(
@@ -46,7 +47,6 @@ def test_per_repo_allow_overrides_global_ignore(tmp_path):
     from sigil_mcp.config import Config
     from sigil_mcp.ignore_utils import should_ignore
 
-
     def test_repositories_config_includes_ignore_patterns(tmp_path):
         cfg_data = {
             "repositories": {
@@ -55,12 +55,13 @@ def test_per_repo_allow_overrides_global_ignore(tmp_path):
                     "respect_gitignore": True,
                     "ignore_patterns": ["target/", "!keep/"],
                 },
-                "projB": str(tmp_path / "projB")
+                "projB": str(tmp_path / "projB"),
             }
         }
         cfg_file = tmp_path / "config.json"
         # write a combined JSON with repositories only
         import json
+
         cfg_file.write_text(json.dumps(cfg_data))
 
         cfg = Config(cfg_file)
@@ -74,11 +75,10 @@ def test_per_repo_allow_overrides_global_ignore(tmp_path):
         assert "projB" in repos
         assert repos["projB"]["ignore_patterns"] == []
 
-
     def test_per_repo_allow_overrides_global_ignore(tmp_path):
         repo = tmp_path / "repo"
         (repo / "node_modules" / "a.js").mkdir(parents=True, exist_ok=True)
-        p = (repo / "node_modules" / "a.js")
+        p = repo / "node_modules" / "a.js"
 
         # Global ignores node_modules/, repo explicitly allows it via !node_modules/
         do_ignore = should_ignore(
@@ -89,11 +89,10 @@ def test_per_repo_allow_overrides_global_ignore(tmp_path):
         )
         assert do_ignore is False
 
-
     def test_per_repo_ignore_overrides_global_allow(tmp_path):
         repo = tmp_path / "repo2"
         (repo / "target" / "x").mkdir(parents=True, exist_ok=True)
-        p = (repo / "target" / "x")
+        p = repo / "target" / "x"
 
         # Global allows target via !target/, but repo explicitly sets target/ to ignore
         do_ignore = ignore_utils.should_ignore(

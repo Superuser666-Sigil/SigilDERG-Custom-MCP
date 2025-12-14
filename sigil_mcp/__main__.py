@@ -10,4 +10,5 @@
 
 if __name__ == "__main__":
     from sigil_mcp.server import main
+
     main()

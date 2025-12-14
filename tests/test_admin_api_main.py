@@ -56,7 +56,9 @@ def test_admin_api_main_runs_uvicorn(monkeypatch, tmp_path):
     called = {}
 
     def _fake_run(app, host, port, log_level, access_log):
-        called.update({"host": host, "port": port, "log_level": log_level, "access_log": access_log})
+        called.update(
+            {"host": host, "port": port, "log_level": log_level, "access_log": access_log}
+        )
 
     monkeypatch.setattr(admin_api_main.uvicorn, "run", _fake_run)
     admin_api_main.main()
@@ -94,7 +96,9 @@ def test_admin_api_main_handles_keyboard_interrupt(monkeypatch, tmp_path):
     admin_api_main = importlib.reload(admin_api_main)
     monkeypatch.setattr(admin_api_main, "get_config", lambda: mock_cfg)
     monkeypatch.setattr(admin_api_main, "setup_logging", lambda *a, **k: None)
-    monkeypatch.setattr(admin_api_main.uvicorn, "run", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
+    monkeypatch.setattr(
+        admin_api_main.uvicorn, "run", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt())
+    )
     # Should not raise SystemExit on KeyboardInterrupt
     admin_api_main.main()
 
@@ -119,6 +123,8 @@ def test_admin_api_main_exits_on_runtime_error(monkeypatch, tmp_path):
     admin_api_main = importlib.reload(admin_api_main)
     monkeypatch.setattr(admin_api_main, "get_config", lambda: mock_cfg)
     monkeypatch.setattr(admin_api_main, "setup_logging", lambda *a, **k: None)
-    monkeypatch.setattr(admin_api_main.uvicorn, "run", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        admin_api_main.uvicorn, "run", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
     with pytest.raises(SystemExit):
         admin_api_main.main()

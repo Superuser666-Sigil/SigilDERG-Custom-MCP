@@ -223,12 +223,12 @@ class MCPClientManager:
                     len(tools_result.tools),
                 )
             except Exception as exc:
-                self.logger.warning(
-                    "Failed to initialize MCP server '%s': %s", server.name, exc
-                )
+                self.logger.warning("Failed to initialize MCP server '%s': %s", server.name, exc)
                 self._last_refresh_error = f"{server.name}: {exc}"
 
-    async def call_tool(self, server_name: str, tool_name: str, arguments: dict[str, Any]) -> CallToolResult:
+    async def call_tool(
+        self, server_name: str, tool_name: str, arguments: dict[str, Any]
+    ) -> CallToolResult:
         client = self._clients.get(server_name)
         if not client:
             raise RuntimeError(f"MCP server '{server_name}' is not available")
@@ -259,7 +259,9 @@ class MCPClientManager:
             return "No external MCP tools registered."
         return "\n".join(lines)
 
-    async def register_with_fastmcp(self, mcp_app, *, tool_decorator: Callable[..., Callable] | None = None) -> None:
+    async def register_with_fastmcp(
+        self, mcp_app, *, tool_decorator: Callable[..., Callable] | None = None
+    ) -> None:
         """
         Discover tools and register them onto the provided FastMCP instance.
         """
@@ -275,11 +277,14 @@ class MCPClientManager:
                 decorator = dec_factory(
                     name=full_name,
                     title=tool.name,
-                    description=tool.description or f"External MCP tool '{tool.name}' from '{server_name}'",
+                    description=tool.description
+                    or f"External MCP tool '{tool.name}' from '{server_name}'",
                     inputSchema=getattr(tool, "inputSchema", None),
                 )
 
-                async def _wrapper(_server: str = server_name, _tool: str = tool.name, **kwargs: Any) -> dict[str, Any]:
+                async def _wrapper(
+                    _server: str = server_name, _tool: str = tool.name, **kwargs: Any
+                ) -> dict[str, Any]:
                     result = await self.call_tool(_server, _tool, kwargs)
                     return result.model_dump(exclude_none=True)
 
@@ -310,11 +315,15 @@ class MCPClientManager:
 
         dec_prompt(external_mcp_prompt)
 
-    async def _call_proxy(self, server_name: str, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _call_proxy(
+        self, server_name: str, tool_name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         result = await self.call_tool(server_name, tool_name, arguments)
         return result.model_dump(exclude_none=True)
 
-    async def refresh(self, mcp_app, *, tool_decorator: Callable[..., Callable] | None = None) -> None:
+    async def refresh(
+        self, mcp_app, *, tool_decorator: Callable[..., Callable] | None = None
+    ) -> None:
         """Reconnect and re-register tools (used by admin refresh endpoint)."""
         await self.register_with_fastmcp(mcp_app, tool_decorator=tool_decorator)
 

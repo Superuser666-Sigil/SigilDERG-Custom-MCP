@@ -110,8 +110,7 @@ class TestAuthorizationCodeFlow:
         client_id, _ = result
 
         code = manager.create_authorization_code(
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         assert len(code) >= 32
@@ -128,9 +127,7 @@ class TestAuthorizationCodeFlow:
         scope = "read write"
 
         code = manager.create_authorization_code(
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            scope=scope
+            client_id=client_id, redirect_uri=redirect_uri, scope=scope
         )
 
         code_data = manager.codes[code]
@@ -147,15 +144,10 @@ class TestAuthorizationCodeFlow:
         client_id, _ = result
         redirect_uri = "http://localhost:8080/callback"
 
-        code = manager.create_authorization_code(
-            client_id=client_id,
-            redirect_uri=redirect_uri
-        )
+        code = manager.create_authorization_code(client_id=client_id, redirect_uri=redirect_uri)
 
         token = manager.exchange_code_for_token(
-            code=code,
-            client_id=client_id,
-            redirect_uri=redirect_uri
+            code=code, client_id=client_id, redirect_uri=redirect_uri
         )
 
         assert token is not None
@@ -171,9 +163,7 @@ class TestAuthorizationCodeFlow:
         client_id, _ = result
 
         token = manager.exchange_code_for_token(
-            code="invalid_code",
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            code="invalid_code", client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         assert token is None
@@ -186,10 +176,7 @@ class TestAuthorizationCodeFlow:
         client_id, _ = result
         redirect_uri = "http://localhost:8080/callback"
 
-        code = manager.create_authorization_code(
-            client_id=client_id,
-            redirect_uri=redirect_uri
-        )
+        code = manager.create_authorization_code(client_id=client_id, redirect_uri=redirect_uri)
 
         # First exchange succeeds
         token1 = manager.exchange_code_for_token(code, client_id, redirect_uri)
@@ -207,15 +194,10 @@ class TestAuthorizationCodeFlow:
         client_id, _ = result
         redirect_uri = "http://localhost:8080/callback"
 
-        code = manager.create_authorization_code(
-            client_id=client_id,
-            redirect_uri=redirect_uri
-        )
+        code = manager.create_authorization_code(client_id=client_id, redirect_uri=redirect_uri)
 
         token = manager.exchange_code_for_token(
-            code=code,
-            client_id="wrong_client",
-            redirect_uri=redirect_uri
+            code=code, client_id="wrong_client", redirect_uri=redirect_uri
         )
 
         assert token is None
@@ -238,20 +220,17 @@ class TestPKCEFlow:
         # Generate code verifier and challenge
         code_verifier = "test_verifier_1234567890abcdefghijklmnopqrstuvwxyz"
         verifier_hash = hashlib.sha256(code_verifier.encode()).digest()
-        code_challenge = base64.urlsafe_b64encode(verifier_hash).decode().rstrip('=')
+        code_challenge = base64.urlsafe_b64encode(verifier_hash).decode().rstrip("=")
 
         code = manager.create_authorization_code(
             client_id=client_id,
             redirect_uri=redirect_uri,
             code_challenge=code_challenge,
-            code_challenge_method="S256"
+            code_challenge_method="S256",
         )
 
         token = manager.exchange_code_for_token(
-            code=code,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            code_verifier=code_verifier
+            code=code, client_id=client_id, redirect_uri=redirect_uri, code_verifier=code_verifier
         )
 
         assert token is not None
@@ -269,13 +248,13 @@ class TestPKCEFlow:
 
         code_verifier = "test_verifier_123"
         verifier_hash = hashlib.sha256(code_verifier.encode()).digest()
-        code_challenge = base64.urlsafe_b64encode(verifier_hash).decode().rstrip('=')
+        code_challenge = base64.urlsafe_b64encode(verifier_hash).decode().rstrip("=")
 
         code = manager.create_authorization_code(
             client_id=client_id,
             redirect_uri=redirect_uri,
             code_challenge=code_challenge,
-            code_challenge_method="S256"
+            code_challenge_method="S256",
         )
 
         # Use wrong verifier
@@ -283,7 +262,7 @@ class TestPKCEFlow:
             code=code,
             client_id=client_id,
             redirect_uri=redirect_uri,
-            code_verifier="wrong_verifier"
+            code_verifier="wrong_verifier",
         )
 
         assert token is None
@@ -302,14 +281,11 @@ class TestPKCEFlow:
             client_id=client_id,
             redirect_uri=redirect_uri,
             code_challenge=code_verifier,
-            code_challenge_method="plain"
+            code_challenge_method="plain",
         )
 
         token = manager.exchange_code_for_token(
-            code=code,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            code_verifier=code_verifier
+            code=code, client_id=client_id, redirect_uri=redirect_uri, code_verifier=code_verifier
         )
 
         assert token is not None
@@ -326,14 +302,11 @@ class TestTokenManagement:
         client_id, _ = result
 
         code = manager.create_authorization_code(
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         token = manager.exchange_code_for_token(
-            code=code,
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            code=code, client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         assert token is not None
@@ -352,14 +325,11 @@ class TestTokenManagement:
         client_id, _ = result
 
         code = manager.create_authorization_code(
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         token = manager.exchange_code_for_token(
-            code=code,
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            code=code, client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         assert token is not None
@@ -377,14 +347,11 @@ class TestTokenManagement:
         client_id, _ = result
 
         code = manager.create_authorization_code(
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         old_token = manager.exchange_code_for_token(
-            code=code,
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            code=code, client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         assert old_token is not None
@@ -409,14 +376,11 @@ class TestTokenManagement:
         client_id, _ = result
 
         code = manager.create_authorization_code(
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         token = manager.exchange_code_for_token(
-            code=code,
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            code=code, client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         assert token is not None
@@ -434,14 +398,11 @@ class TestTokenManagement:
         client_id, _ = result
 
         code = manager.create_authorization_code(
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         token = manager.exchange_code_for_token(
-            code=code,
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            code=code, client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         assert token is not None
@@ -513,14 +474,11 @@ class TestTokenPersistence:
         client_id, _ = result
 
         code = manager.create_authorization_code(
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         token = manager.exchange_code_for_token(
-            code=code,
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            code=code, client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         assert token is not None
@@ -541,14 +499,11 @@ class TestTokenPersistence:
         client_id, _ = result
 
         code = manager1.create_authorization_code(
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         token = manager1.exchange_code_for_token(
-            code=code,
-            client_id=client_id,
-            redirect_uri="http://localhost:8080/callback"
+            code=code, client_id=client_id, redirect_uri="http://localhost:8080/callback"
         )
 
         assert token is not None

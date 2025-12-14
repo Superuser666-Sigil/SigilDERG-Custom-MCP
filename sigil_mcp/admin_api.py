@@ -79,9 +79,7 @@ async def require_admin(request: Request) -> JSONResponse | None:
     mode = cfg.get("mode", "dev")
 
     if mode == "prod" and not cfg.get("api_key"):
-        logger.error(
-            "Admin API is unavailable in production mode without admin.api_key configured"
-        )
+        logger.error("Admin API is unavailable in production mode without admin.api_key configured")
         return JSONResponse(
             {"error": "admin_api_key_required", "detail": "Configure admin.api_key"},
             status_code=503,
@@ -96,16 +94,11 @@ async def require_admin(request: Request) -> JSONResponse | None:
 
     api_key = cfg.get("api_key")
     require_api_key = True if mode == "prod" else cfg.get("require_api_key", True)
-    header_key = (
-        request.headers.get("x-admin-key")
-        or request.headers.get("X-Admin-Key")
-    )
+    header_key = request.headers.get("x-admin-key") or request.headers.get("X-Admin-Key")
 
     if require_api_key:
         if not api_key:
-            logger.error(
-                "Admin API misconfigured: require_api_key=true but no api_key set"
-            )
+            logger.error("Admin API misconfigured: require_api_key=true but no api_key set")
             return JSONResponse(
                 {
                     "error": "configuration_error",
@@ -279,7 +272,9 @@ async def admin_set_repo_gitignore(request: Request) -> Response:
 
     body = await request.json() if request.method == "POST" else {}
     if "respect_gitignore" not in body:
-        return JSONResponse({"error": "missing_field", "field": "respect_gitignore"}, status_code=400)
+        return JSONResponse(
+            {"error": "missing_field", "field": "respect_gitignore"}, status_code=400
+        )
 
     val = bool(body.get("respect_gitignore", True))
 
@@ -287,7 +282,11 @@ async def admin_set_repo_gitignore(request: Request) -> Response:
     ignore_patterns_body = body.get("ignore_patterns", None)
     if ignore_patterns_body is not None:
         try:
-            ignore_patterns_val = list(ignore_patterns_body) if isinstance(ignore_patterns_body, (list, tuple)) else []
+            ignore_patterns_val = (
+                list(ignore_patterns_body)
+                if isinstance(ignore_patterns_body, (list, tuple))
+                else []
+            )
         except Exception:
             ignore_patterns_val = []
     else:
@@ -315,12 +314,21 @@ async def admin_set_repo_gitignore(request: Request) -> Response:
 
     # Update watcher runtime if present
     watcher = getattr(server_state, "_WATCHER", None)
-    repo_path = Path(server_state.REPO_OPTIONS[name]["path"]) if server_state.REPO_OPTIONS[name].get("path") else Path(REPOS[name])
+    repo_path = (
+        Path(server_state.REPO_OPTIONS[name]["path"])
+        if server_state.REPO_OPTIONS[name].get("path")
+        else Path(REPOS[name])
+    )
     try:
         if watcher:
             # restart watching for this repo to apply new gitignore behaviour
             watcher.unwatch_repository(name)
-            watcher.watch_repository(name, repo_path, honor_gitignore=val, repo_ignore_patterns=server_state.REPO_OPTIONS[name].get("ignore_patterns"))
+            watcher.watch_repository(
+                name,
+                repo_path,
+                honor_gitignore=val,
+                repo_ignore_patterns=server_state.REPO_OPTIONS[name].get("ignore_patterns"),
+            )
     except Exception:
         # non-fatal; continue
         pass
@@ -574,11 +582,16 @@ async def admin_index_file_rebuild(request: Request) -> Response:
     path = body.get("path")
 
     if not repo or not path:
-        return JSONResponse({"error": "invalid_request", "detail": "Missing repo or path"}, status_code=400)
+        return JSONResponse(
+            {"error": "invalid_request", "detail": "Missing repo or path"}, status_code=400
+        )
 
     # Ensure repo configured
     if repo not in REPOS:
-        return JSONResponse({"error": "unknown_repo", "detail": f"Repository {repo} not configured"}, status_code=404)
+        return JSONResponse(
+            {"error": "unknown_repo", "detail": f"Repository {repo} not configured"},
+            status_code=404,
+        )
 
     # Use semaphore to avoid concurrent DB writes
     async with _rebuild_semaphore:
@@ -594,13 +607,23 @@ async def admin_index_file_rebuild(request: Request) -> Response:
             # `_run_index_file` now returns a structured dict {"ok": bool, "indexed": bool, "skipped": bool, "error": str}
             if isinstance(result, dict):
                 if result.get("ok"):
-                    return JSONResponse({"success": True, "indexed": bool(result.get("indexed", False)), "skipped": bool(result.get("skipped", False))})
+                    return JSONResponse(
+                        {
+                            "success": True,
+                            "indexed": bool(result.get("indexed", False)),
+                            "skipped": bool(result.get("skipped", False)),
+                        }
+                    )
                 else:
                     # Return detailed error information when available
                     detail = result.get("error", "failed to index file")
                     if "database is locked" in str(detail).lower():
-                        return JSONResponse({"error": "database_locked", "detail": detail}, status_code=503)
-                    return JSONResponse({"error": "index_failed", "detail": detail}, status_code=500)
+                        return JSONResponse(
+                            {"error": "database_locked", "detail": detail}, status_code=503
+                        )
+                    return JSONResponse(
+                        {"error": "index_failed", "detail": detail}, status_code=500
+                    )
 
             # Fallback for older boolean-style return values
             if result is True:
@@ -614,10 +637,13 @@ async def admin_index_file_rebuild(request: Request) -> Response:
             error_msg = str(exc)
             if "database is locked" in error_msg.lower():
                 logger.warning("admin_index_file_rebuild: database is locked - %s", exc)
-                return JSONResponse({
-                    "error": "database_locked",
-                    "detail": "Database locked; try again",
-                }, status_code=503)
+                return JSONResponse(
+                    {
+                        "error": "database_locked",
+                        "detail": "Database locked; try again",
+                    },
+                    status_code=503,
+                )
             logger.exception("admin_index_file_rebuild: SQLite error - %s", exc)
             return JSONResponse({"error": "database_error", "detail": error_msg}, status_code=500)
         except Exception as exc:
@@ -637,6 +663,7 @@ def _run_index_file(repo: str, repo_path: str, path: str) -> dict:
     reduce flakiness from concurrent watcher activity.
     """
     from pathlib import Path as _Path
+
     max_retries = 4
     base_delay = 0.5
 
@@ -664,7 +691,12 @@ def _run_index_file(repo: str, repo_path: str, path: str) -> dict:
             if "database is locked" in msg.lower():
                 if attempt < max_retries:
                     delay = base_delay * (2 ** (attempt - 1))
-                    logger.info("_run_index_file: database locked, retrying in %.1fs (attempt %d/%d)", delay, attempt, max_retries)
+                    logger.info(
+                        "_run_index_file: database locked, retrying in %.1fs (attempt %d/%d)",
+                        delay,
+                        attempt,
+                        max_retries,
+                    )
                     import time
 
                     time.sleep(delay)
@@ -690,7 +722,9 @@ async def admin_index_stale(request: Request) -> Response:
         index = getattr(server_state, "_INDEX", None) or server_state._get_index()
     except Exception:
         logger.exception("admin_index_stale: failed to get index instance")
-        return JSONResponse({"error": "internal_error", "detail": "Index unavailable"}, status_code=500)
+        return JSONResponse(
+            {"error": "internal_error", "detail": "Index unavailable"}, status_code=500
+        )
 
     results: dict[str, dict[str, object]] = {}
 
@@ -715,7 +749,12 @@ async def admin_index_stale(request: Request) -> Response:
         cur = index.repos_db.cursor()
         repos = [repo] if repo else list(REPOS.keys())
         for repo_name in repos:
-            repo_entry = {"lance_db_path": None, "lance_db_size": 0, "vectors_stale": 0, "stale_documents": []}
+            repo_entry = {
+                "lance_db_path": None,
+                "lance_db_size": 0,
+                "vectors_stale": 0,
+                "stale_documents": [],
+            }
             try:
                 # Use per-repo LanceDB path when available
                 try:
@@ -751,11 +790,15 @@ async def admin_index_stale(request: Request) -> Response:
                         # If we also have a global table, report its totals for context
                         if getattr(index, "vectors", None) is not None:
                             try:
-                                repo_entry["lance_db_total_vectors"] = int(index.vectors.count_rows())
+                                repo_entry["lance_db_total_vectors"] = int(
+                                    index.vectors.count_rows()
+                                )
                             except Exception:
                                 repo_entry["lance_db_total_vectors"] = 0
                     except Exception:
-                        logger.debug("Per-repo lance inspection failed for %s", repo_name, exc_info=True)
+                        logger.debug(
+                            "Per-repo lance inspection failed for %s", repo_name, exc_info=True
+                        )
                 except Exception:
                     logger.debug("Vector table inspection failed", exc_info=True)
 
@@ -770,9 +813,7 @@ async def admin_index_stale(request: Request) -> Response:
                     )
                     docs = cur.fetchall()
                     repo_entry["vectors_stale"] = len(docs)
-                    repo_entry["stale_documents"] = [
-                        {"path": r[0], "error": r[1]} for r in docs
-                    ]
+                    repo_entry["stale_documents"] = [{"path": r[0], "error": r[1]} for r in docs]
                 else:
                     repo_entry["vectors_stale"] = 0
                     repo_entry["stale_documents"] = []
@@ -803,7 +844,9 @@ async def admin_hardwrap_report(request: Request) -> Response:
 
     loop = asyncio.get_event_loop()
     try:
-        results = await loop.run_in_executor(None, lambda: index.generate_hardwrap_report(repo=repo, top_n=top_n))
+        results = await loop.run_in_executor(
+            None, lambda: index.generate_hardwrap_report(repo=repo, top_n=top_n)
+        )
         # Filter by min_hardwraps
         filtered = [r for r in results if r.get("oversized_count", 0) >= min_hardwraps]
         return JSONResponse({"success": True, "report": filtered})
@@ -823,7 +866,9 @@ async def admin_set_repo_include_solution(request: Request) -> Response:
 
     body = await request.json() if request.method == "POST" else {}
     if "embeddings_include_solution" not in body:
-        return JSONResponse({"error": "missing_field", "field": "embeddings_include_solution"}, status_code=400)
+        return JSONResponse(
+            {"error": "missing_field", "field": "embeddings_include_solution"}, status_code=400
+        )
 
     val = bool(body.get("embeddings_include_solution"))
 
@@ -842,11 +887,19 @@ async def admin_set_repo_include_solution(request: Request) -> Response:
         if index is None:
             index = server_state._get_index()
         cur = index.repos_db.cursor()
-        cur.execute("INSERT OR IGNORE INTO repos (name, path, indexed_at) VALUES (?, ?, ?)", (name, server_state.REPO_OPTIONS[name]["path"], datetime.now().isoformat()))
-        cur.execute("UPDATE repos SET embeddings_include_solution = ? WHERE name = ?", (1 if val else 0, name))
+        cur.execute(
+            "INSERT OR IGNORE INTO repos (name, path, indexed_at) VALUES (?, ?, ?)",
+            (name, server_state.REPO_OPTIONS[name]["path"], datetime.now().isoformat()),
+        )
+        cur.execute(
+            "UPDATE repos SET embeddings_include_solution = ? WHERE name = ?",
+            (1 if val else 0, name),
+        )
         index.repos_db.commit()
     except Exception:
-        logger.exception("Failed to persist per-repo embeddings_include_solution to DB for %s", name)
+        logger.exception(
+            "Failed to persist per-repo embeddings_include_solution to DB for %s", name
+        )
 
     # Persist change to config.json if possible
     persisted = False
@@ -855,13 +908,21 @@ async def admin_set_repo_include_solution(request: Request) -> Response:
         repo_str_path = str(server_state.REPO_OPTIONS[name]["path"])
         entry = repos.get(name)
         if not entry or isinstance(entry, str):
-            repos[name] = {"path": repo_str_path, "respect_gitignore": bool(server_state.REPO_OPTIONS[name].get("respect_gitignore", True)), "embeddings_include_solution": val}
+            repos[name] = {
+                "path": repo_str_path,
+                "respect_gitignore": bool(
+                    server_state.REPO_OPTIONS[name].get("respect_gitignore", True)
+                ),
+                "embeddings_include_solution": val,
+            }
         else:
             repos[name]["embeddings_include_solution"] = val
         save_config(_config)
         persisted = True
     except Exception:
-        logger.exception("Failed to persist repo embeddings_include_solution to config.json for %s", name)
+        logger.exception(
+            "Failed to persist repo embeddings_include_solution to config.json for %s", name
+        )
 
     return JSONResponse({"name": name, "embeddings_include_solution": val, "persisted": persisted})
 
@@ -879,45 +940,50 @@ async def admin_logs_tail(request: Request) -> Response:
 
     # Use the configured log file path
     from .logging_setup import get_log_file_path
+
     log_path = get_log_file_path(_config.log_file)
 
     if log_path is None:
         # No log file configured
-        return JSONResponse({
-            "path": "N/A",
-            "lines": [
-                "No log file configured.",
-                "",
-                "To enable file logging, configure a log file path in your config.json:",
-                '  "server": {',
-                '    "log_file": "/path/to/server.log"',
-                "  }",
-                "",
-                "Or set the environment variable:",
-                "  export SIGIL_MCP_LOG_FILE=/path/to/server.log",
-            ],
-            "note": "Logs are currently being written to stdout/stderr, not a file."
-        })
+        return JSONResponse(
+            {
+                "path": "N/A",
+                "lines": [
+                    "No log file configured.",
+                    "",
+                    "To enable file logging, configure a log file path in your config.json:",
+                    '  "server": {',
+                    '    "log_file": "/path/to/server.log"',
+                    "  }",
+                    "",
+                    "Or set the environment variable:",
+                    "  export SIGIL_MCP_LOG_FILE=/path/to/server.log",
+                ],
+                "note": "Logs are currently being written to stdout/stderr, not a file.",
+            }
+        )
 
     if not log_path.exists():
         # Log file doesn't exist - server may be logging to stdout/stderr
         # Return a helpful message instead of an error
-        return JSONResponse({
-            "path": str(log_path),
-            "lines": [
-                f"Log file not found: {log_path}",
-                "",
-                "The server may be logging to stdout/stderr instead of a file.",
-                "To enable file logging, configure a log file path in your config.json:",
-                '  "server": {',
-                '    "log_file": "/path/to/server.log"',
-                "  }",
-                "",
-                "Or set the environment variable:",
-                "  export SIGIL_MCP_LOG_FILE=/path/to/server.log",
-            ],
-            "note": "Logs are currently being written to stdout/stderr, not a file."
-        })
+        return JSONResponse(
+            {
+                "path": str(log_path),
+                "lines": [
+                    f"Log file not found: {log_path}",
+                    "",
+                    "The server may be logging to stdout/stderr instead of a file.",
+                    "To enable file logging, configure a log file path in your config.json:",
+                    '  "server": {',
+                    '    "log_file": "/path/to/server.log"',
+                    "  }",
+                    "",
+                    "Or set the environment variable:",
+                    "  export SIGIL_MCP_LOG_FILE=/path/to/server.log",
+                ],
+                "note": "Logs are currently being written to stdout/stderr, not a file.",
+            }
+        )
 
     try:
         with log_path.open("r", encoding="utf-8", errors="ignore") as f:
@@ -982,14 +1048,10 @@ async def admin_config_update(request: Request) -> Response:
         _config.config_data = body
         out_path = save_config(_config)
         _config = load_config(out_path)
-        return JSONResponse(
-            {"success": True, "path": str(out_path), "config": _config.config_data}
-        )
+        return JSONResponse({"success": True, "path": str(out_path), "config": _config.config_data})
     except Exception as exc:
         logger.exception("Failed to persist config.json via admin API")
-        return JSONResponse(
-            {"error": "config_save_failed", "detail": str(exc)}, status_code=500
-        )
+        return JSONResponse({"error": "config_save_failed", "detail": str(exc)}, status_code=500)
 
 
 async def admin_mcp_status(request: Request) -> Response:
@@ -1013,24 +1075,26 @@ async def admin_mcp_refresh(request: Request) -> Response:
 
 async def root(request: Request) -> Response:
     """Root endpoint that lists available Admin API endpoints."""
-    return JSONResponse({
-        "service": "Sigil MCP Admin API",
-        "version": "0.4.0",
-        "endpoints": {
-            "GET /admin/status": "Server status, repositories, index info, watcher status",
-            "GET /admin/index/stats": "Get index statistics (all repos or specific repo)",
-            "POST /admin/index/rebuild": (
-                "Rebuild trigram/symbol index (all repos or specific repo)"
-            ),
-            "POST /admin/vector/rebuild": "Rebuild vector embeddings index",
-            "GET /admin/logs/tail": "Get last N lines from server log file (query param: ?lines=N)",
-            "GET /admin/config": "View current configuration (read-only)",
-            "POST /admin/config": "Update configuration (dev mode only)",
-            "GET /admin/mcp/status": "External MCP aggregation status",
-            "POST /admin/mcp/refresh": "Refresh/reload external MCP servers and tools",
-        },
-        "documentation": "See docs/RUNBOOK.md for complete Admin API documentation",
-    })
+    return JSONResponse(
+        {
+            "service": "Sigil MCP Admin API",
+            "version": "0.4.0",
+            "endpoints": {
+                "GET /admin/status": "Server status, repositories, index info, watcher status",
+                "GET /admin/index/stats": "Get index statistics (all repos or specific repo)",
+                "POST /admin/index/rebuild": (
+                    "Rebuild trigram/symbol index (all repos or specific repo)"
+                ),
+                "POST /admin/vector/rebuild": "Rebuild vector embeddings index",
+                "GET /admin/logs/tail": "Get last N lines from server log file (query param: ?lines=N)",
+                "GET /admin/config": "View current configuration (read-only)",
+                "POST /admin/config": "Update configuration (dev mode only)",
+                "GET /admin/mcp/status": "External MCP aggregation status",
+                "POST /admin/mcp/refresh": "Refresh/reload external MCP servers and tools",
+            },
+            "documentation": "See docs/RUNBOOK.md for complete Admin API documentation",
+        }
+    )
 
 
 routes = [
@@ -1048,7 +1112,11 @@ routes = [
     Route("/admin/mcp/refresh", admin_mcp_refresh, methods=["POST"]),
     Route("/admin/repo/{name}", admin_get_repo, methods=["GET"]),
     Route("/admin/repo/{name}/gitignore", admin_set_repo_gitignore, methods=["POST"]),
-    Route("/admin/repo/{name}/embeddings_include_solution", admin_set_repo_include_solution, methods=["POST"]),
+    Route(
+        "/admin/repo/{name}/embeddings_include_solution",
+        admin_set_repo_include_solution,
+        methods=["POST"],
+    ),
     Route("/admin/report/hardwraps", admin_hardwrap_report, methods=["GET"]),
 ]
 

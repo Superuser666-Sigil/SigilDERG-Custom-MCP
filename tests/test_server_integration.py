@@ -127,13 +127,19 @@ def test_build_vector_index_op_skip_branches(monkeypatch, tmp_path):
     # embeddings disabled
     monkeypatch.setattr(server, "REPOS", {"repo": tmp_path})
     monkeypatch.setattr(server, "_get_index", lambda: types.SimpleNamespace())
-    monkeypatch.setattr(server, "get_config", lambda: types.SimpleNamespace(embeddings_enabled=False))
+    monkeypatch.setattr(
+        server, "get_config", lambda: types.SimpleNamespace(embeddings_enabled=False)
+    )
     disabled = server.build_vector_index_op(repo="repo", force_rebuild=False)
     assert disabled["reason"] == "embeddings_disabled"
 
     # lancedb unavailable
-    monkeypatch.setattr(server, "_get_index", lambda: types.SimpleNamespace(lancedb_available=False))
-    monkeypatch.setattr(server, "get_config", lambda: types.SimpleNamespace(embeddings_enabled=True))
+    monkeypatch.setattr(
+        server, "_get_index", lambda: types.SimpleNamespace(lancedb_available=False)
+    )
+    monkeypatch.setattr(
+        server, "get_config", lambda: types.SimpleNamespace(embeddings_enabled=True)
+    )
     missing = server.build_vector_index_op(repo="repo", force_rebuild=False)
     assert missing["reason"] == "lancedb_missing"
 

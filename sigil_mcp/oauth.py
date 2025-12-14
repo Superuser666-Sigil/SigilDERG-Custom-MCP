@@ -46,6 +46,7 @@ STATE_FILE = OAUTH_DIR / "state.json"
 @dataclass
 class OAuthClient:
     """OAuth client configuration."""
+
     client_id: str
     client_secret: str
     redirect_uris: list[str]
@@ -55,6 +56,7 @@ class OAuthClient:
 @dataclass
 class OAuthToken:
     """OAuth access token."""
+
     access_token: str
     token_type: str = "Bearer"
     expires_in: int = 3600
@@ -66,6 +68,7 @@ class OAuthToken:
 @dataclass
 class OAuthState:
     """OAuth authorization state for CSRF protection."""
+
     state: str
     code_verifier: str | None = None
     redirect_uri: str | None = None
@@ -105,10 +108,10 @@ class OAuthManager:
                 "https://chatgpt.com/aip/oauth/callback",
                 "https://chat.openai.com/aip/oauth/callback",
             ],
-            created_at=int(time.time())
+            created_at=int(time.time()),
         )
 
-        with open(CLIENT_FILE, 'w') as f:
+        with open(CLIENT_FILE, "w") as f:
             json.dump(asdict(client), f, indent=2)
 
         CLIENT_FILE.chmod(0o600)
@@ -154,7 +157,7 @@ class OAuthManager:
         redirect_uri: str,
         scope: str | None = None,
         code_challenge: str | None = None,
-        code_challenge_method: str | None = None
+        code_challenge_method: str | None = None,
     ) -> str:
         """
         Create an authorization code.
@@ -178,26 +181,19 @@ class OAuthManager:
             "code_challenge": code_challenge,
             "code_challenge_method": code_challenge_method or "plain",
             "created_at": int(time.time()),
-            "used": False
+            "used": False,
         }
 
         # Clean up old codes (> 10 minutes)
         current_time = int(time.time())
-        expired_codes = [
-            k for k, v in self.codes.items()
-            if current_time - v["created_at"] > 600
-        ]
+        expired_codes = [k for k, v in self.codes.items() if current_time - v["created_at"] > 600]
         for k in expired_codes:
             del self.codes[k]
 
         return code
 
     def exchange_code_for_token(
-        self,
-        code: str,
-        client_id: str,
-        redirect_uri: str,
-        code_verifier: str | None = None
+        self, code: str, client_id: str, redirect_uri: str, code_verifier: str | None = None
     ) -> OAuthToken | None:
         """
         Exchange authorization code for access token.
@@ -234,8 +230,7 @@ class OAuthManager:
             # Allow if both are HTTPS and same domain
             if not (stored_redirect.startswith("https://") and redirect_uri.startswith("https://")):
                 logger.warning(
-                    f"Redirect URI mismatch: stored={stored_redirect}, "
-                    f"provided={redirect_uri}"
+                    f"Redirect URI mismatch: stored={stored_redirect}, " f"provided={redirect_uri}"
                 )
                 return None
 
@@ -249,8 +244,9 @@ class OAuthManager:
             if method == "S256":
                 # SHA-256 hash and base64url encode (no padding)
                 import base64
+
                 verifier_hash = hashlib.sha256(code_verifier.encode()).digest()
-                verifier_challenge = base64.urlsafe_b64encode(verifier_hash).decode().rstrip('=')
+                verifier_challenge = base64.urlsafe_b64encode(verifier_hash).decode().rstrip("=")
             else:
                 verifier_challenge = code_verifier
 
@@ -274,7 +270,7 @@ class OAuthManager:
             expires_in=3600,
             refresh_token=refresh_token,
             scope=code_data.get("scope"),
-            created_at=int(time.time())
+            created_at=int(time.time()),
         )
 
         # Store token
@@ -340,7 +336,7 @@ class OAuthManager:
             expires_in=3600,
             refresh_token=refresh_token,  # Reuse refresh token
             scope=old_token.scope,
-            created_at=int(time.time())
+            created_at=int(time.time()),
         )
 
         self.tokens[access_token] = token
@@ -387,17 +383,12 @@ class OAuthManager:
         state = secrets.token_urlsafe(32)
 
         self.states[state] = OAuthState(
-            state=state,
-            redirect_uri=redirect_uri,
-            created_at=int(time.time())
+            state=state, redirect_uri=redirect_uri, created_at=int(time.time())
         )
 
         # Clean up old states (> 10 minutes)
         current_time = int(time.time())
-        expired_states = [
-            k for k, v in self.states.items()
-            if current_time - v.created_at > 600
-        ]
+        expired_states = [k for k, v in self.states.items() if current_time - v.created_at > 600]
         for k in expired_states:
             del self.states[k]
 
@@ -444,12 +435,9 @@ class OAuthManager:
     def _save_tokens(self):
         """Save tokens to disk."""
         try:
-            data = {
-                access_token: asdict(token)
-                for access_token, token in self.tokens.items()
-            }
+            data = {access_token: asdict(token) for access_token, token in self.tokens.items()}
 
-            with open(TOKENS_FILE, 'w') as f:
+            with open(TOKENS_FILE, "w") as f:
                 json.dump(data, f, indent=2)
 
             TOKENS_FILE.chmod(0o600)

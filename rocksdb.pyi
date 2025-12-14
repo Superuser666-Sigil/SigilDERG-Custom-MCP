@@ -2,13 +2,16 @@ from collections.abc import Iterator
 from typing import Any
 
 class Options: ...
+
 class CompressionType:
     lz4_compression: int
 
 class BlockBasedTableOptions: ...
 class LRUCache: ...
+
 class BloomFilterPolicy:
     def __init__(self, bits: int) -> None: ...
+
 class BlockBasedTableFactory:
     def __init__(self, opts: BlockBasedTableOptions) -> None: ...
 

@@ -43,7 +43,10 @@ class AdminUIProcess:
 
         env = os.environ.copy()
         # Point UI at the admin backend by default
-        env.setdefault("VITE_API_BASE_URL", f"http://{getattr(cfg, 'admin_host', cfg.server_host)}:{getattr(cfg, 'admin_port', cfg.server_port)}")
+        env.setdefault(
+            "VITE_API_BASE_URL",
+            f"http://{getattr(cfg, 'admin_host', cfg.server_host)}:{getattr(cfg, 'admin_port', cfg.server_port)}",
+        )
         env.setdefault("PORT", str(port))
 
         self.log_file = Path("/tmp/sigil_admin_ui.log")

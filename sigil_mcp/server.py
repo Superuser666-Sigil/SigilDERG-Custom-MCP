@@ -61,6 +61,7 @@ def _get_admin_app():
     global _admin_app
     if _admin_app is None:
         from .admin_api import app
+
         _admin_app = app
     return _admin_app
 
@@ -68,6 +69,7 @@ def _get_admin_app():
 # --------------------------------------------------------------------
 # Helper Functions
 # --------------------------------------------------------------------
+
 
 def get_form_value(value: str | UploadFile | None) -> str | None:
     """
@@ -113,8 +115,7 @@ def _log_configuration_summary() -> None:
     """Emit a concise configuration summary at startup for operators."""
 
     logger.info(
-        "Sigil MCP starting (mode=%s, auth_enabled=%s, allow_local_bypass=%s, "
-        "oauth_enabled=%s)",
+        "Sigil MCP starting (mode=%s, auth_enabled=%s, allow_local_bypass=%s, " "oauth_enabled=%s)",
         RUN_MODE,
         config.auth_enabled,
         config.allow_local_bypass,
@@ -257,6 +258,7 @@ def _safe_tool_decorator(**meta_kwargs):
 # Authentication Middleware
 # --------------------------------------------------------------------
 
+
 def _get_auth_settings_override() -> AuthSettings:
     """
     Construct an AuthSettings object from the server-level configuration flags.
@@ -366,12 +368,8 @@ class MCPBearerAuthMiddleware(BaseHTTPMiddleware):
         )
 
 
-
-
-
 def check_authentication(
-    request_headers: dict[str, str] | None = None,
-    client_ip: str | None = None
+    request_headers: dict[str, str] | None = None, client_ip: str | None = None
 ) -> bool:
     """
     Check if request is authenticated.
@@ -407,6 +405,7 @@ def check_ip_whitelist(client_ip: str | None = None) -> bool:
         settings=_get_auth_settings_override(),
     )
 
+
 # --------------------------------------------------------------------
 # Repo configuration
 # --------------------------------------------------------------------
@@ -435,9 +434,7 @@ for name, info in config.repositories_config.items():
     REPOS[name] = p
 
 if not REPOS:
-    logger.warning(
-        "No repositories configured; starting MCP server with NO repositories."
-    )
+    logger.warning("No repositories configured; starting MCP server with NO repositories.")
 else:
     logger.info(
         "Configured %d repos: %s",
@@ -483,8 +480,7 @@ def _resolve_under_repo(repo: str, rel_path: str) -> Path:
         candidate.relative_to(root)
     except ValueError as exc:
         raise ValueError(
-            f"Resolved path {candidate} escapes repo root {root} "
-            f"(rel_path={rel_path!r})"
+            f"Resolved path {candidate} escapes repo root {root} " f"(rel_path={rel_path!r})"
         ) from exc
 
     return candidate
@@ -510,6 +506,7 @@ _WATCHER: FileWatchManager | None = None
 # Shared operational helpers (index and vector index)
 # --------------------------------------------------------------------
 
+
 def rebuild_index_op(
     repo: str | None = None,
     force_rebuild: bool = False,
@@ -525,11 +522,13 @@ def rebuild_index_op(
     # Wait a moment for any active file watcher operations to complete
     # This helps prevent database lock conflicts
     import time
+
     time.sleep(0.5)
 
     if repo is not None:
         # Per-repo rebuild: use script's single-repo logic
         from sigil_mcp.scripts.rebuild_indexes import rebuild_single_repo_index
+
         repo_path = _get_repo_root(repo)
         return rebuild_single_repo_index(
             index=index,
@@ -540,6 +539,7 @@ def rebuild_index_op(
 
     # Complete rebuild: use script's rebuild_all_indexes logic
     from sigil_mcp.scripts.rebuild_indexes import rebuild_all_indexes
+
     return rebuild_all_indexes(
         index=index,
         wipe_index=False,  # Don't wipe - we're using existing index
@@ -582,6 +582,7 @@ def build_vector_index_op(
     # Wait a moment for any active file watcher operations to complete
     # This helps prevent database lock conflicts
     import time
+
     time.sleep(0.5)
 
     # Ensure embeddings are configured (and refresh if provider/model changes)
@@ -589,9 +590,8 @@ def build_vector_index_op(
     if index.embed_model and ":" in str(index.embed_model):
         current_provider = str(index.embed_model).split(":", 1)[0]
 
-    should_refresh_embeddings = (
-        index.embed_fn is None
-        or (cfg.embeddings_provider and current_provider and current_provider != cfg.embeddings_provider)
+    should_refresh_embeddings = index.embed_fn is None or (
+        cfg.embeddings_provider and current_provider and current_provider != cfg.embeddings_provider
     )
 
     if should_refresh_embeddings:
@@ -616,10 +616,7 @@ def build_vector_index_op(
 
         try:
             embedding_provider = create_embedding_provider(
-                provider=provider,
-                model=model_name,
-                dimension=cfg.embeddings_dimension,
-                **kwargs
+                provider=provider, model=model_name, dimension=cfg.embeddings_dimension, **kwargs
             )
         except (ImportError, FileNotFoundError) as exc:
             logger.error(
@@ -691,8 +688,7 @@ def build_vector_index_op(
         "status": "completed",
         "model": index.embed_model,
         "message": (
-            f"Successfully rebuilt vector index for "
-            f"{len(embedding_stats)} repositories"
+            f"Successfully rebuilt vector index for " f"{len(embedding_stats)} repositories"
         ),
         "stats": {
             "documents": total_docs,
@@ -794,11 +790,10 @@ def get_index_stats_op(repo: str | None = None) -> dict[str, object]:
         if repo:
             # Get file count for this repo
             from .server import REPOS
+
             repo_path = Path(REPOS[repo])
             file_count = (
-                sum(1 for _ in repo_path.rglob("*") if _.is_file())
-                if repo_path.exists()
-                else 0
+                sum(1 for _ in repo_path.rglob("*") if _.is_file()) if repo_path.exists() else 0
             )
 
             # compute stale vectors count for this repo from repos.db
@@ -833,7 +828,7 @@ def get_index_stats_op(repo: str | None = None) -> dict[str, object]:
                         "vectors": _get_vector_count(repo),
                         "vectors_stale": vectors_stale,
                     }
-                }
+                },
             }
         # Aggregate stats for all repos - need to get per-repo breakdown
         total_docs = stats.get("documents", 0)
@@ -855,14 +850,13 @@ def get_index_stats_op(repo: str | None = None) -> dict[str, object]:
         # Get per-repo stats and per-repo stale counts
         repos_dict: dict[str, dict[str, int]] = {}
         from .server import REPOS
+
         for repo_name in REPOS.keys():
             repo_stats = index.get_index_stats(repo=repo_name)
             if isinstance(repo_stats, dict) and "error" not in repo_stats:
                 repo_path = Path(REPOS[repo_name])
                 file_count = (
-                    sum(1 for _ in repo_path.rglob("*") if _.is_file())
-                    if repo_path.exists()
-                    else 0
+                    sum(1 for _ in repo_path.rglob("*") if _.is_file()) if repo_path.exists() else 0
                 )
                 # compute per-repo stale count
                 try:
@@ -896,7 +890,7 @@ def get_index_stats_op(repo: str | None = None) -> dict[str, object]:
             "total_repos": total_repos,
             "total_vectors": total_vectors,
             "total_vectors_stale": total_vectors_stale,
-            "repos": repos_dict
+            "repos": repos_dict,
         }
 
     return {"error": "invalid_response", "detail": "Unexpected stats format"}
@@ -944,10 +938,7 @@ def _create_embedding_function():
 
         logger.info(f"Initializing {provider} embedding provider with model: {model}")
         embedding_provider = create_embedding_provider(
-            provider=provider,
-            model=model,
-            dimension=dimension,
-            **kwargs
+            provider=provider, model=model, dimension=dimension, **kwargs
         )
 
         # Create wrapper function that matches SigilIndex expectations
@@ -979,8 +970,7 @@ def _create_embedding_function():
         return None, None
     except Exception as e:
         logger.error(
-            f"Failed to initialize embedding provider '{provider}': {e}. "
-            "Embeddings disabled."
+            f"Failed to initialize embedding provider '{provider}': {e}. " "Embeddings disabled."
         )
         READINESS["embeddings"] = False
         return None, None
@@ -994,9 +984,7 @@ def _get_index() -> SigilIndex:
         embed_fn, embed_model = _create_embedding_function()
         # Provide default embed_model if None
         _INDEX = SigilIndex(
-            index_path,
-            embed_fn=embed_fn,
-            embed_model=embed_model if embed_model else "none"
+            index_path, embed_fn=embed_fn, embed_model=embed_model if embed_model else "none"
         )
         READINESS["index"] = True
         logger.info(f"Initialized index at {index_path}")
@@ -1098,7 +1086,10 @@ def _on_file_change(repo_name: str, file_path: Path, event_type: str):
                         index.embed_model = embed_model or index.embed_model
                         logger.info("Initialized embed_fn on-demand in _on_file_change")
                 except Exception:
-                    logger.debug("On-demand embedding init failed; continuing without embeddings", exc_info=True)
+                    logger.debug(
+                        "On-demand embedding init failed; continuing without embeddings",
+                        exc_info=True,
+                    )
         except Exception:
             logger.debug("Failed to check/init embed_fn in _on_file_change", exc_info=True)
 
@@ -1166,18 +1157,22 @@ async def oauth_metadata(request: Request) -> JSONResponse:
     """OAuth 2.0 Authorization Server Metadata (RFC 8414)."""
     base_url = _external_base_url(request)
 
-    response = JSONResponse({
-        "issuer": base_url,
-        "authorization_endpoint": f"{base_url}/oauth/authorize",
-        "token_endpoint": f"{base_url}/oauth/token",
-        "revocation_endpoint": f"{base_url}/oauth/revoke",
-        "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "refresh_token"],
-        "token_endpoint_auth_methods_supported": [
-            "client_secret_post", "client_secret_basic", "none"
-        ],
-        "code_challenge_methods_supported": ["S256", "plain"]
-    })
+    response = JSONResponse(
+        {
+            "issuer": base_url,
+            "authorization_endpoint": f"{base_url}/oauth/authorize",
+            "token_endpoint": f"{base_url}/oauth/token",
+            "revocation_endpoint": f"{base_url}/oauth/revoke",
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "token_endpoint_auth_methods_supported": [
+                "client_secret_post",
+                "client_secret_basic",
+                "none",
+            ],
+            "code_challenge_methods_supported": ["S256", "plain"],
+        }
+    )
 
     # Add ngrok bypass header
     response.headers["ngrok-skip-browser-warning"] = "true"
@@ -1189,20 +1184,24 @@ async def openid_configuration(request: Request) -> JSONResponse:
     """OpenID Connect Discovery (for ChatGPT compatibility)."""
     base_url = _external_base_url(request)
 
-    response = JSONResponse({
-        "issuer": base_url,
-        "authorization_endpoint": f"{base_url}/oauth/authorize",
-        "token_endpoint": f"{base_url}/oauth/token",
-        "revocation_endpoint": f"{base_url}/oauth/revoke",
-        "jwks_uri": f"{base_url}/.well-known/jwks.json",
-        "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "refresh_token"],
-        "scopes_supported": ["openid", "profile", "email", "repo", "code"],
-        "token_endpoint_auth_methods_supported": [
-            "client_secret_post", "client_secret_basic", "none"
-        ],
-        "code_challenge_methods_supported": ["S256", "plain"]
-    })
+    response = JSONResponse(
+        {
+            "issuer": base_url,
+            "authorization_endpoint": f"{base_url}/oauth/authorize",
+            "token_endpoint": f"{base_url}/oauth/token",
+            "revocation_endpoint": f"{base_url}/oauth/revoke",
+            "jwks_uri": f"{base_url}/.well-known/jwks.json",
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "scopes_supported": ["openid", "profile", "email", "repo", "code"],
+            "token_endpoint_auth_methods_supported": [
+                "client_secret_post",
+                "client_secret_basic",
+                "none",
+            ],
+            "code_challenge_methods_supported": ["S256", "plain"],
+        }
+    )
 
     # Add ngrok bypass header
     response.headers["ngrok-skip-browser-warning"] = "true"
@@ -1257,11 +1256,9 @@ async def readyz(request: Request) -> JSONResponse:
 
 
 @mcp.custom_route("/oauth/authorize", methods=["GET", "POST"])
-async def oauth_authorize_http(
-    request: Request
-) -> JSONResponse | RedirectResponse | HTMLResponse:
+async def oauth_authorize_http(request: Request) -> JSONResponse | RedirectResponse | HTMLResponse:
     """OAuth 2.0 Authorization Endpoint."""
-    logger.info("="*80)
+    logger.info("=" * 80)
     logger.info(f"OAuth authorization request received - Method: {request.method}")
     logger.info(f"Request URL: {request.url}")
     # Headers are now logged by HeaderLoggingASGIMiddleware (redacted)
@@ -1287,42 +1284,50 @@ async def oauth_authorize_http(
 
     # Validate required parameters
     if not client_id or not redirect_uri:
-        return JSONResponse({
-            "error": "invalid_request",
-            "error_description": "client_id and redirect_uri are required"
-        }, status_code=400)
+        return JSONResponse(
+            {
+                "error": "invalid_request",
+                "error_description": "client_id and redirect_uri are required",
+            },
+            status_code=400,
+        )
 
     if response_type != "code":
-        return JSONResponse({
-            "error": "unsupported_response_type",
-            "error_description": "Only 'code' response type is supported"
-        }, status_code=400)
+        return JSONResponse(
+            {
+                "error": "unsupported_response_type",
+                "error_description": "Only 'code' response type is supported",
+            },
+            status_code=400,
+        )
 
     # Verify client
     oauth_manager = get_oauth_manager()
     if not oauth_manager.verify_client(client_id):
-        return JSONResponse({
-            "error": "invalid_client",
-            "error_description": "Invalid client_id"
-        }, status_code=401)
+        return JSONResponse(
+            {"error": "invalid_client", "error_description": "Invalid client_id"}, status_code=401
+        )
 
     # Verify redirect_uri
     client = oauth_manager.get_client()
     if not client:
-        return JSONResponse({
-            "error": "server_error",
-            "error_description": "OAuth client not configured"
-        }, status_code=500)
+        return JSONResponse(
+            {"error": "server_error", "error_description": "OAuth client not configured"},
+            status_code=500,
+        )
 
     if not _security_is_redirect_uri_allowed(
         redirect_uri,
         client.redirect_uris,
         config.oauth_redirect_allow_list,
     ):
-        return JSONResponse({
-            "error": "invalid_request",
-            "error_description": "Redirect URI must be registered or in allow list"
-        }, status_code=400)
+        return JSONResponse(
+            {
+                "error": "invalid_request",
+                "error_description": "Redirect URI must be registered or in allow list",
+            },
+            status_code=400,
+        )
 
     # Check if this is a consent approval (POST with approve=true)
     logger.info(f"All params: {params}")
@@ -1334,7 +1339,7 @@ async def oauth_authorize_http(
             redirect_uri=redirect_uri,
             scope=scope,
             code_challenge=code_challenge,
-            code_challenge_method=code_challenge_method
+            code_challenge_method=code_challenge_method,
         )
 
         # Build redirect URL
@@ -1346,7 +1351,7 @@ async def oauth_authorize_http(
 
         logger.info(f"Redirecting to: {redirect_url}")
         logger.info(f"Authorization code: {code[:20]}...")
-        logger.info("="*80)
+        logger.info("=" * 80)
         return RedirectResponse(redirect_url, status_code=302)
 
     # Show consent screen (GET request or initial POST)
@@ -1472,7 +1477,7 @@ async def oauth_authorize_http(
 @mcp.custom_route("/oauth/token", methods=["POST"])
 async def oauth_token_http(request: Request) -> JSONResponse:
     """OAuth 2.0 Token Endpoint."""
-    logger.info("="*80)
+    logger.info("=" * 80)
     logger.info("OAuth token request received")
     logger.info(f"Request method: {request.method}")
     logger.info(f"Request URL: {request.url}")
@@ -1503,6 +1508,7 @@ async def oauth_token_http(request: Request) -> JSONResponse:
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Basic "):
         import base64
+
         try:
             decoded = base64.b64decode(auth_header[6:]).decode()
             header_client_id, header_client_secret = decoded.split(":", 1)
@@ -1512,76 +1518,83 @@ async def oauth_token_http(request: Request) -> JSONResponse:
             pass
 
     if not client_id:
-        return JSONResponse({
-            "error": "invalid_request",
-            "error_description": "client_id is required"
-        }, status_code=400)
+        return JSONResponse(
+            {"error": "invalid_request", "error_description": "client_id is required"},
+            status_code=400,
+        )
 
     oauth_manager = get_oauth_manager()
 
     # Verify client (public clients don't need secret)
     if not oauth_manager.verify_client(client_id, client_secret):
-        return JSONResponse({
-            "error": "invalid_client",
-            "error_description": "Invalid client credentials"
-        }, status_code=401)
+        return JSONResponse(
+            {"error": "invalid_client", "error_description": "Invalid client credentials"},
+            status_code=401,
+        )
 
     if grant_type == "authorization_code":
         if not code or not redirect_uri:
-            return JSONResponse({
-                "error": "invalid_request",
-                "error_description": "code and redirect_uri are required"
-            }, status_code=400)
+            return JSONResponse(
+                {
+                    "error": "invalid_request",
+                    "error_description": "code and redirect_uri are required",
+                },
+                status_code=400,
+            )
 
         token = oauth_manager.exchange_code_for_token(
-            code=code,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            code_verifier=code_verifier
+            code=code, client_id=client_id, redirect_uri=redirect_uri, code_verifier=code_verifier
         )
 
         if not token:
-            return JSONResponse({
-                "error": "invalid_grant",
-                "error_description": "Invalid authorization code"
-            }, status_code=400)
+            return JSONResponse(
+                {"error": "invalid_grant", "error_description": "Invalid authorization code"},
+                status_code=400,
+            )
 
-        return JSONResponse({
-            "access_token": token.access_token,
-            "token_type": token.token_type,
-            "expires_in": token.expires_in,
-            "refresh_token": token.refresh_token,
-            "scope": token.scope
-        })
+        return JSONResponse(
+            {
+                "access_token": token.access_token,
+                "token_type": token.token_type,
+                "expires_in": token.expires_in,
+                "refresh_token": token.refresh_token,
+                "scope": token.scope,
+            }
+        )
 
     elif grant_type == "refresh_token":
         if not refresh_token:
-            return JSONResponse({
-                "error": "invalid_request",
-                "error_description": "refresh_token is required"
-            }, status_code=400)
+            return JSONResponse(
+                {"error": "invalid_request", "error_description": "refresh_token is required"},
+                status_code=400,
+            )
 
         token = oauth_manager.refresh_access_token(refresh_token)
 
         if not token:
-            return JSONResponse({
-                "error": "invalid_grant",
-                "error_description": "Invalid refresh token"
-            }, status_code=400)
+            return JSONResponse(
+                {"error": "invalid_grant", "error_description": "Invalid refresh token"},
+                status_code=400,
+            )
 
-        return JSONResponse({
-            "access_token": token.access_token,
-            "token_type": token.token_type,
-            "expires_in": token.expires_in,
-            "refresh_token": token.refresh_token,
-            "scope": token.scope
-        })
+        return JSONResponse(
+            {
+                "access_token": token.access_token,
+                "token_type": token.token_type,
+                "expires_in": token.expires_in,
+                "refresh_token": token.refresh_token,
+                "scope": token.scope,
+            }
+        )
 
     else:
-        return JSONResponse({
-            "error": "unsupported_grant_type",
-            "error_description": f"Grant type '{grant_type}' is not supported"
-        }, status_code=400)
+        return JSONResponse(
+            {
+                "error": "unsupported_grant_type",
+                "error_description": f"Grant type '{grant_type}' is not supported",
+            },
+            status_code=400,
+        )
 
 
 @mcp.custom_route("/oauth/revoke", methods=["POST"])
@@ -1598,19 +1611,19 @@ async def oauth_revoke_http(request: Request) -> JSONResponse:
     client_secret = get_form_value(form.get("client_secret"))
 
     if not token or not client_id:
-        return JSONResponse({
-            "error": "invalid_request",
-            "error_description": "token and client_id are required"
-        }, status_code=400)
+        return JSONResponse(
+            {"error": "invalid_request", "error_description": "token and client_id are required"},
+            status_code=400,
+        )
 
     oauth_manager = get_oauth_manager()
 
     # Verify client
     if not oauth_manager.verify_client(client_id, client_secret):
-        return JSONResponse({
-            "error": "invalid_client",
-            "error_description": "Invalid client credentials"
-        }, status_code=401)
+        return JSONResponse(
+            {"error": "invalid_client", "error_description": "Invalid client credentials"},
+            status_code=401,
+        )
 
     oauth_manager.revoke_token(token)
 
@@ -1635,7 +1648,7 @@ def oauth_authorize(
     state: str | None = None,
     scope: str | None = None,
     code_challenge: str | None = None,
-    code_challenge_method: str | None = None
+    code_challenge_method: str | None = None,
 ) -> dict[str, str]:
     """
     OAuth2 authorization endpoint.
@@ -1663,32 +1676,25 @@ def oauth_authorize(
             code_challenge="challenge_hash"
         )
     """
-    logger.info(
-        "oauth_authorize called (client_id=%r, redirect_uri=%r)",
-        client_id,
-        redirect_uri
-    )
+    logger.info("oauth_authorize called (client_id=%r, redirect_uri=%r)", client_id, redirect_uri)
 
     if not OAUTH_ENABLED:
         return {
             "error": "oauth_not_enabled",
-            "error_description": "OAuth is disabled on this server"
+            "error_description": "OAuth is disabled on this server",
         }
 
     # Verify response_type
     if response_type != "code":
         return {
             "error": "unsupported_response_type",
-            "error_description": "Only 'code' response type is supported"
+            "error_description": "Only 'code' response type is supported",
         }
 
     # Verify client
     oauth_manager = get_oauth_manager()
     if not oauth_manager.verify_client(client_id):
-        return {
-            "error": "invalid_client",
-            "error_description": "Invalid client_id"
-        }
+        return {"error": "invalid_client", "error_description": "Invalid client_id"}
 
     # Verify redirect_uri
     client = oauth_manager.get_client()
@@ -1700,7 +1706,7 @@ def oauth_authorize(
     ):
         return {
             "error": "invalid_request",
-            "error_description": "Redirect URI not registered or allowed for this client"
+            "error_description": "Redirect URI not registered or allowed for this client",
         }
 
     # Auto-approve (for trusted clients)
@@ -1710,7 +1716,7 @@ def oauth_authorize(
         redirect_uri=redirect_uri,
         scope=scope,
         code_challenge=code_challenge,
-        code_challenge_method=code_challenge_method
+        code_challenge_method=code_challenge_method,
     )
 
     # Build redirect URL
@@ -1720,10 +1726,7 @@ def oauth_authorize(
 
     redirect_url = f"{redirect_uri}?{urlencode(params)}"
 
-    result: dict[str, str] = {
-        "redirect_url": redirect_url,
-        "code": code
-    }
+    result: dict[str, str] = {"redirect_url": redirect_url, "code": code}
     if state:
         result["state"] = state
 
@@ -1737,7 +1740,7 @@ def oauth_token(
     client_id: str | None = None,
     client_secret: str | None = None,
     code_verifier: str | None = None,
-    refresh_token: str | None = None
+    refresh_token: str | None = None,
 ) -> dict[str, object]:
     """
     OAuth2 token endpoint.
@@ -1779,88 +1782,66 @@ def oauth_token(
     if not OAUTH_ENABLED:
         return {
             "error": "oauth_not_enabled",
-            "error_description": "OAuth is disabled on this server"
+            "error_description": "OAuth is disabled on this server",
         }
 
     oauth_manager = get_oauth_manager()
 
     # Validate client_id
     if not client_id:
-        return {
-            "error": "invalid_request",
-            "error_description": "client_id is required"
-        }
+        return {"error": "invalid_request", "error_description": "client_id is required"}
 
     # Verify client (public clients only need client_id)
     if not oauth_manager.verify_client(client_id, client_secret):
-        return {
-            "error": "invalid_client",
-            "error_description": "Invalid client credentials"
-        }
+        return {"error": "invalid_client", "error_description": "Invalid client credentials"}
 
     if grant_type == "authorization_code":
         if not code or not redirect_uri:
             return {
                 "error": "invalid_request",
-                "error_description": "code and redirect_uri are required"
+                "error_description": "code and redirect_uri are required",
             }
 
         token = oauth_manager.exchange_code_for_token(
-            code=code,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            code_verifier=code_verifier
+            code=code, client_id=client_id, redirect_uri=redirect_uri, code_verifier=code_verifier
         )
 
         if not token:
-            return {
-                "error": "invalid_grant",
-                "error_description": "Invalid authorization code"
-            }
+            return {"error": "invalid_grant", "error_description": "Invalid authorization code"}
 
         return {
             "access_token": token.access_token,
             "token_type": token.token_type,
             "expires_in": token.expires_in,
             "refresh_token": token.refresh_token,
-            "scope": token.scope
+            "scope": token.scope,
         }
 
     elif grant_type == "refresh_token":
         if not refresh_token:
-            return {
-                "error": "invalid_request",
-                "error_description": "refresh_token is required"
-            }
+            return {"error": "invalid_request", "error_description": "refresh_token is required"}
 
         token = oauth_manager.refresh_access_token(refresh_token)
 
         if not token:
-            return {
-                "error": "invalid_grant",
-                "error_description": "Invalid refresh token"
-            }
+            return {"error": "invalid_grant", "error_description": "Invalid refresh token"}
 
         return {
             "access_token": token.access_token,
             "token_type": token.token_type,
             "expires_in": token.expires_in,
             "refresh_token": token.refresh_token,
-            "scope": token.scope
+            "scope": token.scope,
         }
 
     else:
         return {
             "error": "unsupported_grant_type",
-            "error_description": f"Grant type '{grant_type}' is not supported"
+            "error_description": f"Grant type '{grant_type}' is not supported",
         }
 
 
-def oauth_revoke(
-    token: str,
-    client_id: str,
-    client_secret: str | None = None
-) -> dict[str, str]:
+def oauth_revoke(token: str, client_id: str, client_secret: str | None = None) -> dict[str, str]:
     """
     OAuth2 token revocation endpoint.
 
@@ -1885,17 +1866,14 @@ def oauth_revoke(
     if not OAUTH_ENABLED:
         return {
             "error": "oauth_not_enabled",
-            "error_description": "OAuth is disabled on this server"
+            "error_description": "OAuth is disabled on this server",
         }
 
     oauth_manager = get_oauth_manager()
 
     # Verify client
     if not oauth_manager.verify_client(client_id, client_secret):
-        return {
-            "error": "invalid_client",
-            "error_description": "Invalid client credentials"
-        }
+        return {"error": "invalid_client", "error_description": "Invalid client credentials"}
 
     revoked = oauth_manager.revoke_token(token)
 
@@ -1924,7 +1902,7 @@ def oauth_client_info() -> dict[str, object]:
     if not OAUTH_ENABLED:
         return {
             "error": "oauth_not_enabled",
-            "error_description": "OAuth is disabled on this server"
+            "error_description": "OAuth is disabled on this server",
         }
 
     oauth_manager = get_oauth_manager()
@@ -1933,7 +1911,7 @@ def oauth_client_info() -> dict[str, object]:
     if not client:
         return {
             "error": "not_configured",
-            "error_description": "OAuth client not yet configured. Restart server to initialize."
+            "error_description": "OAuth client not yet configured. Restart server to initialize.",
         }
 
     return {
@@ -1941,7 +1919,7 @@ def oauth_client_info() -> dict[str, object]:
         "redirect_uris": client.redirect_uris,
         "authorization_endpoint": "/oauth/authorize",
         "token_endpoint": "/oauth/token",
-        "revocation_endpoint": "/oauth/revoke"
+        "revocation_endpoint": "/oauth/revoke",
     }
 
 
@@ -1951,12 +1929,9 @@ def oauth_client_info() -> dict[str, object]:
 
 
 @_safe_tool_decorator(
-    title=(
-        "Read-only 鈥� ping"
-    ),
+    title=("Read-only 鈥� ping"),
     description=(
-        "Healthcheck (read-only). Returns basic server status and configured "
-        "repo names."
+        "Healthcheck (read-only). Returns basic server status and configured " "repo names."
     ),
     annotations={
         "operation": "read",
@@ -1984,9 +1959,7 @@ def ping() -> dict[str, object]:
 
 
 @_safe_tool_decorator(
-    title=(
-        "Read-only 鈥� list_repos"
-    ),
+    title=("Read-only 鈥� list_repos"),
     description=(
         "List all configured repositories (read-only). Each entry includes "
         "name and absolute path."
@@ -2147,9 +2120,7 @@ def list_repo_files(
 
 
 @_safe_tool_decorator(
-    title=(
-        "Read-only 鈥� read_repo_file"
-    ),
+    title=("Read-only 鈥� read_repo_file"),
     description=(
         "Read a single file from a repository (read-only)."
         " Args: repo (repo name), path (relative path), max_bytes (defensive limit)."
@@ -2164,9 +2135,9 @@ def list_repo_files(
         "properties": {
             "repo": {"type": "string"},
             "path": {"type": "string"},
-            "max_bytes": {"type": "integer"}
+            "max_bytes": {"type": "integer"},
         },
-        "required": ["repo", "path"]
+        "required": ["repo", "path"],
     },
 )
 def read_repo_file(
@@ -2202,18 +2173,13 @@ def read_repo_file(
 
     data = file_path.read_bytes()
     if len(data) > max_bytes:
-        return (
-            data[:max_bytes].decode("utf-8", errors="replace")
-            + "\n\n[... truncated ...]"
-        )
+        return data[:max_bytes].decode("utf-8", errors="replace") + "\n\n[... truncated ...]"
 
     return data.decode("utf-8", errors="replace")
 
 
 @_safe_tool_decorator(
-    title=(
-        "Read-only 鈥� search_repo"
-    ),
+    title=("Read-only 鈥� search_repo"),
     description=(
         "Naive full-text search across one repo or all repos (read-only)."
         " Args: query, optional repo, file_glob, max_results."
@@ -2229,9 +2195,9 @@ def read_repo_file(
             "query": {"type": "string"},
             "repo": {"type": ["string", "null"]},
             "file_glob": {"type": "string"},
-            "max_results": {"type": "integer"}
+            "max_results": {"type": "integer"},
         },
-        "required": ["query"]
+        "required": ["query"],
     },
 )
 def search_repo(
@@ -2313,9 +2279,7 @@ def search_repo(
 
 
 @_safe_tool_decorator(
-    title=(
-        "Read-only 鈥� search"
-    ),
+    title=("Read-only 鈥� search"),
     description=(
         "Deep-Research compatible search (read-only). Returns structured result list"
         " of id/title/url entries."
@@ -2332,9 +2296,9 @@ def search_repo(
             "query": {"type": "string"},
             "repo": {"type": ["string", "null"]},
             "file_glob": {"type": "string"},
-            "max_results": {"type": "integer"}
+            "max_results": {"type": "integer"},
         },
-        "required": ["query"]
+        "required": ["query"],
     },
 )
 def search(
@@ -2405,9 +2369,7 @@ def fetch(doc_id: str) -> dict[str, object]:
     _ensure_repos_configured()
 
     if "::" not in doc_id:
-        raise ValueError(
-            f"Invalid doc_id {doc_id!r}; expected '<repo>::<relative/path>'"
-        )
+        raise ValueError(f"Invalid doc_id {doc_id!r}; expected '<repo>::<relative/path>'")
 
     repo, rel_path = doc_id.split("::", 1)
     text = read_repo_file(repo=repo, path=rel_path, max_bytes=50_000)
@@ -2432,10 +2394,7 @@ def fetch(doc_id: str) -> dict[str, object]:
 # --------------------------------------------------------------------
 
 
-def index_repository(
-    repo: str,
-    force_rebuild: bool = False
-) -> dict[str, object]:
+def index_repository(repo: str, force_rebuild: bool = False) -> dict[str, object]:
     """
     Build or rebuild the search index for a repository.
 
@@ -2462,11 +2421,7 @@ def index_repository(
       To force a full rebuild:
       index_repository(repo="runtime", force_rebuild=True)
     """
-    logger.info(
-        "index_repository tool called (repo=%r, force_rebuild=%r)",
-        repo,
-        force_rebuild
-    )
+    logger.info("index_repository tool called (repo=%r, force_rebuild=%r)", repo, force_rebuild)
     _ensure_repos_configured()
 
     repo_path = _get_repo_root(repo)
@@ -2474,17 +2429,11 @@ def index_repository(
 
     stats = index.index_repository(repo, repo_path, force=force_rebuild)
 
-    return {
-        "status": "completed",
-        "repo": repo,
-        **stats
-    }
+    return {"status": "completed", "repo": repo, **stats}
 
 
 @_safe_tool_decorator(
-    title=(
-        "Read-only 鈥� search_code"
-    ),
+    title=("Read-only 鈥� search_code"),
     description=(
         "Fast indexed code search (read-only) using trigram indexing. Returns"
         " filenames, line numbers and matching text."
@@ -2500,15 +2449,13 @@ def index_repository(
         "properties": {
             "query": {"type": "string"},
             "repo": {"type": ["string", "null"]},
-            "max_results": {"type": "integer"}
+            "max_results": {"type": "integer"},
         },
-        "required": ["query"]
+        "required": ["query"],
     },
 )
 def search_code(
-    query: str,
-    repo: str | None = None,
-    max_results: int = 50
+    query: str, repo: str | None = None, max_results: int = 50
 ) -> list[dict[str, object]]:
     """
     Fast indexed code search across repositories.
@@ -2537,10 +2484,7 @@ def search_code(
       search_code(query="async def", repo="runtime")
     """
     logger.info(
-        "search_code tool called (query=%r, repo=%r, max_results=%r)",
-        query,
-        repo,
-        max_results
+        "search_code tool called (query=%r, repo=%r, max_results=%r)", query, repo, max_results
     )
     _ensure_repos_configured()
 
@@ -2548,21 +2492,13 @@ def search_code(
     results = index.search_code(query, repo=repo, max_results=max_results)
 
     return [
-        {
-            "repo": r.repo,
-            "path": r.path,
-            "line": r.line,
-            "text": r.text,
-            "doc_id": r.doc_id
-        }
+        {"repo": r.repo, "path": r.path, "line": r.line, "text": r.text, "doc_id": r.doc_id}
         for r in results
     ]
 
 
 def goto_definition(
-    symbol_name: str,
-    repo: str | None = None,
-    kind: str | None = None
+    symbol_name: str, repo: str | None = None, kind: str | None = None
 ) -> list[dict[str, object]]:
     """
     Find where a symbol is defined (IDE "Go to Definition" feature).
@@ -2598,10 +2534,7 @@ def goto_definition(
       goto_definition(symbol_name="process", kind="function")
     """
     logger.info(
-        "goto_definition tool called (symbol_name=%r, repo=%r, kind=%r)",
-        symbol_name,
-        repo,
-        kind
+        "goto_definition tool called (symbol_name=%r, repo=%r, kind=%r)", symbol_name, repo, kind
     )
     _ensure_repos_configured()
 
@@ -2615,16 +2548,14 @@ def goto_definition(
             "file_path": s.file_path,
             "line": s.line,
             "signature": s.signature,
-            "scope": s.scope
+            "scope": s.scope,
         }
         for s in symbols
     ]
 
 
 def list_symbols(
-    repo: str,
-    file_path: str | None = None,
-    kind: str | None = None
+    repo: str, file_path: str | None = None, kind: str | None = None
 ) -> list[dict[str, object]]:
     """
     List symbols in a file or repository (IDE "Outline" or "Structure" view).
@@ -2658,12 +2589,7 @@ def list_symbols(
       Show all classes across the repository:
       list_symbols(repo="runtime", kind="class")
     """
-    logger.info(
-        "list_symbols tool called (repo=%r, file_path=%r, kind=%r)",
-        repo,
-        file_path,
-        kind
-    )
+    logger.info("list_symbols tool called (repo=%r, file_path=%r, kind=%r)", repo, file_path, kind)
     _ensure_repos_configured()
 
     index = _get_index()
@@ -2676,7 +2602,7 @@ def list_symbols(
             "file_path": s.file_path,
             "line": s.line,
             "signature": s.signature,
-            "scope": s.scope
+            "scope": s.scope,
         }
         for s in symbols
     ]
@@ -2783,9 +2709,7 @@ def build_vector_index(
 
 
 @_safe_tool_decorator(
-    title=(
-        "Read-only 鈥� semantic_search"
-    ),
+    title=("Read-only 鈥� semantic_search"),
     description=(
         "Semantic code search using vector embeddings (read-only)."
         " Args: query (natural language or code-like query), optional repo filter,"
@@ -2804,9 +2728,9 @@ def build_vector_index(
             "k": {"type": "integer"},
             "model": {"type": "string"},
             "code_only": {"type": "boolean"},
-            "prefer_code": {"type": "boolean"}
+            "prefer_code": {"type": "boolean"},
         },
-        "required": ["query"]
+        "required": ["query"],
     },
 )
 def semantic_search(

@@ -113,12 +113,15 @@ def test_rebuild_all_indexes_with_embeddings(monkeypatch, tmp_path, test_repo_pa
     }
     cfg_path.write_text(json.dumps(cfg_data))
 
-    idx = SigilIndex(tmp_path / "idx", embed_fn=lambda texts: np.zeros((len(texts), 2), dtype="float32"))
+    idx = SigilIndex(
+        tmp_path / "idx", embed_fn=lambda texts: np.zeros((len(texts), 2), dtype="float32")
+    )
     idx.index_repository("r1", test_repo_path, force=True)
 
     class DummyProvider:
         def embed_documents(self, texts):
             import numpy as np
+
             return [list(np.zeros(2)) for _ in texts]
 
         def get_dimension(self):
@@ -192,6 +195,7 @@ def test_setup_index_for_rebuild_wipes_directories(monkeypatch, tmp_path):
 def test_rebuild_all_indexes_raises_when_no_repos(monkeypatch, tmp_path):
     idx_path = tmp_path / "idx"
     lance_path = tmp_path / "lance"
+
     class DummyConfig:
         def __init__(self):
             self.repositories = {}
@@ -232,7 +236,9 @@ def test_rebuild_single_repo_index_validations(tmp_path):
     existing_repo = tmp_path / "repo"
     existing_repo.mkdir()
     with pytest.raises(ValueError):
-        script.rebuild_single_repo_index(dummy_index, "repo", existing_repo, rebuild_embeddings=True, embed_fn=None)
+        script.rebuild_single_repo_index(
+            dummy_index, "repo", existing_repo, rebuild_embeddings=True, embed_fn=None
+        )
 
 
 def test_main_handles_success_and_error(monkeypatch, capsys):
@@ -251,7 +257,9 @@ def test_main_handles_success_and_error(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Embedding rebuild summary" in out
 
-    monkeypatch.setattr(script, "rebuild_all_indexes", lambda **_: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        script, "rebuild_all_indexes", lambda **_: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
     assert script.main() == 1
 
 
@@ -355,6 +363,7 @@ def test_rebuild_single_repo_index_with_embeddings(tmp_path):
 
     def embed_fn(texts):
         import numpy as np
+
         return np.zeros((len(texts), 1), dtype="float32")
 
     res = script.rebuild_single_repo_index(

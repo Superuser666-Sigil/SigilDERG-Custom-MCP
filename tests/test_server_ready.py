@@ -18,6 +18,7 @@ def test_healthz_and_readyz_direct_call():
     ready = asyncio.run(server.readyz(None))
     assert ready.status_code in {200, 503}
     import json
+
     payload = json.loads(ready.body.decode())
     assert "components" in payload
 
@@ -29,7 +30,9 @@ def test_oauth_http_errors(monkeypatch):
         get_client=lambda: None,
     )
     monkeypatch.setattr(server, "get_oauth_manager", lambda: dummy_mgr)
-    app = Starlette(routes=[Route("/oauth/authorize", server.oauth_authorize_http, methods=["GET", "POST"])])
+    app = Starlette(
+        routes=[Route("/oauth/authorize", server.oauth_authorize_http, methods=["GET", "POST"])]
+    )
     client = TestClient(app)
 
     # missing params
@@ -148,7 +151,9 @@ def test_build_vector_index_op_all_repos(monkeypatch, tmp_path):
         def embed_documents(self, texts):
             return [[1.0] for _ in texts]
 
-    monkeypatch.setattr("sigil_mcp.embeddings.create_embedding_provider", lambda **kwargs: Provider())
+    monkeypatch.setattr(
+        "sigil_mcp.embeddings.create_embedding_provider", lambda **kwargs: Provider()
+    )
     result = server.build_vector_index_op(repo=None, force_rebuild=True, model="default")
     assert result["success"] is True
     assert len(fake_index.calls) == 2

@@ -81,7 +81,9 @@ def test_normalize_name_sanitizes_characters():
 
 @pytest.mark.anyio
 async def test_mcp_client_wrapper_connects(monkeypatch):
-    server_cfg = ExternalMCPServer.from_dict({"name": "svc", "type": "streamable-http", "url": "http://localhost"})
+    server_cfg = ExternalMCPServer.from_dict(
+        {"name": "svc", "type": "streamable-http", "url": "http://localhost"}
+    )
     wrapper = MCPClientWrapper(server_cfg, logger=logging.getLogger("test"))
 
     class DummyContext:
@@ -103,7 +105,9 @@ async def test_mcp_client_wrapper_connects(monkeypatch):
         async def call_tool(self, tool, args):
             return {"ok": True, "tool": tool, "args": args}
 
-    monkeypatch.setattr("sigil_mcp.mcp_client.streamablehttp_client", lambda *a, **k: DummyContext())
+    monkeypatch.setattr(
+        "sigil_mcp.mcp_client.streamablehttp_client", lambda *a, **k: DummyContext()
+    )
     monkeypatch.setattr("sigil_mcp.mcp_client.ClientSession", DummySession)
 
     tools = await wrapper.list_tools()

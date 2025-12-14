@@ -83,6 +83,7 @@ class TestAPIKeyInitialization:
         """Test that API key file has restrictive permissions."""
         initialize_api_key()
         import stat
+
         mode = _api_key_file().stat().st_mode
         # Check that file is readable/writable only by owner
         assert stat.S_IMODE(mode) == 0o600
@@ -147,6 +148,7 @@ class TestEnvironmentVariableAuth:
     def test_get_api_key_from_env_absent(self):
         """Test getting API key when environment variable not set."""
         import os
+
         # Ensure env var is not set
         os.environ.pop("SIGIL_MCP_API_KEY", None)
         assert get_api_key_from_env() is None

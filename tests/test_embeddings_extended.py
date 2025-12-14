@@ -21,8 +21,10 @@ def test_sentence_transformers_missing_dep(monkeypatch):
 
 def test_openai_missing_key(monkeypatch):
     monkeypatch.setattr(embeddings, "OPENAI_AVAILABLE", True)
+
     class DummyOpenAI:
         def __init__(self, api_key=None): ...
+
     monkeypatch.setattr(embeddings, "OpenAI", DummyOpenAI)
     with pytest.raises(ValueError):
         embeddings.create_embedding_provider("openai", "text-embedding", 128)
@@ -39,6 +41,7 @@ def test_sentence_transformers_success(monkeypatch):
         def __init__(self, model, cache_folder=None): ...
         def encode(self, texts, convert_to_numpy=True):
             import numpy as np
+
             if isinstance(texts, list):
                 return np.array([[0.1] * 3 for _ in texts])
             return np.array([[0.1] * 3])

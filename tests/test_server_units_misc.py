@@ -217,7 +217,12 @@ def test_setup_file_watching_invokes_start(monkeypatch):
     monkeypatch.setattr(
         server,
         "config",
-        types.SimpleNamespace(watch_enabled=True, watch_debounce_seconds=1, watch_ignore_dirs=[], watch_ignore_extensions=[]),
+        types.SimpleNamespace(
+            watch_enabled=True,
+            watch_debounce_seconds=1,
+            watch_ignore_dirs=[],
+            watch_ignore_extensions=[],
+        ),
     )
     monkeypatch.setattr(server, "REPOS", {"r": Path(".")})
     server._setup_file_watching()
@@ -233,7 +238,11 @@ def test_build_sse_app_with_token(monkeypatch):
             middleware_created["require_token"] = kw.get("require_token")
 
     def fake_create_sse_app(**kwargs):
-        return {"middleware": kwargs["middleware"], "sse_path": kwargs["sse_path"], "message_path": kwargs["message_path"]}
+        return {
+            "middleware": kwargs["middleware"],
+            "sse_path": kwargs["sse_path"],
+            "message_path": kwargs["message_path"],
+        }
 
     monkeypatch.setattr(server, "Middleware", DummyMiddleware)
     monkeypatch.setattr(server, "create_sse_app", fake_create_sse_app)

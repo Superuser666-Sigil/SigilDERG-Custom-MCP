@@ -19,9 +19,7 @@ class TestSigilIndexInitialization:
     def test_index_initialization(self, test_index_path, dummy_embed_fn):
         """Test that index initializes correctly."""
         index = SigilIndex(
-            index_path=test_index_path,
-            embed_fn=dummy_embed_fn,
-            embed_model="test-model"
+            index_path=test_index_path, embed_fn=dummy_embed_fn, embed_model="test-model"
         )
 
         assert index.index_path == test_index_path
@@ -117,10 +115,13 @@ class TestRepositoryIndexing:
         test_index.index_repository("test_repo", test_repo_path, force=True)
 
         cursor = test_index.repos_db.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COUNT(*) FROM documents
             WHERE repo_id = (SELECT id FROM repos WHERE name = ?)
-        """, ("test_repo",))
+        """,
+            ("test_repo",),
+        )
 
         file_count = cursor.fetchone()[0]
         assert file_count >= 2  # main.py, utils.py
@@ -273,11 +274,7 @@ class TestSemanticSearch:
         index = indexed_repo["index"]
         index.build_vector_index(repo="test_repo", force=True)
 
-        results = index.semantic_search(
-            query="calculator function",
-            repo="test_repo",
-            k=5
-        )
+        results = index.semantic_search(query="calculator function", repo="test_repo", k=5)
 
         assert isinstance(results, list)
         assert len(results) <= 5
@@ -287,11 +284,7 @@ class TestSemanticSearch:
         index = indexed_repo["index"]
         index.build_vector_index(repo="test_repo", force=True)
 
-        results = index.semantic_search(
-            query="function definition",
-            repo="test_repo",
-            k=3
-        )
+        results = index.semantic_search(query="function definition", repo="test_repo", k=3)
 
         if results:
             assert isinstance(results[0], dict)
@@ -303,11 +296,7 @@ class TestSemanticSearch:
         index = indexed_repo["index"]
         index.build_vector_index(repo="test_repo", force=True)
 
-        results = index.semantic_search(
-            query="python code",
-            repo="test_repo",
-            k=2
-        )
+        results = index.semantic_search(query="python code", repo="test_repo", k=2)
 
         assert len(results) <= 2
 
@@ -316,11 +305,7 @@ class TestSemanticSearch:
         index = indexed_repo["index"]
         index.build_vector_index(repo="test_repo", force=True)
 
-        results = index.semantic_search(
-            query="",
-            repo="test_repo",
-            k=5
-        )
+        results = index.semantic_search(query="", repo="test_repo", k=5)
 
         # Should handle gracefully
         assert isinstance(results, list)
@@ -330,11 +315,7 @@ class TestSemanticSearch:
         test_index.index_repository("test_repo", test_repo_path, force=True)
 
         # Don't build vector index
-        results = test_index.semantic_search(
-            query="test query",
-            repo="test_repo",
-            k=5
-        )
+        results = test_index.semantic_search(query="test query", repo="test_repo", k=5)
 
         # Should return empty list or handle gracefully
         assert isinstance(results, list)
@@ -354,7 +335,9 @@ class TestSemanticSearch:
         (repo_path / "main.py").write_text("def hello():\n    return 1\n")
         (repo_path / "README.md").write_text("# docs\n\nThis is documentation.")
 
-        index = SigilIndex(index_path=temp_dir / ".idx", embed_fn=dummy_embed_fn, embed_model="test-model")
+        index = SigilIndex(
+            index_path=temp_dir / ".idx", embed_fn=dummy_embed_fn, embed_model="test-model"
+        )
         try:
             index.index_repository("mixed", repo_path, force=True)
             index.build_vector_index(repo="mixed", force=True)
@@ -376,7 +359,9 @@ class TestSemanticSearch:
         cfg.config_data["index"] = {"ignore_patterns": []}
         monkeypatch.setattr(sigil_config, "_config", cfg)
 
-        index = SigilIndex(index_path=temp_dir / ".idx2", embed_fn=dummy_embed_fn, embed_model="test-model")
+        index = SigilIndex(
+            index_path=temp_dir / ".idx2", embed_fn=dummy_embed_fn, embed_model="test-model"
+        )
         try:
             repo_path = temp_dir / "pref_repo"
             repo_path.mkdir(parents=True, exist_ok=True)
@@ -387,40 +372,42 @@ class TestSemanticSearch:
             from sigil_mcp.indexer import InMemoryLanceDB, InMemoryLanceTable
 
             table = InMemoryLanceTable("code_vectors", index.embedding_dimension)
-            table.add([
-                {
-                    "doc_id": 1,
-                    "repo_id": 1,
-                    "file_path": "code.py",
-                    "chunk_index": 0,
-                    "start_line": 1,
-                    "end_line": 2,
-                    "content": "def important(): return 42",
-                    "_distance": 0.4,
-                    "is_code": True,
-                    "is_doc": False,
-                    "is_config": False,
-                    "is_data": False,
-                    "extension": ".py",
-                    "language": "python",
-                },
-                {
-                    "doc_id": 2,
-                    "repo_id": 1,
-                    "file_path": "README.md",
-                    "chunk_index": 0,
-                    "start_line": 1,
-                    "end_line": 3,
-                    "content": "docs about important function",
-                    "_distance": 0.2,
-                    "is_code": False,
-                    "is_doc": True,
-                    "is_config": False,
-                    "is_data": False,
-                    "extension": ".md",
-                    "language": "markdown",
-                },
-            ])
+            table.add(
+                [
+                    {
+                        "doc_id": 1,
+                        "repo_id": 1,
+                        "file_path": "code.py",
+                        "chunk_index": 0,
+                        "start_line": 1,
+                        "end_line": 2,
+                        "content": "def important(): return 42",
+                        "_distance": 0.4,
+                        "is_code": True,
+                        "is_doc": False,
+                        "is_config": False,
+                        "is_data": False,
+                        "extension": ".py",
+                        "language": "python",
+                    },
+                    {
+                        "doc_id": 2,
+                        "repo_id": 1,
+                        "file_path": "README.md",
+                        "chunk_index": 0,
+                        "start_line": 1,
+                        "end_line": 3,
+                        "content": "docs about important function",
+                        "_distance": 0.2,
+                        "is_code": False,
+                        "is_doc": True,
+                        "is_config": False,
+                        "is_data": False,
+                        "extension": ".md",
+                        "language": "markdown",
+                    },
+                ]
+            )
 
             index._repo_vectors["pref"] = table
             index._repo_lance_dbs["pref"] = InMemoryLanceDB(index.embedding_dimension)

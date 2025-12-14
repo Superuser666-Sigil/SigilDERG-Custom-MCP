@@ -36,8 +36,14 @@ def test_repository_watcher_processes_batched_changes(tmp_path):
 
 
 def test_repository_watcher_handles_gitignore_errors(monkeypatch, tmp_path):
-    monkeypatch.setattr(watcher_mod, "load_gitignore", lambda *_, **__: (_ for _ in ()).throw(RuntimeError("fail")))
-    monkeypatch.setattr(watcher_mod, "load_include_patterns", lambda *_, **__: (_ for _ in ()).throw(RuntimeError("fail")))
+    monkeypatch.setattr(
+        watcher_mod, "load_gitignore", lambda *_, **__: (_ for _ in ()).throw(RuntimeError("fail"))
+    )
+    monkeypatch.setattr(
+        watcher_mod,
+        "load_include_patterns",
+        lambda *_, **__: (_ for _ in ()).throw(RuntimeError("fail")),
+    )
     watcher = watcher_mod.RepositoryWatcher(
         repo_name="repo",
         repo_path=tmp_path,
@@ -53,7 +59,9 @@ def test_repository_watcher_handles_gitignore_errors(monkeypatch, tmp_path):
 
 
 def test_repository_watcher_should_ignore_get_config_error(monkeypatch, tmp_path):
-    monkeypatch.setattr(watcher_mod, "get_config", lambda: (_ for _ in ()).throw(RuntimeError("cfg")))
+    monkeypatch.setattr(
+        watcher_mod, "get_config", lambda: (_ for _ in ()).throw(RuntimeError("cfg"))
+    )
     watcher = watcher_mod.RepositoryWatcher(
         repo_name="repo",
         repo_path=tmp_path,
@@ -242,7 +250,9 @@ def test_repository_watcher_honor_gitignore_and_errors(monkeypatch, tmp_path):
     (tmp_path / ".sigil_mcp_include").write_text("include.txt\n")
 
     # Force config lookup to fail to cover fallback path
-    monkeypatch.setattr(watcher_mod, "get_config", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        watcher_mod, "get_config", lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
 
     on_change = Mock()
     watcher = watcher_mod.RepositoryWatcher(
@@ -286,7 +296,11 @@ def test_watcher_handles_processing_errors(monkeypatch, tmp_path):
         watcher.stop()
 
     # Force _schedule_change exception path
-    monkeypatch.setattr(watcher_mod.Path, "resolve", lambda self: (_ for _ in ()).throw(RuntimeError("resolve error")))
+    monkeypatch.setattr(
+        watcher_mod.Path,
+        "resolve",
+        lambda self: (_ for _ in ()).throw(RuntimeError("resolve error")),
+    )
     watcher_err = watcher_mod.RepositoryWatcher(
         repo_name="repo",
         repo_path=tmp_path,

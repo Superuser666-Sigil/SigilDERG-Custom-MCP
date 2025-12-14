@@ -25,6 +25,7 @@ class TestFileWatching:
         """Ensure watchdog is available for tests."""
         try:
             import watchdog  # noqa: F401
+
             return True
         except ImportError:
             pytest.skip("watchdog not installed")
@@ -37,7 +38,7 @@ class TestFileWatching:
         manager = FileWatchManager(
             on_change=on_change,
             ignore_dirs=[".git", "__pycache__"],
-            ignore_extensions=[".pyc", ".so"]
+            ignore_extensions=[".pyc", ".so"],
         )
 
         assert manager.enabled is True
@@ -47,7 +48,7 @@ class TestFileWatching:
 
     def test_file_watch_manager_without_watchdog(self):
         """Test FileWatchManager gracefully handles missing watchdog."""
-        with patch('sigil_mcp.watcher.WATCHDOG_AVAILABLE', False):
+        with patch("sigil_mcp.watcher.WATCHDOG_AVAILABLE", False):
             from sigil_mcp.watcher import FileWatchManager
 
             on_change = Mock()
@@ -91,18 +92,12 @@ class TestFileWatching:
         finally:
             manager.stop()
 
-    def test_file_modification_triggers_callback(
-        self, watchdog_available, test_repo_path
-    ):
+    def test_file_modification_triggers_callback(self, watchdog_available, test_repo_path):
         """Test that file modifications trigger the callback."""
         from sigil_mcp.watcher import FileWatchManager
 
         on_change = Mock()
-        manager = FileWatchManager(
-            on_change=on_change,
-            ignore_dirs=[],
-            ignore_extensions=[]
-        )
+        manager = FileWatchManager(on_change=on_change, ignore_dirs=[], ignore_extensions=[])
         manager.start()
 
         try:
@@ -125,9 +120,7 @@ class TestFileWatching:
         finally:
             manager.stop()
 
-    def test_file_creation_triggers_callback(
-        self, watchdog_available, test_repo_path
-    ):
+    def test_file_creation_triggers_callback(self, watchdog_available, test_repo_path):
         """Test that file creation triggers the callback."""
         from sigil_mcp.watcher import FileWatchManager
 
@@ -156,9 +149,7 @@ class TestFileWatching:
             if new_file.exists():
                 new_file.unlink()
 
-    def test_file_deletion_triggers_callback(
-        self, watchdog_available, test_repo_path
-    ):
+    def test_file_deletion_triggers_callback(self, watchdog_available, test_repo_path):
         """Test that file deletion triggers the callback."""
         from sigil_mcp.watcher import FileWatchManager
 
@@ -192,17 +183,12 @@ class TestFileWatching:
         finally:
             manager.stop()
 
-    def test_ignored_files_not_watched(
-        self, watchdog_available, test_repo_path
-    ):
+    def test_ignored_files_not_watched(self, watchdog_available, test_repo_path):
         """Test that ignored files don't trigger callbacks."""
         from sigil_mcp.watcher import FileWatchManager
 
         on_change = Mock()
-        manager = FileWatchManager(
-            on_change=on_change,
-            ignore_extensions=[".pyc", ".tmp"]
-        )
+        manager = FileWatchManager(on_change=on_change, ignore_extensions=[".pyc", ".tmp"])
         manager.start()
 
         try:
@@ -222,17 +208,12 @@ class TestFileWatching:
             if ignored_file.exists():
                 ignored_file.unlink()
 
-    def test_ignored_directories_not_watched(
-        self, watchdog_available, test_repo_path
-    ):
+    def test_ignored_directories_not_watched(self, watchdog_available, test_repo_path):
         """Test that files in ignored directories don't trigger callbacks."""
         from sigil_mcp.watcher import FileWatchManager
 
         on_change = Mock()
-        manager = FileWatchManager(
-            on_change=on_change,
-            ignore_dirs=["__pycache__", ".git"]
-        )
+        manager = FileWatchManager(on_change=on_change, ignore_dirs=["__pycache__", ".git"])
         manager.start()
 
         try:
@@ -256,18 +237,12 @@ class TestFileWatching:
             if ignored_dir.exists():
                 ignored_dir.rmdir()
 
-    def test_debouncing_batches_rapid_changes(
-        self, watchdog_available, test_repo_path
-    ):
+    def test_debouncing_batches_rapid_changes(self, watchdog_available, test_repo_path):
         """Test that rapid changes are debounced."""
         from sigil_mcp.watcher import FileWatchManager
 
         on_change = Mock()
-        manager = FileWatchManager(
-            on_change=on_change,
-            ignore_dirs=[],
-            ignore_extensions=[]
-        )
+        manager = FileWatchManager(on_change=on_change, ignore_dirs=[], ignore_extensions=[])
         manager.start()
 
         try:
@@ -299,13 +274,12 @@ class TestFileWatchingIntegrationWithIndexing:
         """Ensure watchdog is available for tests."""
         try:
             import watchdog  # noqa: F401
+
             return True
         except ImportError:
             pytest.skip("watchdog not installed")
 
-    def test_file_change_triggers_reindex(
-        self, watchdog_available, indexed_repo, test_repo_path
-    ):
+    def test_file_change_triggers_reindex(self, watchdog_available, indexed_repo, test_repo_path):
         """Test that file changes trigger re-indexing."""
         from sigil_mcp.watcher import FileWatchManager
 
@@ -416,9 +390,7 @@ class TestFileWatchingIntegrationWithIndexing:
         # Granular should be significantly faster
         assert granular_reindex_time < full_reindex_time / 2
 
-    def test_multiple_repo_watching(
-        self, watchdog_available, temp_dir, test_index
-    ):
+    def test_multiple_repo_watching(self, watchdog_available, temp_dir, test_index):
         """Test watching multiple repositories simultaneously."""
         from sigil_mcp.watcher import FileWatchManager
 
@@ -472,6 +444,7 @@ class TestRepositoryWatcher:
         """Ensure watchdog is available for tests."""
         try:
             import watchdog  # noqa: F401
+
             return True
         except ImportError:
             pytest.skip("watchdog not installed")
@@ -486,7 +459,7 @@ class TestRepositoryWatcher:
             repo_path=test_repo_path,
             on_change=on_change,
             ignore_dirs=[".git", "__pycache__"],
-            ignore_extensions=[".pyc", ".so"]
+            ignore_extensions=[".pyc", ".so"],
         )
 
         # Should ignore files with ignored extensions
@@ -507,10 +480,7 @@ class TestRepositoryWatcher:
 
         on_change = Mock()
         watcher = RepositoryWatcher(
-            repo_name="test",
-            repo_path=test_repo_path,
-            on_change=on_change,
-            debounce_seconds=2.0
+            repo_name="test", repo_path=test_repo_path, on_change=on_change, debounce_seconds=2.0
         )
 
         test_file = test_repo_path / "main.py"
@@ -526,18 +496,13 @@ class TestRepositoryWatcher:
 
         watcher.stop()
 
-    def test_processing_thread_processes_changes(
-        self, watchdog_available, test_repo_path
-    ):
+    def test_processing_thread_processes_changes(self, watchdog_available, test_repo_path):
         """Test that the processing thread processes scheduled changes."""
         from sigil_mcp.watcher import RepositoryWatcher
 
         on_change = Mock()
         watcher = RepositoryWatcher(
-            repo_name="test",
-            repo_path=test_repo_path,
-            on_change=on_change,
-            debounce_seconds=1.0
+            repo_name="test", repo_path=test_repo_path, on_change=on_change, debounce_seconds=1.0
         )
 
         test_file = test_repo_path / "main.py"

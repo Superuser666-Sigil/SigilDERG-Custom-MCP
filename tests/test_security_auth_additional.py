@@ -9,11 +9,14 @@ from sigil_mcp.security import auth as sec_auth
 
 
 def test_redirect_uri_not_allowed():
-    assert sec_auth.is_redirect_uri_allowed(
-        "https://example.com/callback",
-        registered_redirects=[],
-        allow_list=[],
-    ) is False
+    assert (
+        sec_auth.is_redirect_uri_allowed(
+            "https://example.com/callback",
+            registered_redirects=[],
+            allow_list=[],
+        )
+        is False
+    )
 
 
 def test_check_authentication_ip_whitelist_and_invalid_token(monkeypatch):
@@ -28,14 +31,13 @@ def test_check_authentication_ip_whitelist_and_invalid_token(monkeypatch):
     assert sec_auth.check_authentication(settings=settings, request_headers={}) is False
     # IP not allowed -> False
     assert (
-        sec_auth.check_authentication(
-            settings=settings, request_headers={}, client_ip="8.8.8.8"
-        )
+        sec_auth.check_authentication(settings=settings, request_headers={}, client_ip="8.8.8.8")
         is False
     )
 
     # Allowed IP but invalid bearer token path
     import sys
+
     dummy_mgr = types.SimpleNamespace(verify_token=lambda token: False)
     dummy_module = types.SimpleNamespace(get_oauth_manager=lambda: dummy_mgr)
     monkeypatch.setitem(sys.modules, "sigil_mcp.oauth", dummy_module)
@@ -195,7 +197,10 @@ def test_check_authentication_invalid_api_key_logs(monkeypatch):
         mode="dev",
     )
     monkeypatch.setattr(sec_auth, "api_key_is_valid", lambda key: False)
-    assert sec_auth.check_authentication(request_headers={"X-API-Key": "bad"}, settings=settings) is False
+    assert (
+        sec_auth.check_authentication(request_headers={"X-API-Key": "bad"}, settings=settings)
+        is False
+    )
 
 
 def test_check_ip_whitelist_accepts_match():
