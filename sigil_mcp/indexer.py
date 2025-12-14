@@ -1188,7 +1188,7 @@ class SigilIndex:
         is_doc = ext in DOC_LIKE_EXTS
         is_config = ext in CONFIG_LIKE_EXTS
         is_data = ext in DATA_LIKE_EXTS
-        is_code = not (is_doc or is_config or is_data) or ext in CODE_LIKE_EXTS
+        is_code = ext in CODE_LIKE_EXTS and not (is_doc or is_config or is_data)
         language = EXT_LANGUAGE_MAP.get(ext)
 
         # Lightweight content-aware heuristics to avoid mis-bucketing
@@ -1216,6 +1216,58 @@ class SigilIndex:
                 is_code = True
         elif not language:
             language = "unknown"
+
+        # Path-based demotions for packaging/artifact directories and metadata files
+        artifact_dirs = {
+            "egg-info",
+            "dist-info",
+            "site-packages",
+            "node_modules",
+            "__pycache__",
+            ".mypy_cache",
+            ".ruff_cache",
+            ".pytest_cache",
+            "build",
+            "dist",
+            "venv",
+            ".venv",
+        }
+        filename = Path(rel_path).name.lower()
+        if any(part in artifact_dirs for part in Path(rel_path).parts):
+            is_code = False
+            is_doc = False
+            is_config = False
+            is_data = True
+        metadata_files = {
+            "pkg-info",
+            "metadata",
+            "record",
+            "wheel",
+            "license",
+            "license.txt",
+            "copying",
+            "authors",
+            "install",
+            "changelog",
+            "readme",
+        }
+        if filename in metadata_files:
+            is_code = False
+            is_doc = True
+            is_config = False
+            is_data = False
+
+        # Files without an extension: default to non-code unless content strongly suggests code
+        if not ext:
+            is_code = False
+            language = None
+            if text:
+                if re.search(r"^#!", text):
+                    is_code = True
+                elif re.search(r"\\b(class|def|function|package|namespace|public\\s+static\\s+void)\\b", text):
+                    is_code = True
+                elif text.count(";") > 3 and text.count("{") + text.count("}") > 1:
+                    is_code = True
 
         # Treat language as authoritative for ranking only when the file is code
         if not is_code:
@@ -3172,6 +3224,12 @@ class SigilIndex:
                 return
                 return
 
+        # Normalize embeddings to unit vectors so cosine/dot metrics behave
+        embeddings = embeddings.astype("float32", copy=False)
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        embeddings = embeddings / norms
+
         timestamp = datetime.now()
 
         try:
@@ -3496,6 +3554,21 @@ class SigilIndex:
         q_norm = np.linalg.norm(q_vec) or 1.0
         q_vec = q_vec / q_norm
 
+        def _lance_search(table: object, vec: np.ndarray, limit: int) -> list[dict]:
+            """Search a LanceDB table preferring cosine metric when available."""
+            try:
+                return (
+                    cast(Any, table)
+                    .search(vec.astype("float32"))
+                    .metric("cosine")
+                    .limit(limit)
+                    .to_list()
+                )
+            except Exception:
+                return (
+                    cast(Any, table).search(vec.astype("float32")).limit(limit).to_list()
+                )
+
         def _rows_to_candidates(rows: list[dict], repo_name: str | None) -> list[dict]:
             out: list[dict] = []
             for r in rows:
@@ -3598,12 +3671,7 @@ class SigilIndex:
             if repo_table is None:
                 return []
             try:
-                query_results = (
-                    cast(Any, repo_table)
-                    .search(q_vec.astype("float32"))
-                    .limit(rerank_pool)
-                    .to_list()
-                )
+                query_results = _lance_search(repo_table, q_vec, rerank_pool)
             except Exception:
                 logger.exception("Semantic search failed for repo %s", repo)
                 return []
@@ -3621,12 +3689,7 @@ class SigilIndex:
                     repo_db, repo_table = self._get_repo_lance_and_vectors(rname)
                     if repo_table is None:
                         continue
-                    rows = (
-                        cast(Any, repo_table)
-                        .search(q_vec.astype("float32"))
-                        .limit(rerank_pool)
-                        .to_list()
-                    )
+                    rows = _lance_search(repo_table, q_vec, rerank_pool)
                     for res in _rows_to_candidates(rows, rname):
                         aggregated.append(res)
                 except Exception:
