@@ -8,7 +8,7 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 ## Status
 
-Superseded by [ADR-017: RocksDB Trigram Store](adr-017-rocksdb-trigram-store.md)
+Superseded by [ADR-017: rocksdict Trigram Store](adr-017-rocksdb-trigram-store.md). SQLite-backed trigram storage is no longer present in the codebase.
 
 ## Context
 
@@ -36,7 +36,7 @@ Implement trigram-based inverted indexing inspired by GitHub's Blackbird search 
 1. **Trigram Generation**: Break all text into overlapping 3-character sequences
 2. **Inverted Index**: Map each trigram to documents and positions containing it
 3. **Query Processing**: Query strings decomposed into trigrams, intersection of document sets
-4. **Storage**: SQLite database for trigram index with optimized B-tree indexes
+4. **Storage**: Trigram index persisted via rocksdict (RocksDB bindings)
 5. **Hybrid Search**: Combine trigram search with symbol-based search (via ctags)
 
 Example: "async" generates trigrams: "asy", "syn", "ync"
@@ -56,7 +56,6 @@ Post-filter: Verify actual substring exists in candidates
 - **Fast substring search**: O(k) where k = trigrams * documents per trigram, typically 10-100ms
 - **Handles partial matches**: Can find "HttpClient" when searching "Client" or "Http"
 - **Case-insensitive by default**: Trigrams lowercased during indexing
-- **Lightweight**: SQLite is a single-file database, no external dependencies
 - **Works with code**: Handles camelCase, snake_case, and long identifiers well
 - **Incremental indexing**: Can add/update repositories without full reindex
 - **Compression**: Blob storage uses zlib, saves disk space

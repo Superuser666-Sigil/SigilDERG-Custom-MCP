@@ -23,6 +23,12 @@ def get_code_chunk_model(dimension: int) -> type[LanceModel]:
         start_line: int
         end_line: int
         content: str
+        is_code: bool = True
+        is_doc: bool | None = None
+        is_config: bool | None = None
+        is_data: bool | None = None
+        extension: str | None = None
+        language: str | None = None
         last_updated: datetime
 
     CodeChunk.__name__ = "CodeChunk"

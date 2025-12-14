@@ -68,6 +68,7 @@ Configuration in `config.json`:
 - `embeddings.dimension`: Expected embedding dimension (e.g., 384, 768, 1536)
 - `embeddings.cache_dir`: Cache directory for downloaded models (optional, defaults to system cache)
 - `embeddings.api_key`: API key for cloud providers (optional, falls back to `OPENAI_API_KEY` env var)
+- `embeddings.llamacpp_context_size` or `embeddings.n_ctx`: Optional override for llama.cpp context; mapped to provider `context_size` (default 2048 if unset)
 
 **Why?** PyTorch has excellent CUDA support out of the box. sentence-transformers will automatically use your GPU.
 
@@ -90,7 +91,8 @@ Configuration in `config.json`:
     "model": "/path/to/model.gguf",
     "dimension": 768,
     "n_gpu_layers": 99,
-    "n_ctx": 512
+    "n_ctx": 512,
+    "llamacpp_context_size": 8192
   }
 }
 ```
@@ -276,7 +278,7 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, ROCm: {torch
   1. Stop the server and back up your index directory.
   2. Run `python scripts/rebuild_indexes.py` (or `POST /admin/vector/rebuild` for individual repos) to regenerate embeddings into
      LanceDB.
-  3. Remove the legacy table once you're confident in the new data: `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`.
+  3. (Legacy installs only) remove the old SQLite table once you're confident in the new data: `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`.
 - After rebuilding you should see a `lancedb` directory under your index path with per-repo subdirectories and `code_vectors`
   tables.
 

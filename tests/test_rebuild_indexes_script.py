@@ -19,7 +19,6 @@ def live_index(monkeypatch, tmp_path, test_repo_path, dummy_embed_fn):
     index_path = tmp_path / "idx"
     index_path.mkdir(parents=True, exist_ok=True)
 
-    original_config = sigil_config._config
     cfg = sigil_config.Config()
     cfg.config_data.update(
         {
@@ -30,7 +29,7 @@ def live_index(monkeypatch, tmp_path, test_repo_path, dummy_embed_fn):
             "server": {"log_file": str(tmp_path / "server.log")},
         }
     )
-    sigil_config._config = cfg
+    monkeypatch.setattr(sigil_config, "_config", cfg)
 
     idx = SigilIndex(index_path, embed_fn=dummy_embed_fn, embed_model="test-model")
     idx.index_repository("test_repo", test_repo_path, force=True)
@@ -39,7 +38,6 @@ def live_index(monkeypatch, tmp_path, test_repo_path, dummy_embed_fn):
         yield {"index": idx, "config": cfg, "repo_path": test_repo_path}
     finally:
         idx.close()
-        sigil_config._config = original_config
 
 
 def test_delete_all_trigrams(live_index):

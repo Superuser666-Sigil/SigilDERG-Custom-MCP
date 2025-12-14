@@ -25,7 +25,7 @@ from .indexer import SigilIndex
 from .auth import initialize_api_key
 from .oauth import get_oauth_manager
 from .config import get_config
-from .watcher import FileWatchManager
+from .watcher import FileWatchManager, WATCHDOG_AVAILABLE
 from .app_factory import build_mcp_app
 from .mcp_client import (
     MCPClientManager,
@@ -96,6 +96,8 @@ READINESS: Dict[str, bool] = {
     "config": True,
     "index": False,
     "embeddings": not config.embeddings_enabled,  # ready when disabled
+    "dependencies": False,
+    "watcher": not config.watch_enabled,
 }
 
 
@@ -127,6 +129,52 @@ def _log_configuration_summary() -> None:
 
 
 _log_configuration_summary()
+
+
+def _check_dependencies() -> None:
+    """Validate native/optional dependencies and set readiness flags."""
+    global READINESS
+    deps_ok = True
+    # Trigram backend (rocksdict) is required
+    try:
+        import rocksdict  # noqa: F401
+    except Exception as exc:
+        deps_ok = False
+        logger.error(
+            "Missing required dependency 'rocksdict' (or RocksDB). Install it before starting. %s",
+            exc,
+        )
+        raise RuntimeError("rocksdict dependency missing") from exc
+
+    # Vector store (LanceDB/pyarrow) required when embeddings enabled
+    if config.embeddings_enabled:
+        try:
+            import lancedb  # noqa: F401
+        except Exception as exc:
+            deps_ok = False
+            logger.error(
+                "Embeddings enabled but LanceDB is unavailable. Install with `pip install .[lancedb]`."
+            )
+            raise RuntimeError("lancedb dependency missing") from exc
+        try:
+            import pyarrow  # noqa: F401
+        except Exception as exc:
+            deps_ok = False
+            logger.error(
+                "Embeddings enabled but pyarrow is unavailable. Install with `pip install .[lancedb]`."
+            )
+            raise RuntimeError("pyarrow dependency missing") from exc
+
+    # Watcher is optional; mark readiness but do not fail startup
+    if config.watch_enabled and not WATCHDOG_AVAILABLE:
+        deps_ok = False
+        logger.warning(
+            "File watching is enabled but watchdog is not installed. Install with `pip install watchdog`."
+        )
+    READINESS["dependencies"] = deps_ok
+
+
+_check_dependencies()
 
 # --------------------------------------------------------------------
 # Security Configuration
@@ -1046,6 +1094,7 @@ def _get_watcher() -> Optional[FileWatchManager]:
     global _WATCHER
     
     if not config.watch_enabled:
+        READINESS["watcher"] = True
         return None
     
     if _WATCHER is None:
@@ -1056,6 +1105,9 @@ def _get_watcher() -> Optional[FileWatchManager]:
         )
         _WATCHER.start()
         logger.info("File watcher initialized")
+        READINESS["watcher"] = bool(getattr(_WATCHER, "enabled", True))
+    else:
+        READINESS["watcher"] = bool(_WATCHER and getattr(_WATCHER, "enabled", True))
     
     return _WATCHER
 
@@ -2708,7 +2760,9 @@ def build_vector_index(
             "query": {"type": "string"},
             "repo": {"type": "string"},
             "k": {"type": "integer"},
-            "model": {"type": "string"}
+            "model": {"type": "string"},
+            "code_only": {"type": "boolean"},
+            "prefer_code": {"type": "boolean"}
         },
         "required": ["query"]
     },
@@ -2718,6 +2772,8 @@ def semantic_search(
     repo: Optional[str] = None,
     k: int = 20,
     model: str = "default",
+    code_only: bool = False,
+    prefer_code: bool = False,
 ) -> Dict[str, object]:
     """
     Semantic code search using vector embeddings.
@@ -2730,6 +2786,8 @@ def semantic_search(
       repo: Repository name (optional; when omitted searches across all indexed repos)
       k: Number of results to return (default: 20)
       model: Embedding model identifier (default: "default")
+      code_only: When true, hard-filter results to code chunks
+      prefer_code: When true, rerank to favor code while still allowing docs/config
     
     Returns:
       {
@@ -2761,11 +2819,13 @@ def semantic_search(
       )
     """
     logger.info(
-        "semantic_search called (query=%r, repo=%r, k=%r, model=%r)",
+        "semantic_search called (query=%r, repo=%r, k=%r, model=%r, code_only=%r, prefer_code=%r)",
         query,
         repo,
         k,
         model,
+        code_only,
+        prefer_code,
     )
     _ensure_repos_configured()
 
@@ -2797,6 +2857,8 @@ def semantic_search(
             k=k,
             embed_fn=index.embed_fn,
             model=effective_model,
+            code_only=code_only,
+            prefer_code=prefer_code,
         )
     except Exception as exc:  # pragma: no cover - defensive catch for MCP stability
         logger.exception("semantic_search failed: %s", exc)

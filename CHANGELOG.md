@@ -13,6 +13,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2025-12-14
+
+### Added
+- Semantic search rerank controls: `code_only` (hard filter to code) and `prefer_code` (boost code while allowing docs/config), with metadata-aware reranking over a larger candidate pool.
+- Metadata tagging for vector rows (`is_code`, `is_doc`, `is_config`, `is_data`, `extension`, `language`) plus lightweight extension/content heuristics to keep language authoritative only for code.
+- Llama.cpp config mapping for larger contexts: `llamacpp_context_size` / `n_ctx` now map to provider `context_size`.
+- Tests covering code-only/prefer-code rerank behavior and LanceDB stubs supporting the updated search flow.
+
+### Changed
+- Trigram backend is rocksdict-only; SQLite/RocksDB fallbacks removed and docs/ADRs updated accordingly.
+- Postings are fixed-width encoded (uint32/uint64), intersection ordering is deterministic (shortest-first) with early exits for faster queries.
+- Semantic search scoring applies metadata penalties/boosts in a rerank step (preserving vector recall) instead of altering distances.
+- Config persistence now prefers the originally loaded path, preventing test/admin writes from overwriting project config; default index path is `~/.sigil_index`.
+- Documentation refreshed: rocksdict-only backend, llama.cpp context-size guidance, metadata/rerank behavior, and legacy SQLite embeddings cleanup marked as legacy-only.
+
+### Fixed
+- LanceDB in-memory stubs now mirror the real API enough to support the new search flow (including distance propagation).
+- Admin rebuild/logs flows benefit from stable config path handling and correct storage location defaults.
+
 ## [0.9.0] - 2025-12-11
 
 ### Added

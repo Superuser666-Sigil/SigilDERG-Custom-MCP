@@ -34,22 +34,13 @@ import numpy as np
 import threading
 from collections import defaultdict
 
-# RocksDB bindings: prefer rocksdict (prebuilt wheels), fall back to python-rocksdb if present
+# Trigram store requires rocksdict (RocksDB-backed Python bindings).
 try:
     from rocksdict import Rdict  # type: ignore
-
     ROCKSDICT_AVAILABLE = True
 except Exception:
     Rdict = None  # type: ignore
     ROCKSDICT_AVAILABLE = False
-
-try:
-    import rocksdb  # type: ignore
-
-    ROCKSDB_AVAILABLE = True
-except Exception:
-    rocksdb = None  # type: ignore
-    ROCKSDB_AVAILABLE = False
 
 try:
     import lancedb  # type: ignore
@@ -73,7 +64,6 @@ except Exception:
 
 # Tell the type-checker these optional third-party modules/objects are untyped
 Rdict = cast(Any, Rdict)
-rocksdb = cast(Any, rocksdb)
 lancedb = cast(Any, lancedb)
 pa = cast(Any, pa)
 tiktoken = cast(Any, tiktoken)
@@ -106,6 +96,83 @@ EMBED_SKIP_FILENAMES = {
     "gemfile.lock",
 }
 EMBED_SKIP_DIRS = {"coverage", "htmlcov", "test_logs", "output", "outputs", "backups"}
+# File-type heuristics for semantic search weighting
+CODE_LIKE_EXTS = {
+    ".py", ".pyw", ".pyi", ".pyx",
+    ".js", ".jsx", ".ts", ".tsx",
+    ".mjs", ".cjs",
+    ".rs", ".go", ".java", ".kt", ".kts",
+    ".cs", ".cpp", ".cxx", ".cc", ".c", ".h", ".hpp",
+    ".m", ".mm", ".swift", ".scala",
+    ".rb", ".php", ".pl", ".pm",
+    ".sql", ".psql",
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".psm1",
+    ".lua", ".hs", ".ml", ".ex", ".exs", ".dart", ".groovy",
+    ".r", ".jl",
+    ".jsonnet", ".cue",
+}
+DOC_LIKE_EXTS = {
+    ".md", ".mdx", ".rst", ".adoc", ".txt",
+    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".csv", ".tsv", ".log",
+    ".pdf", ".doc", ".docx", ".rtf",
+}
+CONFIG_LIKE_EXTS = {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf"}
+DATA_LIKE_EXTS = {".csv", ".tsv", ".jsonl", ".ndjson", ".parquet"}
+EXT_LANGUAGE_MAP = {
+    ".py": "python",
+    ".pyw": "python",
+    ".pyi": "python",
+    ".rs": "rust",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".go": "go",
+    ".cs": "csharp",
+    ".cpp": "cpp",
+    ".cxx": "cpp",
+    ".cc": "cpp",
+    ".c": "c",
+    ".h": "c",
+    ".hpp": "cpp",
+    ".m": "objective-c",
+    ".mm": "objective-cpp",
+    ".swift": "swift",
+    ".scala": "scala",
+    ".rb": "ruby",
+    ".php": "php",
+    ".pl": "perl",
+    ".pm": "perl",
+    ".sql": "sql",
+    ".psql": "sql",
+    ".sh": "shell",
+    ".bash": "shell",
+    ".zsh": "shell",
+    ".fish": "shell",
+    ".ps1": "powershell",
+    ".psm1": "powershell",
+    ".lua": "lua",
+    ".hs": "haskell",
+    ".ml": "ocaml",
+    ".ex": "elixir",
+    ".exs": "elixir",
+    ".dart": "dart",
+    ".groovy": "groovy",
+    ".r": "r",
+    ".jl": "julia",
+    ".jsonnet": "jsonnet",
+    ".cue": "cue",
+}
+CODE_SCORE_BOOST = 1.0
+DOC_SCORE_PENALTY = 0.6
+CONFIG_SCORE_PENALTY = 0.7
+DATA_SCORE_PENALTY = 0.7
 
 
 class _StubVectorType:
@@ -148,6 +215,12 @@ class _InMemoryQuery:
     def limit(self, k: int):
         self._limit = k
         return self
+
+    def to_list(self) -> list[dict]:
+        rows = list(self._rows)
+        if self._limit is not None:
+            rows = rows[: self._limit]
+        return rows
 
 
 class _NullTrigramDB:
@@ -202,9 +275,13 @@ class _NullTrigramDB:
             vec = np.asarray(row.get("vector", []), dtype="float32")
             if self._query_vec is not None and vec.shape == self._query_vec.shape:
                 score = float(np.dot(vec, self._query_vec))
+                distance = float(1.0 - score)
             else:
                 score = 0.0
-            scored.append((score, row))
+                distance = 1.0
+            row_copy = dict(row)
+            row_copy["_distance"] = distance
+            scored.append((score, row_copy))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         results = [row for _, row in scored]
@@ -466,19 +543,9 @@ class SigilIndex:
         self._vector_index_enabled = self._embeddings_active and self.vectors is not None
         self._log_vector_index_status()
 
-        # Which backend to use for trigram postings: rocksdb (preferred when available)
-        # or sqlite (legacy/fallback). Controlled by SIGIL_MCP_TRIGRAM_BACKEND env:
-        # values: "rocksdb", "sqlite", "auto" (default -> prefer rocksdb if available).
-        self._trigram_backend: str = "sqlite"
-        self._rocksdb_trigrams: Any = None
+        # Trigram postings are stored via rocksdict only.
+        self._trigram_backend: str = "unknown"
         self._rocksdict_trigrams: Any = None
-        trigram_backend_env = os.getenv("SIGIL_MCP_TRIGRAM_BACKEND", "auto").lower()
-        force_sqlite = trigram_backend_env == "sqlite"
-        force_rocksdict = trigram_backend_env == "rocksdict"
-        force_rocksdb = trigram_backend_env == "rocksdb"
-        prefer_rocks = trigram_backend_env in {"auto", "rocksdb", "rocksdict"}
-        if force_sqlite:
-            prefer_rocks = False
         
         # Use longer timeout for multi-process access (Admin API + main server)
         # 60 seconds should be enough for most operations
@@ -494,49 +561,21 @@ class SigilIndex:
             "PRAGMA busy_timeout=60000;"
         )  # 60 seconds in milliseconds
 
-        # Initialize trigram store (RocksDB required)
-        if ROCKSDICT_AVAILABLE:
-            try:
-                trigram_path = self.index_path / "trigrams.rocksdb"
-                trigram_path.mkdir(parents=True, exist_ok=True)
-                # Rdict auto-creates when path does not exist; no create_if_missing kw
-                rd = cast(Any, Rdict)
-                self._rocksdict_trigrams = rd(str(trigram_path))
-                self._trigram_backend = "rocksdict"
-                logger.info("Using rocksdict trigram store at %s", trigram_path)
-            except Exception:
-                logger.exception("Failed to initialize rocksdict")
-                raise RuntimeError("rocksdict initialization failed - RocksDB trigrams are required")
-        elif ROCKSDB_AVAILABLE:
-            try:
-                rb = cast(Any, rocksdb)
-                rocks_opts = rb.Options()
-                rocks_opts.create_if_missing = True
-                rocks_opts.max_background_jobs = 2
-                rocks_opts.max_open_files = 500
-                rocks_opts.write_buffer_size = 64 * 1024 * 1024
-                rocks_opts.target_file_size_base = 64 * 1024 * 1024
-                rocks_opts.compression = rb.CompressionType.lz4_compression
-                table_opts = rb.BlockBasedTableOptions()
-                table_opts.block_cache = rb.LRUCache(128 * 1024 * 1024)
-                table_opts.filter_policy = rb.BloomFilterPolicy(10)
-                rocks_opts.table_factory = rb.BlockBasedTableFactory(
-                    table_opts
-                )
-                trigram_path = self.index_path / "trigrams.rocksdb"
-                self._rocksdb_trigrams = rb.DB(
-                    str(trigram_path),
-                    rocks_opts,
-                )
-                self._trigram_backend = "rocksdb"
-                logger.info("Using RocksDB trigram store at %s", trigram_path)
-            except Exception:
-                logger.exception("Failed to initialize python-rocksdb")
-                raise RuntimeError("RocksDB initialization failed - RocksDB trigrams are required")
-        else:
+        # Initialize trigram store (rocksdict required)
+        if not ROCKSDICT_AVAILABLE:
             raise RuntimeError(
-                "No RocksDB backend available. Please install rocksdict: pip install rocksdict"
+                "No rocksdict backend available. Please install rocksdict: pip install rocksdict"
             )
+        try:
+            trigram_path = self.index_path / "trigrams.rocksdb"
+            trigram_path.mkdir(parents=True, exist_ok=True)
+            rd = cast(Any, Rdict)
+            self._rocksdict_trigrams = rd(str(trigram_path))
+            self._trigram_backend = "rocksdict"
+            logger.info("Using rocksdict trigram store at %s", trigram_path)
+        except Exception:
+            logger.exception("Failed to initialize rocksdict")
+            raise RuntimeError("rocksdict initialization failed - rocksdict trigrams are required")
         
         self._init_schema()
         self._check_vector_repo_alignment()
@@ -1060,6 +1099,58 @@ class SigilIndex:
                 self.embedding_dimension,
                 actual_dim,
             )
+
+    @staticmethod
+    def _classify_path(rel_path: str, sample_text: Optional[str] = None) -> dict[str, object]:
+        """
+        Heuristic classification for semantic search weighting and metadata.
+        Returns flags for code/doc/config/data and language/ext hints.
+        """
+        ext = Path(rel_path).suffix.lower()
+        is_doc = ext in DOC_LIKE_EXTS
+        is_config = ext in CONFIG_LIKE_EXTS
+        is_data = ext in DATA_LIKE_EXTS
+        is_code = not (is_doc or is_config or is_data) or ext in CODE_LIKE_EXTS
+        language = EXT_LANGUAGE_MAP.get(ext)
+
+        # Lightweight content-aware heuristics to avoid mis-bucketing
+        text = (sample_text or "").strip()
+        if ext == ".h":
+            # Distinguish Objective-C headers and C++ vs C
+            if re.search(r"@interface|@implementation|@class\\b", text):
+                language = "objective-c"
+                is_code = True
+            elif re.search(r"\\bnamespace\\b|\\bstd::|\\btemplate\\s*<", text):
+                language = "cpp"
+                is_code = True
+            else:
+                language = language or "c"
+        elif ext in {".ts", ".tsx"}:
+            language = "typescript"
+            is_code = True
+        elif ext in {".py", ".pyi", ".pyw"}:
+            language = "python"
+            is_code = True
+        elif ext in {".m", ".mm"}:
+            # Objective-C / Objective-C++
+            if re.search(r"@interface|@implementation|@class\\b", text):
+                language = "objective-c" if ext == ".m" else "objective-cpp"
+                is_code = True
+        elif not language:
+            language = "unknown"
+
+        # Treat language as authoritative for ranking only when the file is code
+        if not is_code:
+            # Keep extension-derived language for filtering, but mark unknown code paths cleanly
+            language = language or "unknown"
+        return {
+            "is_code": is_code,
+            "is_doc": is_doc,
+            "is_config": is_config,
+            "is_data": is_data,
+            "extension": ext or None,
+            "language": language,
+        }
     
     def _log_vector_index_status(self, context: str = "startup") -> None:
         """Log current vector index availability and size."""
@@ -1241,7 +1332,7 @@ class SigilIndex:
         except Exception:
             logger.debug("Skipping removal of legacy embeddings table", exc_info=True)
 
-        # RocksDB backend uses key/value store; nothing to initialize here.
+        # rocksdict-backed trigram store uses its own key/value path; nothing to initialize here.
         self.repos_db.commit()
         # Ensure vector metadata columns exist for backward-compatible upgrades
         try:
@@ -1970,14 +2061,13 @@ class SigilIndex:
         end = perf_counter()
         logger.info("_build_trigram_index: wrote_trigrams=%d db_time=%.2fs total_time=%.2fs",
                 len(grams), end - mid, end - start)
-        # Post-commit sanity check: ensure persisted trigram keys are visible for Rocks-backed stores.
+        # Post-commit sanity check: ensure persisted trigram keys are visible for rocksdict.
         try:
-            if self._trigram_backend in ("rocksdict", "rocksdb"):
-                trigram_count = self._trigram_count()
-                if trigram_count == 0:
-                    logger.error("_build_trigram_index: post-commit trigram store reports 0 keys (backend=%s). Possible persistence failure.", self._trigram_backend)
-                else:
-                    logger.info("_build_trigram_index: post-commit persisted_trigram_keys=%d (backend=%s)", trigram_count, self._trigram_backend)
+            trigram_count = self._trigram_count()
+            if trigram_count == 0:
+                logger.error("_build_trigram_index: post-commit trigram store reports 0 keys (backend=%s). Possible persistence failure.", self._trigram_backend)
+            else:
+                logger.info("_build_trigram_index: post-commit persisted_trigram_keys=%d (backend=%s)", trigram_count, self._trigram_backend)
         except Exception:
             logger.debug("_build_trigram_index: failed to perform post-commit trigram sanity check", exc_info=True)
         return len(trigram_map)
@@ -2049,13 +2139,10 @@ class SigilIndex:
         if not trigrams:
             return
         with self._db_lock:
-            batch_size = 500
-            for idx, trigram in enumerate(trigrams, start=1):
+            for trigram in trigrams:
                 existing_ids = self._trigram_get_doc_ids(trigram)
                 existing_ids.add(doc_id)
                 self._trigram_set_doc_ids(trigram, existing_ids)
-                if self._trigram_backend == "sqlite" and idx % batch_size == 0:
-                    self._trigram_commit()
             self._trigram_commit()
 
     def _remove_doc_from_trigram_postings(self, doc_id: int, trigrams: Set[str]) -> None:
@@ -2075,20 +2162,93 @@ class SigilIndex:
             self._trigram_commit()
 
     # ------------------------------------------------------------------
-    # Trigram storage helpers (RocksDB or SQLite backend)
+        # Trigram storage helpers (RocksDB backend via rocksdict)
     # ------------------------------------------------------------------
     @staticmethod
+    @staticmethod
     def _serialize_doc_ids(doc_ids: Set[int]) -> bytes:
-        return zlib.compress(",".join(str(doc) for doc in sorted(doc_ids)).encode())
+        """
+        Store doc_ids as fixed-width little-endian uint32 array with a version prefix.
+        Prefix 0x02 indicates fixed-width encoding. Older (prefix-less) and varint
+        (0x01) blobs remain readable for backward compatibility.
+        """
+        if not doc_ids:
+            return zlib.compress(b"")
+
+        max_id = max(doc_ids)
+        min_id = min(doc_ids)
+        if min_id < 0:
+            raise ValueError("doc_id must be non-negative for trigram postings")
+
+        from array import array
+
+        # Version 0x02: uint32; Version 0x03: uint64
+        if max_id <= 0xFFFFFFFF:
+            arr = array("I", sorted(doc_ids))
+            payload = b"\x02" + arr.tobytes()
+        elif max_id <= 0xFFFFFFFFFFFFFFFF:
+            arr = array("Q", sorted(doc_ids))
+            payload = b"\x03" + arr.tobytes()
+        else:
+            raise ValueError("doc_id out of uint64 range for trigram postings")
+
+        return zlib.compress(payload)
 
     @staticmethod
     def _deserialize_doc_ids(blob: bytes) -> Set[int]:
         try:
-            return {
-                int(x) for x in zlib.decompress(blob).decode().split(",") if x
-            }
+            raw = zlib.decompress(blob)
         except Exception:
-            logger.debug("Failed to deserialize doc_ids blob", exc_info=True)
+            logger.debug("Failed to decompress doc_ids blob", exc_info=True)
+            return set()
+
+        if not raw:
+            return set()
+
+        # Fixed-width encodings: 0x02 => uint32, 0x03 => uint64 little-endian
+        if raw[0] == 0x02:
+            data = raw[1:]
+            if len(data) % 4 != 0:
+                logger.debug("Invalid fixed-width doc_ids payload length")
+                return set()
+            try:
+                from array import array
+
+                arr = array("I")
+                arr.frombytes(data)
+                return set(arr.tolist())
+            except Exception:
+                logger.debug("Failed to decode fixed-width doc_ids payload", exc_info=True)
+                return set()
+        if raw[0] == 0x03:
+            data = raw[1:]
+            if len(data) % 8 != 0:
+                logger.debug("Invalid fixed-width (uint64) doc_ids payload length")
+                return set()
+            try:
+                from array import array
+
+                arr = array("Q")
+                arr.frombytes(data)
+                return set(arr.tolist())
+            except Exception:
+                logger.debug("Failed to decode uint64 doc_ids payload", exc_info=True)
+                return set()
+
+        # Varint delta encoding: leading 0x01
+        if raw[0] == 0x01:
+            try:
+                ids = SigilIndex._decode_varint_delta(raw[1:])
+                return set(ids)
+            except Exception:
+                logger.debug("Failed to decode varint doc_ids; falling back", exc_info=True)
+                return set()
+
+        # Legacy fallback: comma-separated integers
+        try:
+            return {int(x) for x in raw.decode().split(",") if x}
+        except Exception:
+            logger.debug("Failed to deserialize legacy doc_ids blob", exc_info=True)
             return set()
 
     @staticmethod
@@ -2120,8 +2280,7 @@ class SigilIndex:
         return set()
 
     def _trigram_commit(self) -> None:
-        # Ensure on-disk durability for Rocks-backed stores when available.
-        # rocksdict exposes flush / flush_wal; python-rocksdb may expose flush or Flush
+        # Ensure on-disk durability for rocksdict-backed stores when available.
         if self._trigram_backend == "rocksdict" and getattr(self, "_rocksdict_trigrams", None) is not None:
             try:
                 rd = self._rocksdict_trigrams
@@ -2132,41 +2291,13 @@ class SigilIndex:
             except Exception:
                 logger.debug("rocksdict flush failed", exc_info=True)
 
-        if self._trigram_backend == "rocksdb" and getattr(self, "_rocksdb_trigrams", None) is not None:
-            try:
-                rb = self._rocksdb_trigrams
-                # python-rocksdb may expose a Flush method on the DB or via a Flush method on the column family
-                if hasattr(rb, "flush"):
-                    try:
-                        rb.flush()
-                    except Exception:
-                        # some bindings use Flush
-                        if hasattr(rb, "Flush"):
-                            rb.Flush()
-                elif hasattr(rb, "Flush"):
-                    rb.Flush()
-            except Exception:
-                logger.debug("rocksdb flush failed", exc_info=True)
-
     def _trigram_get_doc_ids(self, gram: str) -> Set[int]:
-        if self._trigram_backend == "rocksdict":
-            if self._rocksdict_trigrams is None:
-                return set()
-            raw = self._rocksdict_trigrams.get(gram.encode(), None)
-            if raw is None:
-                return set()
-            return self._deserialize_doc_ids(raw)
-
-        if self._trigram_backend == "rocksdb":
-            if self._rocksdb_trigrams is None:
-                return set()
-            raw = self._rocksdb_trigrams.get(gram.encode())
-            if raw is None:
-                return set()
-            return self._deserialize_doc_ids(raw)
-
-        # Should not reach here - backend should be rocksdict or rocksdb
-        return set()
+        if self._rocksdict_trigrams is None:
+            return set()
+        raw = self._rocksdict_trigrams.get(gram.encode(), None)
+        if raw is None:
+            return set()
+        return self._deserialize_doc_ids(raw)
 
     def _trigram_set_doc_ids(self, gram: str, doc_ids: Set[int]) -> None:
         if not doc_ids:
@@ -2174,147 +2305,72 @@ class SigilIndex:
             return
         serialized = self._serialize_doc_ids(doc_ids)
 
-        if self._trigram_backend == "rocksdict":
-            if self._rocksdict_trigrams is None:
-                return
-            # Retry with backoff to handle transient write issues
-            retries = int(os.getenv("SIGIL_MCP_TRIGRAM_WRITE_RETRIES", "3"))
-            backoff_ms = int(os.getenv("SIGIL_MCP_TRIGRAM_RETRY_BACKOFF_MS", "50"))
-            last_exc = None
-            for attempt in range(1, retries + 1):
-                try:
-                    self._rocksdict_trigrams[gram.encode()] = serialized
-                    last_exc = None
-                    break
-                except Exception as e:
-                    last_exc = e
-                    logger.warning("rocksdict write attempt %d/%d failed for %s", attempt, retries, gram)
-                    if attempt < retries:
-                        try:
-                            import time
-
-                            time.sleep(backoff_ms / 1000.0)
-                        except Exception:
-                            pass
-            if last_exc is not None:
-                logger.error("Failed to write trigram %s to rocksdict after %d attempts", gram, retries, exc_info=True)
-                raise last_exc
+        if self._rocksdict_trigrams is None:
             return
+        # Retry with backoff to handle transient write issues
+        retries = int(os.getenv("SIGIL_MCP_TRIGRAM_WRITE_RETRIES", "3"))
+        backoff_ms = int(os.getenv("SIGIL_MCP_TRIGRAM_RETRY_BACKOFF_MS", "50"))
+        last_exc = None
+        for attempt in range(1, retries + 1):
+            try:
+                self._rocksdict_trigrams[gram.encode()] = serialized
+                last_exc = None
+                break
+            except Exception as e:
+                last_exc = e
+                logger.warning("rocksdict write attempt %d/%d failed for %s", attempt, retries, gram)
+                if attempt < retries:
+                    try:
+                        import time
 
-        if self._trigram_backend == "rocksdb":
-            if self._rocksdb_trigrams is None:
-                return
-            # python-rocksdb DB.put can be used; retry similarly
-            retries = int(os.getenv("SIGIL_MCP_TRIGRAM_WRITE_RETRIES", "3"))
-            backoff_ms = int(os.getenv("SIGIL_MCP_TRIGRAM_RETRY_BACKOFF_MS", "50"))
-            last_exc = None
-            for attempt in range(1, retries + 1):
-                try:
-                    self._rocksdb_trigrams.put(gram.encode(), serialized)
-                    last_exc = None
-                    break
-                except Exception as e:
-                    last_exc = e
-                    logger.warning("rocksdb write attempt %d/%d failed for %s", attempt, retries, gram)
-                    if attempt < retries:
-                        try:
-                            import time
-
-                            time.sleep(backoff_ms / 1000.0)
-                        except Exception:
-                            pass
-            if last_exc is not None:
-                logger.error("Failed to write trigram %s to RocksDB after %d attempts", gram, retries, exc_info=True)
-                raise last_exc
-            return
-
-        # Should not reach here - backend should be rocksdict or rocksdb
+                        time.sleep(backoff_ms / 1000.0)
+                    except Exception:
+                        pass
+        if last_exc is not None:
+            logger.error("Failed to write trigram %s to rocksdict after %d attempts", gram, retries, exc_info=True)
+            raise last_exc
+        return
 
     def _trigram_delete(self, gram: str) -> None:
-        if self._trigram_backend == "rocksdict":
-            if self._rocksdict_trigrams is None:
-                return
-            try:
-                del self._rocksdict_trigrams[gram.encode()]
-            except KeyError:
-                pass
-            except Exception:
-                logger.debug("Failed to delete trigram %s in rocksdict", gram, exc_info=True)
+        if self._rocksdict_trigrams is None:
             return
-
-        if self._trigram_backend == "rocksdb":
-            if self._rocksdb_trigrams is None:
-                return
-            try:
-                self._rocksdb_trigrams.delete(gram.encode())
-            except Exception:
-                logger.debug("Failed to delete trigram %s in RocksDB", gram, exc_info=True)
-            return
-
-        # Should not reach here - backend should be rocksdict or rocksdb
+        try:
+            del self._rocksdict_trigrams[gram.encode()]
+        except KeyError:
+            pass
+        except Exception:
+            logger.debug("Failed to delete trigram %s in rocksdict", gram, exc_info=True)
+        return
 
     def _trigram_iter_items(self):
-        if self._trigram_backend == "rocksdict":
-            if self._rocksdict_trigrams is None:
-                return []
-            try:
-                for key, value in self._rocksdict_trigrams.items():
-                    if isinstance(key, (bytes, bytearray)):
-                        k = key.decode()
-                    else:
-                        k = str(key)
-                    yield k, self._deserialize_doc_ids(value)
-            except Exception:
-                logger.debug("Failed to iterate rocksdict trigrams", exc_info=True)
-            return
-
-        if self._trigram_backend == "rocksdb":
-            if self._rocksdb_trigrams is None:
-                return []
-            it = self._rocksdb_trigrams.iteritems()
-            it.seek_to_first()
-            for key, value in it:
+        if self._rocksdict_trigrams is None:
+            return []
+        try:
+            for key, value in self._rocksdict_trigrams.items():
                 if isinstance(key, (bytes, bytearray)):
                     k = key.decode()
                 else:
                     k = str(key)
                 yield k, self._deserialize_doc_ids(value)
-            return
-
-        # Should not reach here - backend should be rocksdict or rocksdb
+        except Exception:
+            logger.debug("Failed to iterate rocksdict trigrams", exc_info=True)
         return []
 
     def _trigram_count(self) -> int:
-        if self._trigram_backend == "rocksdict":
-            if self._rocksdict_trigrams is None:
-                return 0
-            try:
-                count = len(self._rocksdict_trigrams)
-                if count:
-                    return count
-            except Exception:
-                logger.debug("Failed to read rocksdict key count", exc_info=True)
-            # Fallback: iterate to count if len() unsupported or returns 0
-            try:
-                return sum(1 for _ in self._trigram_iter_items())
-            except Exception:
-                logger.debug("Failed to iterate rocksdict for count", exc_info=True)
-                return 0
-
-        if self._trigram_backend == "rocksdb":
-            if self._rocksdb_trigrams is None:
-                return 0
-            try:
-                prop = self._rocksdb_trigrams.get_property(b"rocksdb.estimate-num-keys")
-                if prop is not None:
-                    return int(prop)
-            except Exception:
-                logger.debug("Failed to read rocksdb key count", exc_info=True)
-            # Fallback to iteration
+        if self._rocksdict_trigrams is None:
+            return 0
+        try:
+            count = len(self._rocksdict_trigrams)
+            if count:
+                return count
+        except Exception:
+            logger.debug("Failed to read rocksdict key count", exc_info=True)
+        # Fallback: iterate to count if len() unsupported or returns 0
+        try:
             return sum(1 for _ in self._trigram_iter_items())
-
-        # Should not reach here - backend should be rocksdict or rocksdb
-        return 0
+        except Exception:
+            logger.debug("Failed to iterate rocksdict for count", exc_info=True)
+            return 0
     
     def _extract_trigrams(self, text: str) -> Set[str]:
         """Extract all trigrams from text."""
@@ -2473,14 +2529,19 @@ class SigilIndex:
             doc_ids = self._trigram_get_doc_ids(gram)
             if doc_ids:
                 logger.debug("search_code: trigram %s -> doc_ids=%s", gram, sorted(doc_ids))
-                doc_id_sets.append(doc_ids)
+                doc_id_sets.append((gram, doc_ids))
             else:
                 logger.debug("search_code: trigram %s not found", gram)
                 # Trigram not found, no results
                 return []
 
-        # Intersection of all doc_id sets
-        candidate_doc_ids = set.intersection(*doc_id_sets)
+        # Intersect smallest postings first for efficiency; tie-break on gram for determinism
+        doc_id_sets.sort(key=lambda item: (len(item[1]), item[0]))
+        candidate_doc_ids = set(doc_id_sets[0][1])
+        for _, posting in doc_id_sets[1:]:
+            candidate_doc_ids.intersection_update(posting)
+            if not candidate_doc_ids:
+                return []
 
         # Filter by repo if specified
         if repo:
@@ -2966,6 +3027,8 @@ class SigilIndex:
                 return
 
         records = []
+        first_chunk_text = chunks[0][3] if chunks else None
+        classify = self._classify_path(rel_path, sample_text=first_chunk_text)
         for (chunk_idx, start_line, end_line, chunk_text), vector in zip(chunks, embeddings):
             records.append({
                 "vector": np.asarray(vector, dtype="float32"),
@@ -2976,6 +3039,12 @@ class SigilIndex:
                 "start_line": int(start_line),
                 "end_line": int(end_line),
                 "content": chunk_text,
+                "is_code": bool(classify["is_code"]),
+                "is_doc": bool(classify["is_doc"]),
+                "is_config": bool(classify["is_config"]),
+                "is_data": bool(classify["is_data"]),
+                "extension": classify["extension"],
+                "language": classify["language"],
                 "last_updated": timestamp,
             })
 
@@ -3189,6 +3258,9 @@ class SigilIndex:
         k: int = 20,
         embed_fn: Optional[EmbeddingFn] = None,
         model: Optional[str] = None,
+        code_only: bool = False,
+        prefer_code: bool = False,
+        candidate_limit: Optional[int] = None,
     ) -> List[dict[str, object]]:
         """
         Semantic code search using vector embeddings.
@@ -3199,6 +3271,9 @@ class SigilIndex:
             k: Number of top results to return
             embed_fn: Embedding function (uses instance default if None)
             model: Model identifier (uses instance default if None)
+            code_only: If True, hard filter to code chunks (is_code == True)
+            prefer_code: If True, rerank to favor code but still allow docs/config
+            candidate_limit: Optional override for the number of vector hits to fetch before reranking
         
         Returns:
             List of search results with scores, sorted by relevance
@@ -3222,15 +3297,20 @@ class SigilIndex:
 
         model = model or self.embed_model
 
+        # Fetch a broader candidate pool for reranking
+        rerank_pool = candidate_limit or max(k * 5, 50)
+        rerank_pool = min(max(rerank_pool, k), 200)
+        if code_only:
+            rerank_pool = max(rerank_pool, k * 5)
+        elif prefer_code:
+            rerank_pool = max(rerank_pool, k * 4)
+
         # 1) embed query outside DB locks
         q_vec = self._call_embed([query])[0].astype("float32")
         q_norm = np.linalg.norm(q_vec) or 1.0
         q_vec = q_vec / q_norm
 
-        repo_lookup: dict[str, str] = {}
-        results: list[dict] = []
-
-        def _rows_to_results(rows: list[dict], repo_name: Optional[str]) -> list[dict]:
+        def _rows_to_candidates(rows: list[dict], repo_name: Optional[str]) -> list[dict]:
             out: list[dict] = []
             for r in rows:
                 try:
@@ -3244,19 +3324,80 @@ class SigilIndex:
                     repo_n = repo_name
                 if repo_n is None:
                     continue
-                distance = float(r.get("_distance", 0.0))
-                score = 1.0 / (1.0 + distance)
-                out.append({
+                distance = r.get("_distance")
+                if distance is None:
+                    try:
+                        vec = np.asarray(r.get("vector"), dtype="float32")
+                        if vec.shape == q_vec.shape:
+                            distance = float(1.0 - float(np.dot(vec, q_vec)))
+                        else:
+                            distance = 1.0
+                    except Exception:
+                        distance = 1.0
+
+                candidate = {
                     "repo": repo_n,
                     "path": r.get("file_path", ""),
                     "chunk_index": int(r.get("chunk_index", -1)),
                     "start_line": int(r.get("start_line", 0)),
                     "end_line": int(r.get("end_line", 0)),
                     "content": r.get("content", ""),
-                    "score": score,
+                    "_distance": float(distance),
+                    "is_code": bool(r.get("is_code", True)),
+                    "is_doc": bool(r.get("is_doc", False)),
+                    "is_config": bool(r.get("is_config", False)),
+                    "is_data": bool(r.get("is_data", False)),
+                    "extension": r.get("extension"),
+                    "language": r.get("language"),
                     "doc_id": f"{repo_n}::{r.get('file_path', '')}",
-                })
+                }
+                out.append(candidate)
             return out
+
+        def _rerank(candidates: list[dict]) -> list[dict]:
+            reranked: list[dict] = []
+            for c in candidates:
+                is_code = bool(c.get("is_code", True))
+                is_doc = bool(c.get("is_doc", False))
+                is_config = bool(c.get("is_config", False))
+                is_data = bool(c.get("is_data", False))
+                if code_only and not is_code:
+                    continue
+                base_distance = max(float(c.get("_distance", 1.0)), 1e-6)
+                score = 1.0 / (1.0 + base_distance)
+
+                penalty = 1.0
+                if prefer_code:
+                    if is_code:
+                        penalty *= 1.2
+                    elif is_doc:
+                        penalty *= 0.8
+                    elif is_config:
+                        penalty *= 0.85
+                    elif is_data:
+                        penalty *= 0.9
+                else:
+                    if is_doc:
+                        penalty *= 0.85
+                    elif is_config:
+                        penalty *= 0.9
+                    elif is_data:
+                        penalty *= 0.9
+                    elif is_code:
+                        penalty *= 1.05
+
+                final_score = score * penalty
+                # Prevent runaway >1.0 scores from boosting multipliers
+                final_score = min(final_score, 1.0)
+
+                result = dict(c)
+                result["score"] = final_score
+                # Expose whether language is authoritative (only for code)
+                result["language_authoritative"] = bool(is_code)
+                reranked.append(result)
+
+            reranked.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+            return reranked[:k]
 
         # If a repo was specified, search only its per-repo table
         if repo:
@@ -3271,11 +3412,11 @@ class SigilIndex:
             if repo_table is None:
                 return []
             try:
-                query_results = cast(Any, repo_table).search(q_vec.astype("float32")).limit(k).to_list()
+                query_results = cast(Any, repo_table).search(q_vec.astype("float32")).limit(rerank_pool).to_list()
             except Exception:
                 logger.exception("Semantic search failed for repo %s", repo)
                 return []
-            return _rows_to_results(query_results, repo)
+            return _rerank(_rows_to_candidates(query_results, repo))
 
         # No repo specified: aggregate from all per-repo tables if present
         aggregated: list[dict] = []
@@ -3289,14 +3430,13 @@ class SigilIndex:
                     repo_db, repo_table = self._get_repo_lance_and_vectors(rname)
                     if repo_table is None:
                         continue
-                    rows = cast(Any, repo_table).search(q_vec.astype("float32")).limit(k).to_list()
-                    for res in _rows_to_results(rows, rname):
+                    rows = cast(Any, repo_table).search(q_vec.astype("float32")).limit(rerank_pool).to_list()
+                    for res in _rows_to_candidates(rows, rname):
                         aggregated.append(res)
                 except Exception:
                     logger.debug("Failed semantic search for repo %s", rname, exc_info=True)
             # Sort aggregated results by score and return top-k
-            aggregated.sort(key=lambda x: x.get("score", 0.0), reverse=True)
-            return aggregated[:k]
+            return _rerank(aggregated)
         except Exception:
             logger.exception("Semantic search aggregation failed")
             return []
@@ -3459,18 +3599,14 @@ class SigilIndex:
 
     def close(self) -> None:
         """Close all database connections."""
-        # Close RocksDB trigram databases
+        # Close rocksdict trigram database
         if hasattr(self, "_rocksdict_trigrams") and self._rocksdict_trigrams is not None:
             try:
                 self._rocksdict_trigrams.close()
             except Exception:
                 logger.debug("Error closing rocksdict trigrams", exc_info=True)
         
-        if hasattr(self, "_rocksdb_trigrams") and self._rocksdb_trigrams is not None:
-            try:
-                self._rocksdb_trigrams.close()
-            except Exception:
-                logger.debug("Error closing rocksdb trigrams", exc_info=True)
+        # rocksdict is the only trigram backend; nothing else to close
         
         # Close SQLite repos database
         if hasattr(self, "repos_db") and self.repos_db is not None:

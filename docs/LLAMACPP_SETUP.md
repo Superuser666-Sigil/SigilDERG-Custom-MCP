@@ -93,6 +93,8 @@ Edit your `config.json`:
     "model": "~/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
     "dimension": 4096,
     "context_size": 2048,
+    "llamacpp_context_size": 8192,
+    "n_ctx": 8192,
     "n_gpu_layers": 0,
     "use_mlock": false
   }
@@ -111,9 +113,9 @@ Edit your `config.json`:
 - 4096 for Llama 3.1 8B
 - Must match your model's hidden size
 
-**`context_size`** (default: 2048)
-- Maximum context window in tokens
-- Llama 3.1 supports up to 128K, but 2048 is sufficient for code files
+**`context_size` / `llamacpp_context_size` / `n_ctx`** (default: 2048)
+- Maximum context window in tokens (all map to the provider's `context_size`)
+- Llama 3.1 supports up to 128K; pick what your hardware can handle
 - Larger = more memory usage
 
 **`n_gpu_layers`** (default: 0)

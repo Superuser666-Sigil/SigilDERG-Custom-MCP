@@ -16,6 +16,8 @@ class DummyCfg:
         self.admin_ui_command = "npm"
         self.admin_ui_args = ["run", "dev"]
         self.admin_ui_port = 5173
+        self.admin_host = "127.0.0.1"
+        self.admin_port = 9000
         self.server_host = "127.0.0.1"
         self.server_port = 8000
 
@@ -115,3 +117,29 @@ def test_admin_ui_path_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: called.__setitem__("popen", True))
     admin_ui.start_admin_ui()
     assert called["popen"] is False
+
+
+def test_admin_ui_env_points_to_admin_backend(monkeypatch, tmp_path):
+    ui_dir = tmp_path / "ui"
+    ui_dir.mkdir()
+    cfg = DummyCfg(path=str(ui_dir))
+    cfg.admin_host = "admin.local"
+    cfg.admin_port = 1234
+    captured = {}
+
+    def fake_popen(cmd, cwd=None, env=None, stdout=None, stderr=None):
+        captured["env"] = env
+        class P:
+            def __init__(self):
+                self.pid = 1
+            def terminate(self): pass
+            def wait(self, timeout=5): pass
+        return P()
+
+    monkeypatch.setattr(admin_ui, "get_config", lambda: cfg)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    admin_ui.start_admin_ui()
+    env = captured["env"]
+    assert env["VITE_API_BASE_URL"] == "http://admin.local:1234"
+    assert env["PORT"] == str(cfg.admin_ui_port)
+    admin_ui.stop_admin_ui()

@@ -76,16 +76,16 @@ def test_remove_file_clears_lancedb_rows(lancedb_indexed_repo):
     assert not after_rows
 
 
-def test_embeddings_disabled_paths_raise_errors(temp_dir, test_repo_path):
-    original_config = sigil_config._config
+def test_embeddings_disabled_paths_raise_errors(temp_dir, test_repo_path, monkeypatch):
     cfg = sigil_config.Config()
     cfg.config_data.setdefault("embeddings", {})["enabled"] = False
     cfg.config_data.setdefault("index", {})["path"] = str(temp_dir / ".disabled_vectors")
-    sigil_config._config = cfg
+    monkeypatch.setattr(sigil_config, "_config", cfg)
 
     (temp_dir / ".disabled_vectors").mkdir(parents=True, exist_ok=True)
 
     index = SigilIndex(index_path=cfg.index_path)
+    index._embeddings_active = False  # ensure vector path remains disabled
     index.index_repository("test_repo", test_repo_path, force=True)
 
     try:
@@ -96,10 +96,7 @@ def test_embeddings_disabled_paths_raise_errors(temp_dir, test_repo_path):
         assert results == []
     finally:
         index.repos_db.close()
-        trigram_store = getattr(index, "_rocksdict_trigrams", None) or getattr(
-            index, "_rocksdb_trigrams", None
-        )
+        trigram_store = getattr(index, "_rocksdict_trigrams", None)
         closer = getattr(trigram_store, "close", None)
         if callable(closer):
             closer()
-        sigil_config._config = original_config

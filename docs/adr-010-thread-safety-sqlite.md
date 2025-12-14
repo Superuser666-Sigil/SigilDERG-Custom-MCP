@@ -6,12 +6,12 @@ Commercial licenses are available. Contact: davetmire85@gmail.com
 
 # ADR 010: Thread Safety for SQLite Indexer
 
-**Status:** Accepted  
+**Status:** Superseded by [ADR-017: rocksdict Trigram Store](adr-017-rocksdb-trigram-store.md); SQLite-backed trigram/indexer paths are no longer used in the current codebase.  
 **Date:** 2025-12-03
 
 ## Context
 
-The Sigil MCP server's indexing system uses SQLite databases to store repository metadata, document content, symbols, and vector embeddings. The trigram index now uses RocksDB exclusively. The server operates in a multi-threaded environment with concurrent access from multiple sources:
+The Sigil MCP server's indexing system uses SQLite databases to store repository metadata and symbols. The trigram index now uses rocksdict exclusively (see ADR-017). The server operates in a multi-threaded environment with concurrent access from multiple sources:
 
 1. **HTTP Request Handlers**: Multiple concurrent MCP tool invocations (search_code, find_symbol, semantic_search)
 2. **File Watcher Thread**: Automatic file change detection triggering incremental re-indexing
@@ -32,7 +32,7 @@ The problem became apparent when:
 
 ## Decision
 
-Implement comprehensive thread safety using **Write-Ahead Logging (WAL) mode** and **threading.RLock** serialization:
+Implement comprehensive thread safety for the remaining SQLite metadata database using **Write-Ahead Logging (WAL) mode** and **threading.RLock** serialization. (Trigram postings have moved to rocksdict; this ADR is retained for historical context on the SQLite metadata DB.)
 
 ### 1. WAL Mode for Concurrent Readers
 

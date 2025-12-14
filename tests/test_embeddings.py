@@ -204,7 +204,8 @@ class TestEmbeddingConfiguration:
         kwargs = config.embeddings_kwargs
         assert "n_gpu_layers" in kwargs
         assert kwargs["n_gpu_layers"] == 35
-        assert "n_ctx" in kwargs
+        assert kwargs["context_size"] == 2048
+        assert "n_ctx" not in kwargs
         assert kwargs["use_mlock"] is True
         assert kwargs["custom_param"] == "value"
         
@@ -212,6 +213,27 @@ class TestEmbeddingConfiguration:
         assert "enabled" not in kwargs
         assert "provider" not in kwargs
         assert "model" not in kwargs
+
+    def test_llamacpp_context_aliases(self, temp_dir):
+        """Context size should map from llamacpp_context_size and n_ctx aliases."""
+        import json
+        cfg_path = temp_dir / "config.json"
+        cfg_data = {
+            "embeddings": {
+                "enabled": True,
+                "provider": "llamacpp",
+                "model": "/path/to/model.gguf",
+                "llamacpp_context_size": 4096,
+                "n_ctx": 1234,
+            }
+        }
+        cfg_path.write_text(json.dumps(cfg_data))
+        from sigil_mcp.config import Config
+        cfg = Config(cfg_path)
+        kwargs = cfg.embeddings_kwargs
+        # llamacpp_context_size wins, n_ctx becomes a fallback
+        assert kwargs["context_size"] == 4096
+        assert "n_ctx" not in kwargs
 
 
 class TestServerEmbeddingIntegration:

@@ -94,7 +94,7 @@ pip install sigil-mcp-server[watch]
 # For vector embeddings
 pip install sigil-mcp-server[embeddings]
 
-# For RocksDB trigram store (default backend; pulls rocksdict wheels; system RocksDB libs recommended)
+# For rocksdict trigram store (only backend; pulls rocksdict wheels; system RocksDB libs recommended)
 pip install sigil-mcp-server[trigrams-rocksdb]
 
 # For development
@@ -685,7 +685,7 @@ Contents:
 - `repos.db` - Repository and document metadata, symbols
 - `repos.db-wal` - Write-Ahead Log for concurrent access (v0.3.3+)
 - `repos.db-shm` - Shared memory file for WAL mode (v0.3.3+)
-- `trigrams.rocksdb/` - RocksDB trigram index
+- `trigrams.rocksdb/` - rocksdict trigram index (only supported backend)
 - `blobs/` - Compressed file contents
 - `lancedb/` - LanceDB vector store (one `code_vectors` table per repo)
 - `vectors/` - Legacy vector embeddings (pre-LanceDB, if still present)
@@ -740,8 +740,7 @@ Use this when:
 - You suspect index corruption and want a clean slate
 - You have changed low-level indexing behavior and want all data regenerated
 - You want to ensure no stale documents, trigrams, or vectors remain
-- You're migrating from SQLite-backed embeddings and want LanceDB-only storage (drop the old table after the rebuild with
-  `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`)
+- You're migrating from SQLite-backed embeddings and want LanceDB-only storage (drop the old table after the rebuild with `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`; only needed for legacy installs)
 
 ### Index Backup
 

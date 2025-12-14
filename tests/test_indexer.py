@@ -38,7 +38,7 @@ class TestSigilIndexInitialization:
         
         assert (test_index_path / "repos.db").exists()
         assert (test_index_path / "trigrams.rocksdb").exists()
-        assert index._trigram_backend in {"rocksdict", "rocksdb"}
+        assert index._trigram_backend == "rocksdict"
         
         index.close()
     
@@ -85,7 +85,7 @@ class TestSigilIndexInitialization:
     def test_trigram_store_available(self, test_index):
         """Test that the Rocks-backed trigram store is initialized."""
         backend = getattr(test_index, "_trigram_backend", None)
-        assert backend in {"rocksdict", "rocksdb"}
+        assert backend == "rocksdict"
         assert test_index._trigram_count() == 0
         assert list(test_index._trigram_iter_items()) == []
 
@@ -341,6 +341,98 @@ class TestSemanticSearch:
         # Should return empty list or handle gracefully
         assert isinstance(results, list)
         assert len(results) == 0
+
+    def test_semantic_search_code_only_filters_docs(self, temp_dir, dummy_embed_fn, monkeypatch):
+        """Ensure code_only hard-filters non-code chunks."""
+        import sigil_mcp.config as sigil_config
+
+        cfg = sigil_config.Config()
+        cfg.config_data["embeddings"] = {"enabled": True}
+        cfg.config_data["index"] = {"ignore_patterns": []}
+        monkeypatch.setattr(sigil_config, "_config", cfg)
+
+        repo_path = temp_dir / "mixed_repo"
+        repo_path.mkdir(parents=True, exist_ok=True)
+        (repo_path / "main.py").write_text("def hello():\n    return 1\n")
+        (repo_path / "README.md").write_text("# docs\n\nThis is documentation.")
+
+        index = SigilIndex(index_path=temp_dir / ".idx", embed_fn=dummy_embed_fn, embed_model="test-model")
+        try:
+            index.index_repository("mixed", repo_path, force=True)
+            index.build_vector_index(repo="mixed", force=True)
+
+            results = index.semantic_search("hello", repo="mixed", k=5, code_only=True)
+            assert results == [] or all(r["is_code"] for r in results)
+
+            mixed_results = index.semantic_search("docs", repo="mixed", k=5)
+            assert any(r.get("is_doc") for r in mixed_results)
+        finally:
+            index.close()
+
+    def test_semantic_search_prefer_code_reranks(self, temp_dir, dummy_embed_fn, monkeypatch):
+        """Rerank should favor code when prefer_code is set even if distances tie."""
+        import sigil_mcp.config as sigil_config
+
+        cfg = sigil_config.Config()
+        cfg.config_data["embeddings"] = {"enabled": True}
+        cfg.config_data["index"] = {"ignore_patterns": []}
+        monkeypatch.setattr(sigil_config, "_config", cfg)
+
+        index = SigilIndex(index_path=temp_dir / ".idx2", embed_fn=dummy_embed_fn, embed_model="test-model")
+        try:
+            repo_path = temp_dir / "pref_repo"
+            repo_path.mkdir(parents=True, exist_ok=True)
+            (repo_path / "code.py").write_text("def important():\n    return 42\n")
+            index.index_repository("pref", repo_path, force=True)
+
+            # Replace vector table with controlled candidates
+            from sigil_mcp.indexer import InMemoryLanceTable, InMemoryLanceDB
+
+            table = InMemoryLanceTable("code_vectors", index.embedding_dimension)
+            table.add([
+                {
+                    "doc_id": 1,
+                    "repo_id": 1,
+                    "file_path": "code.py",
+                    "chunk_index": 0,
+                    "start_line": 1,
+                    "end_line": 2,
+                    "content": "def important(): return 42",
+                    "_distance": 0.4,
+                    "is_code": True,
+                    "is_doc": False,
+                    "is_config": False,
+                    "is_data": False,
+                    "extension": ".py",
+                    "language": "python",
+                },
+                {
+                    "doc_id": 2,
+                    "repo_id": 1,
+                    "file_path": "README.md",
+                    "chunk_index": 0,
+                    "start_line": 1,
+                    "end_line": 3,
+                    "content": "docs about important function",
+                    "_distance": 0.2,
+                    "is_code": False,
+                    "is_doc": True,
+                    "is_config": False,
+                    "is_data": False,
+                    "extension": ".md",
+                    "language": "markdown",
+                },
+            ])
+
+            index._repo_vectors["pref"] = table
+            index._repo_lance_dbs["pref"] = InMemoryLanceDB(index.embedding_dimension)
+
+            results = index.semantic_search("important", repo="pref", k=2, prefer_code=True)
+            assert results
+            assert results[0]["is_code"] is True
+            assert any(r.get("is_doc") for r in results)
+        finally:
+            index.close()
 
 
 class TestIndexStatistics:

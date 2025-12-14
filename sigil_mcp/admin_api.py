@@ -175,10 +175,7 @@ async def admin_status(request: Request) -> Response:
         trig_backend = getattr(index, "_trigram_backend", None)
         trig_path = None
         try:
-            if trig_backend in {"rocksdict", "rocksdb"}:
-                trig_path = str(index.index_path / "trigrams.rocksdb")
-            else:
-                trig_path = str(index.index_path / "trigrams.db")
+            trig_path = str(index.index_path / "trigrams.rocksdb")
         except Exception:
             trig_path = None
         vec_backend = "lancedb" if getattr(index, "lance_db", None) else None

@@ -4,7 +4,7 @@ Licensed under the GNU Affero General Public License v3.0 (AGPLv3).
 Commercial licenses are available. Contact: davetmire85@gmail.com
 -->
 
-# Sigil MCP Server
+# Sigil MCP Server [![Version](https://img.shields.io/badge/version-1.0.0-blue)](CHANGELOG.md) [![Tests](https://img.shields.io/badge/tests-408%20passed%20(41s)-brightgreen)](tests) [![Coverage](https://img.shields.io/badge/coverage-76%25-yellowgreen)](coverage.xml) [![Changelog](https://img.shields.io/badge/changelog-CHANGELOG.md-blue)](CHANGELOG.md)
 
 A Model Context Protocol (MCP) server that provides IDE-like code navigation and search for local repositories. Gives AI assistants like ChatGPT powerful code exploration capabilities including symbol search, trigram indexing, and semantic navigation.
 
@@ -12,7 +12,7 @@ A Model Context Protocol (MCP) server that provides IDE-like code navigation and
 
 **Hybrid Code Search**
 - Fast text search using trigram indexing (inspired by GitHub's Blackbird)
-- Trigram store defaults to RocksDB via `rocksdict` (install with `pip install -e .[trigrams-rocksdb]`); falls back to SQLite when RocksDB is unavailable. Override with `SIGIL_MCP_TRIGRAM_BACKEND=sqlite|rocksdb|auto`.
+- Trigram store uses RocksDB via `rocksdict` (install with `pip install -e .[trigrams-rocksdict]`); SQLite fallback is removed.
 - Symbol-based search for functions, classes, methods, and variables
 - Semantic code search with vector embeddings backed by LanceDB (ANN queries, per-repo vector stores)
 - File structure view showing code outlines

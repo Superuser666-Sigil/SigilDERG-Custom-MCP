@@ -11,6 +11,7 @@ Tests for indexer module - Part 2: Edge cases and advanced features.
 """
 
 import numpy as np
+import zlib
 from sigil_mcp.indexer import Symbol, SearchResult, SigilIndex
 
 
@@ -175,6 +176,29 @@ class TestEdgeCases:
             pass
         finally:
             index.close()
+
+
+class TestTrigramEncoding:
+    """Validate trigram postings encoding/decoding."""
+
+    def test_varint_doc_id_encoding_round_trip(self):
+        ids = {1, 2, 1000, 100000}
+        blob = SigilIndex._serialize_doc_ids(ids)
+        assert zlib.decompress(blob).startswith(b"\x02")
+        decoded = SigilIndex._deserialize_doc_ids(blob)
+        assert decoded == ids
+
+    def test_uint64_doc_id_encoding_round_trip(self):
+        ids = {1, 2, 1000, 2**40}
+        blob = SigilIndex._serialize_doc_ids(ids)
+        assert zlib.decompress(blob).startswith(b"\x03")
+        decoded = SigilIndex._deserialize_doc_ids(blob)
+        assert decoded == ids
+
+    def test_legacy_doc_id_decoding(self):
+        legacy_blob = zlib.compress(b"1,3,5")
+        decoded = SigilIndex._deserialize_doc_ids(legacy_blob)
+        assert decoded == {1, 3, 5}
 
 
 class TestConcurrency:

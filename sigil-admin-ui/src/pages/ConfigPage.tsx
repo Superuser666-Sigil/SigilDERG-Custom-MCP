@@ -3,7 +3,7 @@
 // Commercial licenses are available. Contact: davetmire85@gmail.com
 
 import { useEffect, useState } from 'react'
-import { getConfig, saveConfig, getStatus, type ConfigResponse, type ErrorResponse } from '@/utils/api'
+import { getConfig, saveConfig, getStatus, type ConfigResponse, type ErrorResponse, type AdminStatusResponse } from '@/utils/api'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { LoadingSpinner } from '@/components/LoadingSpinner'

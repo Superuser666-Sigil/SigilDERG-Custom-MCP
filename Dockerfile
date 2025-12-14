@@ -1,4 +1,6 @@
 FROM python:3.12-slim
+LABEL org.opencontainers.image.version="1.0.0"
+LABEL org.opencontainers.image.name="sigilderg-custom-mcp"
 
 # System dependencies for ctags, compilation, and the admin UI runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -35,6 +37,7 @@ VOLUME ["/data", "/models"]
 # Default paths inside container
 ENV SIGIL_INDEX_PATH=/data/index
 ENV SIGIL_MCP_MODELS=/models
+ENV SIGIL_MCP_VERSION=1.0.0
 
 # Listen on all interfaces by default in the container
 ENV SIGIL_MCP_HOST=0.0.0.0

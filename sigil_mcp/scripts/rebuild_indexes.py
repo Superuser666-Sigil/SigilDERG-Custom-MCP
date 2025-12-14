@@ -120,12 +120,21 @@ def _setup_index_for_rebuild(index: Optional[SigilIndex], wipe_index: bool) -> S
     return index
 
 
-def _rebuild_trigrams_for_all_repos(index: SigilIndex, repos: Dict[str, str]) -> Dict[str, dict]:
+def _resolve_repo_path(repo_value: Any) -> Path:
+    """Normalize a repo entry (str or dict with path) into a Path."""
+    if isinstance(repo_value, dict):
+        repo_path = repo_value.get("path")
+    else:
+        repo_path = repo_value
+    return Path(repo_path)
+
+
+def _rebuild_trigrams_for_all_repos(index: SigilIndex, repos: Dict[str, Any]) -> Dict[str, dict]:
     """Rebuild trigrams for all configured repositories."""
     logger.info("Rebuilding trigrams for all repositories...")
     trigram_stats: Dict[str, dict] = {}
-    for repo_name, repo_path_str in repos.items():
-        repo_path = Path(repo_path_str)
+    for repo_name, repo_value in repos.items():
+        repo_path = _resolve_repo_path(repo_value)
         if not repo_path.exists():
             logger.warning("Repository path does not exist: %s", repo_path)
             continue
@@ -169,7 +178,7 @@ def _setup_embedding_function(config) -> tuple:
 
 def _rebuild_embeddings_for_all_repos(
     index: SigilIndex,
-    repos: Dict[str, str],
+    repos: Dict[str, Any],
     embed_fn,
     model: str,
 ) -> Dict[str, dict]:
@@ -177,7 +186,11 @@ def _rebuild_embeddings_for_all_repos(
     logger.info("Rebuilding embeddings...")
     embedding_stats: Dict[str, dict] = {}
 
-    for repo_name in repos.keys():
+    for repo_name, repo_value in repos.items():
+        repo_path = _resolve_repo_path(repo_value)
+        if not repo_path.exists():
+            logger.warning("Repository path does not exist for embeddings: %s", repo_path)
+            continue
         stats = rebuild_embeddings_for_repo(index, repo_name, embed_fn, model)
         embedding_stats[repo_name] = stats
 

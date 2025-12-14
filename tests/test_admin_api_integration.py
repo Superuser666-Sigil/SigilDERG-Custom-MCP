@@ -79,7 +79,7 @@ def test_admin_status_reports_index(admin_app):
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["index"]["path"]
-    assert payload["index"]["trigram_backend"] in {"rocksdict", "rocksdb"}
+    assert payload["index"]["trigram_backend"] == "rocksdict"
     assert payload["repos"]["test_repo"] == str(server_state.REPOS["test_repo"])
 
 

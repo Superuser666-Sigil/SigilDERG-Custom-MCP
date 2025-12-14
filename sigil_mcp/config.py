@@ -38,6 +38,7 @@ class Config:
                 3. Falls back to environment variables
         """
         self.config_data: Dict[str, Any] = {}
+        self._config_path: Optional[Path] = None
         self._load_config(config_path)
         self._mode = self._resolve_mode()
         self._apply_mode_defaults()
@@ -152,6 +153,7 @@ class Config:
         if config_path:
             if config_path.exists():
                 self._load_from_file(config_path)
+                self._config_path = config_path
                 return
             else:
                 logger.info(
@@ -165,12 +167,14 @@ class Config:
         local_config = Path("config.json")
         if local_config.exists():
             self._load_from_file(local_config)
+            self._config_path = local_config
             return
         
         # Try user config directory
         user_config = Path.home() / ".sigil_mcp_server" / "config.json"
         if user_config.exists():
             self._load_from_file(user_config)
+            self._config_path = user_config
             return
         
         # Fall back to environment variables
@@ -211,6 +215,7 @@ class Config:
             with open(path, 'r') as f:
                 self.config_data = json.load(f)
             logger.info(f"Loaded configuration from {path}")
+            self._config_path = path
         except Exception as e:
             logger.error(f"Error loading config from {path}: {e}")
             self._load_from_env()
@@ -632,6 +637,10 @@ class Config:
             kwargs.setdefault("n_batch", kwargs.pop("llamacpp_n_batch"))
         if "llamacpp_n_ubatch" in kwargs:
             kwargs.setdefault("n_ubatch", kwargs.pop("llamacpp_n_ubatch"))
+        if "llamacpp_context_size" in kwargs:
+            kwargs.setdefault("context_size", kwargs.pop("llamacpp_context_size"))
+        if "n_ctx" in kwargs:
+            kwargs.setdefault("context_size", kwargs.pop("n_ctx"))
         # Strip any remaining None values before passing through
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
         # Provide a sane default for llama.cpp GPU offload if not explicitly set
@@ -923,9 +932,8 @@ def save_config(cfg: Config, target_path: Optional[Path] = None) -> Path:
     if target_path:
         out_path = target_path
     else:
-        # Persist to project config.json in current working directory
-        out_path = Path.cwd() / "config.json"
-        # Ensure parent exists (cwd exists by definition)
+        # Prefer the original config path the Config was loaded from, otherwise cwd/config.json
+        out_path = getattr(cfg, "_config_path", None) or (Path.cwd() / "config.json")
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _deep_merge(existing: dict, new: dict) -> dict:

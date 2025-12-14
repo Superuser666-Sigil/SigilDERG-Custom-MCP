@@ -112,31 +112,35 @@ class Logger:
 
 @pytest.fixture
 def dummy_embed_fn():
-    """Create a dummy embedding function for testing."""
+    """Create a deterministic embedding function for testing."""
+    import hashlib
+    from numpy.random import default_rng
+
     def embed_fn(texts):
-        """Generate deterministic embeddings for testing."""
         dim = 768
-        embeddings = np.random.randn(len(texts), dim).astype('float32')
-        # Make deterministic based on text content
+        embeddings = np.empty((len(texts), dim), dtype="float32")
+
         for i, text in enumerate(texts):
-            seed = hash(text) % (2**32)
-            np.random.seed(seed)
-            embeddings[i] = np.random.randn(dim).astype('float32')
-        # Normalize
+            digest = hashlib.sha256(text.encode("utf-8")).digest()
+            # Use int from digest to seed a local RNG; avoid global np.random state
+            seed_int = int.from_bytes(digest[:8], "big", signed=False)
+            rng = default_rng(seed_int)
+            embeddings[i] = rng.standard_normal(dim).astype("float32")
+
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
         embeddings = embeddings / (norms + 1e-8)
         return embeddings
+
     return embed_fn
 
 
 @pytest.fixture
-def test_index(test_index_path, dummy_embed_fn):
+def test_index(test_index_path, dummy_embed_fn, monkeypatch):
     """Create a SigilIndex instance for testing."""
-    original_config = sigil_config._config
     cfg = sigil_config.Config()
     cfg.config_data["embeddings"] = {"enabled": True}
     cfg.config_data["index"] = {"ignore_patterns": []}
-    sigil_config._config = cfg
+    monkeypatch.setattr(sigil_config, "_config", cfg)
 
     index = SigilIndex(
         index_path=test_index_path,
@@ -146,7 +150,6 @@ def test_index(test_index_path, dummy_embed_fn):
     yield index
     # Cleanup
     index.close()
-    sigil_config._config = original_config
 
 
 @pytest.fixture
@@ -162,14 +165,13 @@ def indexed_repo(test_index, test_repo_path):
 
 
 @pytest.fixture
-def embeddings_enabled_index(temp_dir, test_repo_path, dummy_embed_fn):
+def embeddings_enabled_index(temp_dir, test_repo_path, dummy_embed_fn, monkeypatch):
     """Create an index with embeddings enabled for LanceDB-covered tests."""
 
     # Temporarily enable embeddings in global config for this test run
-    original_config = sigil_config._config
     cfg = sigil_config.Config()
     cfg.config_data.setdefault("embeddings", {})["enabled"] = True
-    sigil_config._config = cfg
+    monkeypatch.setattr(sigil_config, "_config", cfg)
 
     index_path = temp_dir / ".test_index_vectors"
     index_path.mkdir(parents=True, exist_ok=True)
@@ -188,7 +190,6 @@ def embeddings_enabled_index(temp_dir, test_repo_path, dummy_embed_fn):
         }
     finally:
         index.close()
-        sigil_config._config = original_config
 
 
 @pytest.fixture

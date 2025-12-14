@@ -29,7 +29,7 @@ Adopt **LanceDB** as the primary vector store for semantic search embeddings. Th
 2. Store vectors in a `code_vectors` table with columns for repo name, file path, chunk metadata, model, dimension, and the embedding vector.
 3. Build a product-quantization (PQ) index on the vector column to enable fast ANN queries with configurable recall/latency trade-offs.
 4. Upsert chunks by `doc_id`, `chunk_index`, and `model` so re-indexing replaces stale embeddings without full rebuilds.
-5. Keep SQLite (`repos.db`) for documents and symbols; trigram text search uses RocksDB; only the vector store moves to LanceDB.
+5. Keep SQLite (`repos.db`) for documents and symbols; trigram text search uses rocksdict (RocksDB bindings); only the vector store moves to LanceDB.
 6. Provide migration utilities to copy existing SQLite-resident embeddings into LanceDB while preserving chunk boundaries and metadata.
 
 ## Consequences

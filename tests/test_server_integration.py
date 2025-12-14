@@ -150,9 +150,10 @@ def test_external_mcp_status_and_refresh_error(monkeypatch):
 def test_mcp_bearer_auth_middleware_branches(monkeypatch):
     app = Starlette()
 
-    @app.route("/")
     async def home(request):
         return PlainTextResponse("ok")
+
+    app.add_route("/", home, methods=["GET"])
 
     app.add_middleware(
         server.MCPBearerAuthMiddleware,
@@ -167,9 +168,10 @@ def test_mcp_bearer_auth_middleware_branches(monkeypatch):
     # Local bypass branch
     app2 = Starlette()
 
-    @app2.route("/")
     async def home2(request):
         return PlainTextResponse("ok")
+
+    app2.add_route("/", home2, methods=["GET"])
 
     monkeypatch.setattr(server, "is_local_connection", lambda ip=None: True)
     app2.add_middleware(

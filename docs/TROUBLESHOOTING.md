@@ -227,12 +227,13 @@ find /path/to/repository -type f ! -readable
 **Diagnosis:**
 ```bash
 ls -la ~/.sigil_index/lancedb
+# (Legacy installs only) check for old SQLite embeddings table
 sqlite3 ~/.sigil_index/repos.db "SELECT name FROM sqlite_master WHERE type='table' AND name='embeddings';"
 ```
 
 **Solution:**
 1. Rebuild embeddings into LanceDB: `python scripts/rebuild_indexes.py` (or `POST /admin/vector/rebuild` per repo).
-2. Drop the legacy SQLite table to avoid confusion: `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`.
+2. If the legacy SQLite `embeddings` table exists, drop it to avoid confusion (legacy only): `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`.
 3. Confirm per-repo subdirectories exist under `~/.sigil_index/lancedb/`.
 
 ### Slow Indexing
@@ -396,7 +397,7 @@ wc -l config.json | jq '.repositories | length'
 # Search specific repository
 "Search for 'async' in project_name"
 
-# Rebuild trigram index
+# Rebuild trigram index (rocksdict is the only supported backend)
 rm -rf ~/.sigil_index/trigrams.rocksdb
 # From ChatGPT: "Re-index all repositories"
 

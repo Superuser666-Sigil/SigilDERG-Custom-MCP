@@ -24,7 +24,7 @@ While trigram search (substring matching) and symbol search (definitions) are gr
 
 Embeddings are stored in a LanceDB-backed `code_vectors` table under each repository's index directory (see [ADR-013](adr-013-lancedb-vector-store.md) for the rationale). The table tracks repository name, file path, chunk metadata, embedding model, dimension, and the vector itself. A product-quantization index on the vector column accelerates approximate-nearest-neighbor queries while keeping the on-disk footprint manageable. The files live inside your index path at `index_dir/lancedb/<repo_name>/code_vectors`.
 
-Legacy repositories created before the LanceDB migration may still have embeddings in the `repos.db` SQLite table shown below. Run the migration tooling to move these rows into LanceDB if you need ANN-backed queries, then drop the legacy table to avoid double-counting and free disk space: `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`.
+Legacy repositories created before the LanceDB migration may still have embeddings in the `repos.db` SQLite table shown below. Run the migration tooling to move these rows into LanceDB if you need ANN-backed queries, then drop the legacy table (legacy installs only) to avoid double-counting and free disk space: `sqlite3 ~/.sigil_index/repos.db "DROP TABLE IF EXISTS embeddings;"`.
 
 ```sql
 CREATE TABLE embeddings (
@@ -231,6 +231,14 @@ def embed_fn(texts):
 **UniXcoder** (Microsoft):
 - Unified cross-modal pre-training
 - Works with code, AST, and natural language
+
+## Metadata and Ranking
+
+- Each embedding row includes metadata: `is_code`, `is_doc`, `is_config`, `is_data`, `extension`, `language`.
+- Language is treated as authoritative for ranking only when `is_code` is `true`; for non-code files it is metadata for filtering.
+- Semantic search pulls a candidate pool (top 50–200 by vector similarity) and reranks with metadata-aware boosts:
+  - `code_only=true`: hard filter to code chunks.
+  - `prefer_code=true`: boost code while still allowing docs/config when they are the best hits.
 
 ## Example: Complete Workflow
 
