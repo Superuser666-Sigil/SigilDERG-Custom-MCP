@@ -505,6 +505,57 @@ class Config:
     def external_mcp_auto_install(self) -> bool:
         return bool(self.get("external_mcp_auto_install", False))
 
+    def resolved(self) -> dict[str, Any]:
+        """Return a resolved config snapshot for diagnostics (admin use)."""
+        return {
+            "mode": self.mode,
+            "server": {
+                "name": self.server_name,
+                "host": self.server_host,
+                "port": self.server_port,
+                "log_level": self.log_level,
+                "log_file": self.log_file,
+                "allowed_hosts": self.allowed_hosts,
+                "chatgpt_compliance_enabled": self.chatgpt_compliance_enabled,
+                "header_logging_enabled": self.header_logging_enabled,
+            },
+            "authentication": {
+                "enabled": self.auth_enabled,
+                "oauth_enabled": self.oauth_enabled,
+                "allow_local_bypass": self.allow_local_bypass,
+                "allowed_ips": self.allowed_ips,
+            },
+            "embeddings": {
+                "enabled": self.embeddings_enabled,
+                "provider": self.embeddings_provider,
+                "model": self.embeddings_model,
+                "dimension": self.embeddings_dimension,
+            },
+            "index": {
+                "path": self.index_path,
+                "allow_vector_schema_overwrite": self.index_allow_vector_schema_overwrite,
+            },
+            "admin": {
+                "enabled": self.admin_enabled,
+                "host": self.admin_host,
+                "port": self.admin_port,
+                "require_api_key": self.admin_require_api_key,
+                "allowed_ips": self.admin_allowed_ips,
+            },
+            "mcp_server": {
+                "sse_path": self.mcp_sse_path,
+                "http_path": self.mcp_http_path,
+                "message_path": self.mcp_message_path,
+                "require_token": self.mcp_require_token,
+                "token_set": bool(self.mcp_server_token),
+            },
+            "external_mcp": {
+                "auto_install": self.external_mcp_auto_install,
+                "servers": self.external_mcp_servers,
+            },
+            "watch": {"enabled": self.watch_enabled, "debounce": self.watch_debounce_seconds},
+        }
+
     @property
     def external_mcp_servers(self) -> list[dict]:
         """External MCP servers configuration list."""

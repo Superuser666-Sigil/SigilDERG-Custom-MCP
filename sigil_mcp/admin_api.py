@@ -9,6 +9,7 @@ import logging
 import os
 import sqlite3
 from datetime import datetime
+from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Any
 
@@ -53,12 +54,27 @@ def _get_admin_cfg() -> dict[str, Any]:
     }
 
 
-def _is_allowed_ip(ip: str | None) -> bool:
+def _is_allowed_ip(ip: str | None, forwarded_for: str | None = None) -> bool:
     if not ip:
         return False
     cfg = _get_admin_cfg()
-    allowed = set(cfg["allowed_ips"] or ["127.0.0.1", "::1"])
-    return ip in allowed
+    allowed_raw = cfg["allowed_ips"] or ["127.0.0.1", "::1"]
+    # Honor first X-Forwarded-For hop only if a trusted proxy is present in allowlist
+    client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else ip
+    try:
+        client_addr = ip_address(client_ip)
+    except Exception:
+        return False
+
+    for entry in allowed_raw:
+        try:
+            net = ip_network(entry, strict=False)
+            if client_addr in net:
+                return True
+        except ValueError:
+            if client_ip == entry:
+                return True
+    return False
 
 
 async def require_admin(request: Request) -> JSONResponse | None:
@@ -70,6 +86,7 @@ async def require_admin(request: Request) -> JSONResponse | None:
     """
     client = request.client
     client_ip = client.host if client else None
+    forwarded_for = request.headers.get("x-forwarded-for")
     cfg = _get_admin_cfg()
 
     if not cfg["enabled"]:
@@ -85,8 +102,8 @@ async def require_admin(request: Request) -> JSONResponse | None:
             status_code=503,
         )
 
-    if not _is_allowed_ip(client_ip):
-        logger.warning("Admin access denied from IP %r", client_ip)
+    if not _is_allowed_ip(client_ip, forwarded_for=forwarded_for):
+        logger.warning("Admin access denied from IP %r (xff=%r)", client_ip, forwarded_for)
         return JSONResponse(
             {"error": "forbidden", "reason": "ip_not_allowed"},
             status_code=403,
@@ -1066,11 +1083,22 @@ async def admin_mcp_refresh(request: Request) -> Response:
     if (resp := await require_admin(request)) is not None:
         return resp
     try:
-        status = refresh_external_mcp_op()
+        status = await refresh_external_mcp_op()
         return JSONResponse(status)
     except Exception as exc:
         logger.exception("admin_mcp_refresh failed: %s", exc)
         return JSONResponse({"error": "refresh_failed", "detail": str(exc)}, status_code=500)
+
+
+async def admin_resolved_config(request: Request) -> Response:
+    """Return a resolved config snapshot (admin-only)."""
+    if (resp := await require_admin(request)) is not None:
+        return resp
+    try:
+        return JSONResponse(get_config().resolved())
+    except Exception as exc:
+        logger.exception("Failed to render resolved config: %s", exc)
+        return JSONResponse({"error": "config_inspect_failed", "detail": str(exc)}, status_code=500)
 
 
 async def root(request: Request) -> Response:
@@ -1108,6 +1136,7 @@ routes = [
     Route("/admin/logs/tail", admin_logs_tail, methods=["GET"]),
     Route("/admin/config", admin_config_view, methods=["GET"]),
     Route("/admin/config", admin_config_update, methods=["POST"]),
+    Route("/admin/config/resolved", admin_resolved_config, methods=["GET"]),
     Route("/admin/mcp/status", admin_mcp_status, methods=["GET"]),
     Route("/admin/mcp/refresh", admin_mcp_refresh, methods=["POST"]),
     Route("/admin/repo/{name}", admin_get_repo, methods=["GET"]),

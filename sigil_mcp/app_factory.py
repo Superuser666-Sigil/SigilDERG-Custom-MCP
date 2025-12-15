@@ -97,7 +97,9 @@ def build_mcp_app(
         config.header_logging_enabled if enable_header_logging is None else enable_header_logging
     )
 
-    transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=bool(config.mode != "dev" and config.allowed_hosts != ["*"])
+    )
 
     mcp = FastMCP(
         name=config.server_name,

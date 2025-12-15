@@ -286,7 +286,14 @@ class MCPClientManager:
                     _server: str = server_name, _tool: str = tool.name, **kwargs: Any
                 ) -> dict[str, Any]:
                     result = await self.call_tool(_server, _tool, kwargs)
-                    return result.model_dump(exclude_none=True)
+                    try:
+                        if hasattr(result, "model_dump"):
+                            return result.model_dump(exclude_none=True)
+                        if isinstance(result, dict):
+                            return result
+                        return dict(result)  # type: ignore[arg-type]
+                    except Exception:
+                        return {"result": result}
 
                 decorated = decorator(_wrapper)
                 decorated  # noqa: B018 (intentional no-op to satisfy linter)
@@ -319,7 +326,14 @@ class MCPClientManager:
         self, server_name: str, tool_name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         result = await self.call_tool(server_name, tool_name, arguments)
-        return result.model_dump(exclude_none=True)
+        try:
+            if hasattr(result, "model_dump"):
+                return result.model_dump(exclude_none=True)
+            if isinstance(result, dict):
+                return result
+            return dict(result)  # type: ignore[arg-type]
+        except Exception:
+            return {"result": result}
 
     async def refresh(
         self, mcp_app, *, tool_decorator: Callable[..., Callable] | None = None

@@ -17,6 +17,7 @@ SENSITIVE_HEADERS = {
     "x-admin-key",
     "x-openai-session",
     "x-openai-session-token",
+    "set-cookie",
 }
 
 
@@ -30,6 +31,15 @@ def redact_headers(headers: dict[str, str]) -> dict[str, str]:
         else:
             redacted[key] = value
     return redacted
+
+
+def redact_querystring(path: str) -> str:
+    """Redact query parameters that may contain secrets."""
+    if "?" not in path:
+        return path
+    base, qs = path.split("?", 1)
+    # Drop all query params to avoid leaking tokens in logs
+    return f"{base}?<redacted>"
 
 
 class HeaderLoggingASGIMiddleware:
@@ -55,6 +65,12 @@ class HeaderLoggingASGIMiddleware:
             headers_dict[name] = value
 
         path = scope.get("path", "")
+        if scope.get("query_string"):
+            try:
+                qs = scope["query_string"].decode("latin-1")
+                path = redact_querystring(f"{path}?{qs}")
+            except Exception:
+                path = redact_querystring(path)
         method = scope.get("method", "UNKNOWN")
 
         client_ip = headers_dict.get("x-forwarded-for")

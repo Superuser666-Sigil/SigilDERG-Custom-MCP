@@ -291,7 +291,9 @@ def _initialize_external_mcp():
     servers = config.external_mcp_servers
     if not servers:
         return
-    if config.external_mcp_auto_install:
+    if config.mode == "prod" and config.external_mcp_auto_install:
+        logger.warning("Auto-install of external MCP servers is disabled in prod mode; skipping.")
+    elif config.external_mcp_auto_install:
         mcp_installer.auto_install(servers)
     try:
         manager = MCPClientManager(servers, logger=logger)
@@ -319,11 +321,11 @@ def external_mcp_status_op() -> dict[str, Any]:
     return status
 
 
-def refresh_external_mcp_op() -> dict[str, Any]:
+async def refresh_external_mcp_op() -> dict[str, Any]:
     mgr = get_global_manager()
     if mgr is None:
         raise RuntimeError("External MCP manager not initialized")
-    asyncio.run(mgr.refresh(mcp, tool_decorator=_safe_tool_decorator))
+    await mgr.refresh(mcp, tool_decorator=_safe_tool_decorator)
     return external_mcp_status_op()
 
 
@@ -366,6 +368,35 @@ class MCPBearerAuthMiddleware(BaseHTTPMiddleware):
             status_code=401,
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+class HostAllowlistMiddleware(BaseHTTPMiddleware):
+    """Basic Host header allowlist to mitigate DNS rebinding."""
+
+    def __init__(self, app, *, allowed_hosts: Sequence[str], enabled: bool):
+        super().__init__(app)
+        self.enabled = enabled
+        self.allowed_hosts = [h.lower() for h in allowed_hosts]
+
+    def _is_allowed(self, host: str) -> bool:
+        hostname = host.split(":", 1)[0].lower()
+        for allowed in self.allowed_hosts:
+            if allowed == "*":
+                return True
+            allowed = allowed.lower()
+            if allowed.startswith("*.") and hostname.endswith(allowed[1:]):
+                return True
+            if hostname == allowed:
+                return True
+        return False
+
+    async def dispatch(self, request: Request, call_next):
+        if not self.enabled:
+            return await call_next(request)
+        host = request.headers.get("host", "")
+        if not host or not self._is_allowed(host):
+            return JSONResponse({"error": "host_not_allowed"}, status_code=403)
+        return await call_next(request)
 
 
 def check_authentication(
@@ -2883,14 +2914,13 @@ def _setup_authentication():
         api_key = initialize_api_key()
 
         if api_key:
-            logger.info(" NEW API Key Generated")
+            masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "<hidden>"
+            logger.info(" NEW API Key Generated (masked)")
             logger.info("=" * 60)
-            logger.info(f"API Key: {api_key}")
+            logger.info(f"API Key: {masked}")
             logger.info("=" * 60)
             logger.info("")
-            logger.info("[WARNING]  This is the ONLY time you'll see this key!")
-            logger.info("   Set it in your environment:")
-            logger.info(f"   export SIGIL_MCP_API_KEY={api_key}")
+            logger.info("[WARNING] Store this securely (SIGIL_MCP_API_KEY); full value not logged.")
             logger.info("")
         else:
             logger.info("Using existing API key from ~/.sigil_mcp_server/api_key")
@@ -2929,16 +2959,15 @@ def _build_sse_app(*, sse_route_path: str, message_route_path: str):
     """Construct an SSE transport app for FastMCP with optional bearer gating."""
     middleware: list[Middleware] = []
     # Require token only when configured; allow local bypass if enabled globally
-    if config.mcp_require_token or config.mcp_server_token:
-        if config.mcp_require_token and not config.mcp_server_token:
-            logger.warning(
-                "MCP bearer auth required but no token configured; SSE requests will be rejected"
-            )
+    require_token = bool(config.mcp_require_token or config.mcp_server_token)
+    if require_token:
+        if not config.mcp_server_token:
+            logger.warning("MCP bearer auth required but no token configured; requests will be rejected")
         middleware.append(
             Middleware(
                 MCPBearerAuthMiddleware,
                 token=config.mcp_server_token,
-                require_token=config.mcp_require_token,
+                require_token=True,
                 allow_local_bypass=ALLOW_LOCAL_BYPASS,
             )
         )
@@ -3018,6 +3047,15 @@ def build_parent_app(include_admin: bool | None = None) -> Starlette:
             yield
 
     parent_app = Starlette(routes=parent_routes, lifespan=combined_lifespan)
+
+    # Host allowlist (DNS rebinding protection) for non-dev modes
+    host_protection_enabled = config.mode != "dev" and config.allowed_hosts != ["*"]
+    if host_protection_enabled:
+        parent_app.add_middleware(
+            HostAllowlistMiddleware,
+            allowed_hosts=config.allowed_hosts,
+            enabled=True,
+        )
 
     if include_admin:
         from starlette.middleware.cors import CORSMiddleware
