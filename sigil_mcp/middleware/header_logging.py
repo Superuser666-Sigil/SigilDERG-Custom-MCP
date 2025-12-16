@@ -17,7 +17,6 @@ SENSITIVE_HEADERS = {
     "x-admin-key",
     "x-openai-session",
     "x-openai-session-token",
-    "set-cookie",
 }
 
 
@@ -99,9 +98,14 @@ class HeaderLoggingASGIMiddleware:
         )
 
         status_code_holder = {"value": None}
-        response_body_parts = []
+        response_body_parts: list[bytes] = []
+        capture_body = True
+        max_capture_bytes = 4096
+        captured_bytes = 0
+        truncated = False
 
         async def send_wrapper(message):
+            nonlocal capture_body, captured_bytes, truncated
             if message["type"] == "http.response.start":
                 status_code_holder["value"] = message.get("status", None)
                 headers = list(message.get("headers", []))
@@ -110,9 +114,19 @@ class HeaderLoggingASGIMiddleware:
                 headers.append((b"connection", b"keep-alive"))
                 message["headers"] = headers
             elif message["type"] == "http.response.body":
-                body = message.get("body", b"")
-                if body:
-                    response_body_parts.append(body)
+                if capture_body:
+                    body = message.get("body", b"")
+                    if message.get("more_body"):
+                        capture_body = False
+                        truncated = True  # treat streaming bodies as truncated for logging
+                    if body and not truncated:
+                        remaining = max_capture_bytes - captured_bytes
+                        if remaining > 0:
+                            response_body_parts.append(body[:remaining])
+                            captured_bytes += min(len(body), remaining)
+                        if captured_bytes >= max_capture_bytes:
+                            truncated = True
+                            capture_body = False
             await send(message)
 
         try:
@@ -132,8 +146,11 @@ class HeaderLoggingASGIMiddleware:
 
         duration_ms = int((time.time() - start_time) * 1000)
         response_body = b"".join(response_body_parts).decode("utf-8", errors="replace")
-        if response_body and len(response_body) > 500:
-            response_body = response_body[:500] + "... [truncated]"
+        if response_body:
+            if len(response_body) > 500:
+                response_body = response_body[:500] + "... [truncated]"
+            elif truncated:
+                response_body = response_body + "... [truncated]"
 
         log_extra = {
             "request_id": request_id,

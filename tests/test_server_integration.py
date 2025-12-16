@@ -144,12 +144,13 @@ def test_build_vector_index_op_skip_branches(monkeypatch, tmp_path):
     assert missing["reason"] == "lancedb_missing"
 
 
-def test_external_mcp_status_and_refresh_error(monkeypatch):
+@pytest.mark.anyio
+async def test_external_mcp_status_and_refresh_error(monkeypatch):
     monkeypatch.setattr(server, "get_global_manager", lambda: None)
     status = server.external_mcp_status_op()
     assert status["enabled"] is False
     with pytest.raises(RuntimeError):
-        server.refresh_external_mcp_op()
+        await server.refresh_external_mcp_op()
 
 
 def test_mcp_bearer_auth_middleware_branches(monkeypatch):

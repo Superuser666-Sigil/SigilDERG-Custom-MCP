@@ -97,8 +97,12 @@ def build_mcp_app(
         config.header_logging_enabled if enable_header_logging is None else enable_header_logging
     )
 
+    # Support callers passing a lightweight namespace in tests by falling back
+    # to sensible defaults when attributes are missing.
+    mode = getattr(config, "mode", "prod")
+    allowed_hosts = getattr(config, "allowed_hosts", ["*"])
     transport_security = TransportSecuritySettings(
-        enable_dns_rebinding_protection=bool(config.mode != "dev" and config.allowed_hosts != ["*"])
+        enable_dns_rebinding_protection=bool(mode != "dev" and allowed_hosts != ["*"])
     )
 
     mcp = FastMCP(

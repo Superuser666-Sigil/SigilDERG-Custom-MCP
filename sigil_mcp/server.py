@@ -5,11 +5,20 @@
 import asyncio
 import logging
 import os
+import sys
 import threading
+import concurrent.futures
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from urllib.parse import urlencode
+
+# When invoked as `python -m sigil_mcp.server`, the module is loaded as __main__.
+# Alias it back to sigil_mcp.server so admin_api (and other imports) see the same module
+# instance and share the global index instead of creating a second one that fights for
+# the RocksDB lock.
+if __name__ == "__main__":
+    sys.modules.setdefault("sigil_mcp.server", sys.modules[__name__])
 
 import numpy as np
 from fastmcp.server.http import create_sse_app
@@ -55,6 +64,20 @@ from .watcher import WATCHDOG_AVAILABLE, FileWatchManager
 # Import Admin API app (conditional to avoid circular imports)
 _admin_app = None
 
+# Process pool used to offload CPU-heavy indexing tasks. Default to 1 worker
+# to limit resource use; tests may monkeypatch this to a ThreadPoolExecutor.
+try:
+    process_pool: concurrent.futures.Executor = concurrent.futures.ProcessPoolExecutor(
+        max_workers=1
+    )
+except Exception:
+    # Fallback in environments that disallow fork/exec (tests/CI) — allow tests to
+    # replace this with a ThreadPoolExecutor for determinism.
+    process_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+# Runtime toggle used in tests to prefer process pool or thread fallback
+USE_PROCESS_POOL = True
+
 
 def _get_admin_app():
     """Lazy import of Admin API app to avoid circular dependencies."""
@@ -64,6 +87,52 @@ def _get_admin_app():
 
         _admin_app = app
     return _admin_app
+
+
+def index_file_task(config_json: str | None, repo_name: str, repo_root: str, file_path: str) -> bool:
+    """Worker entrypoint executed in a separate process to perform a single-file index.
+
+    This function is intentionally self-contained so it can be pickled and executed
+    by a ProcessPoolExecutor. It constructs a fresh SigilIndex instance in the
+    worker process and calls `index_file` with the provided arguments.
+    """
+    try:
+        # Import inside function to keep the top-level module picklable and small.
+        from sigil_mcp.indexer import SigilIndex
+        from sigil_mcp.config import load_config
+        import json
+        from pathlib import Path
+        import tempfile
+
+        # Load provided config snapshot into a temp file so the Config loader
+        # can perform its validations and defaults. This keeps worker logic
+        # isolated from parent process state and avoids re-reading shared
+        # global singletons.
+        cfg = None
+        if config_json:
+            try:
+                data = json.loads(config_json)
+                tf = Path(tempfile.mkdtemp()) / "worker_config.json"
+                tf.write_text(json.dumps(data))
+                cfg = load_config(tf)
+            except Exception:
+                cfg = load_config(None)
+        else:
+            cfg = load_config(None)
+
+        # Construct a fresh index instance in the worker process using the
+        # serialized index path from cfg if present; otherwise fall back to cwd.
+        idx_path = Path(cfg.get("index_path") or cfg.get("index", {}).get("path") or Path.cwd())
+        index = SigilIndex(idx_path)
+        ok = index.index_file(repo_name, repo_root, file_path)
+        return bool(ok)
+    except Exception:
+        # Best-effort: log to stderr since logger may not be configured in worker.
+        import traceback
+
+        print("index_file_task failed:")
+        traceback.print_exc()
+        return False
 
 
 # --------------------------------------------------------------------
@@ -100,6 +169,7 @@ RUN_MODE = config.mode
 logger = logging.getLogger("sigil_repos_mcp")
 mcp = build_mcp_app(config)
 _MCP_CLIENT_MANAGER: MCPClientManager | None = None
+_MCP_CLIENT_TASK: asyncio.Task | None = None
 
 # Track readiness across subsystems
 READINESS: dict[str, bool] = {
@@ -285,8 +355,10 @@ def is_local_connection(client_ip: str | None = None) -> bool:
 
 def _initialize_external_mcp():
     """Initialize external MCP servers and register their tools."""
-    global _MCP_CLIENT_MANAGER
+    global _MCP_CLIENT_MANAGER, _MCP_CLIENT_TASK
     if _MCP_CLIENT_MANAGER is not None:
+        return
+    if _MCP_CLIENT_TASK is not None and not _MCP_CLIENT_TASK.done():
         return
     servers = config.external_mcp_servers
     if not servers:
@@ -301,15 +373,28 @@ def _initialize_external_mcp():
         logger.warning("External MCP configuration invalid: %s", exc)
         return
 
-    try:
-        asyncio.run(manager.register_with_fastmcp(mcp, tool_decorator=_safe_tool_decorator))
+    async def _register_and_set():
+        global _MCP_CLIENT_MANAGER, _MCP_CLIENT_TASK
+        try:
+            await manager.register_with_fastmcp(mcp, tool_decorator=_safe_tool_decorator)
+        except Exception as exc:  # pragma: no cover - defensive against runtime loop issues
+            logger.warning("Failed to initialize external MCP servers: %s", exc)
+            return
         _MCP_CLIENT_MANAGER = manager
         set_global_manager(manager)
         logger.info(
             "External MCP servers registered: %d tools", len(manager.list_registered_tools())
         )
-    except Exception as exc:
-        logger.warning("Failed to initialize external MCP servers: %s", exc)
+
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        _MCP_CLIENT_TASK = loop.create_task(_register_and_set())
+    else:
+        asyncio.run(_register_and_set())
 
 
 def external_mcp_status_op() -> dict[str, Any]:
@@ -1124,7 +1209,8 @@ def _on_file_change(repo_name: str, file_path: Path, event_type: str):
         except Exception:
             logger.debug("Failed to check/init embed_fn in _on_file_change", exc_info=True)
 
-        # Granular re-indexing for modified/created files — run in background to avoid blocking watcher
+        # Granular re-indexing for modified/created files — offload to process pool
+        # to avoid blocking the watcher or the event loop with CPU-heavy work.
         def _do_index():
             try:
                 success = index.index_file(repo_name, repo_path, file_path)
@@ -1135,8 +1221,52 @@ def _on_file_change(repo_name: str, file_path: Path, event_type: str):
             except Exception as e:
                 logger.error(f"Error during background re-index of {file_path}: {e}")
 
-        t = threading.Thread(target=_do_index, daemon=True)
-        t.start()
+        try:
+            if USE_PROCESS_POOL:
+                # Submit a lightweight, picklable task that will construct an index
+                # in the worker process and perform the file index. We pass simple
+                # strings for paths to avoid pickling complex Path objects.
+                # Capture a serializable snapshot of the current configuration and
+                # pass it to the worker so the worker does not need to call
+                # get_config() and re-read environment files.
+                try:
+                    import json
+
+                    cfg_snapshot = json.dumps(get_config().config_data)
+                except Exception:
+                    cfg_snapshot = "{}"
+
+                future = process_pool.submit(
+                    index_file_task, cfg_snapshot, repo_name, str(repo_path), str(file_path)
+                )
+
+                # Attach a done callback for logging in the parent process
+                def _on_done(fut: "concurrent.futures.Future"):
+                    try:
+                        ok = fut.result()
+                        if ok:
+                            logger.info(
+                                "Re-indexed %s after %s (worker)", file_path.name, event_type
+                            )
+                        else:
+                            logger.debug("Worker skipped re-indexing %s", file_path.name)
+                    except Exception as e:
+                        logger.error("Worker re-index failed for %s: %s", file_path, e)
+
+                try:
+                    future.add_done_callback(_on_done)
+                except Exception:
+                    # Some Executor implementations may not support add_done_callback
+                    pass
+            else:
+                # Fallback to thread-based offload for environments that cannot
+                # spawn processes (e.g., some test runners).
+                t = threading.Thread(target=_do_index, daemon=True)
+                t.start()
+        except Exception:
+            logger.exception("Failed to submit background re-index; falling back to thread")
+            t = threading.Thread(target=_do_index, daemon=True)
+            t.start()
     except Exception as e:
         logger.error(f"Error re-indexing after {event_type}: {e}")
 

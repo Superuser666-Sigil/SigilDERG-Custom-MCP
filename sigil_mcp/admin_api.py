@@ -64,7 +64,9 @@ def _is_allowed_ip(ip: str | None, forwarded_for: str | None = None) -> bool:
     try:
         client_addr = ip_address(client_ip)
     except Exception:
-        return False
+        # If it isn't a literal IP address, fall back to exact string matching against
+        # the allowlist (useful for test clients or hostnames).
+        return client_ip in allowed_raw
 
     for entry in allowed_raw:
         try:

@@ -1,0 +1,39 @@
+name: Offload Harness
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+
+jobs:
+  run-harness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install Python deps (including rocksdict)
+        run: |
+          python -m pip install --upgrade pip
+          # Prefer the rocksdict package (Python wrapper around RocksDB) over
+          # compiling/linking to system RocksDB in CI. Install it first so it's
+          # available for the test harness and any other packages.
+          pip install rocksdict
+          pip install -r requirements.txt
+
+      - name: Run offload harness
+        env:
+          # Keep embeddings disabled to avoid heavyweight providers in CI
+          SIGIL_MCP_EMBEDDINGS_ENABLED: 'false'
+          SIGIL_MCP_PRO_ACTIVE: '0'
+          SIGIL_MCP_MODE: 'ci'
+          # Disable file watching to avoid background flakes
+          SIGIL_MCP_WATCH_ENABLED: 'false'
+        run: |
+          python tests/harness/run_offload_harness.py
