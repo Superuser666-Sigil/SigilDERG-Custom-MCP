@@ -1,0 +1,213 @@
+name: Integration Tests (opt-in)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rocksdict:
+        description: 'Run rocksdict (trigram) integration tests'
+        required: false
+        default: 'false'
+      lancedb:
+        description: 'Run LanceDB (vector) integration tests'
+        required: false
+        default: 'false'
+
+jobs:
+  rocksdict-integration:
+    if: ${{ github.event.inputs.rocksdict == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      PYTHONHASHSEED: '0'
+      SIGIL_MCP_LANCEDB_STUB: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y universal-ctags
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Install Python deps and rocksdict
+        run: |
+          python -m pip install --upgrade pip
+          pip install rocksdict
+          pip install -r requirements.txt || true
+          pip install -e '.[dev]'
+      - name: Run trigram integration tests
+        run: |
+          pytest -q tests/test_storage_trigram.py tests/test_admin_api_integration.py
+
+  lancedb-integration:
+    if: ${{ github.event.inputs.lancedb == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      PYTHONHASHSEED: '0'
+      SIGIL_MCP_LANCEDB_STUB: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y universal-ctags
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Install Python deps and LanceDB
+        run: |
+          python -m pip install --upgrade pip
+          pip install lancedb pyarrow
+          pip install -r requirements.txt || true
+          pip install -e '.[dev]'
+      - name: Run LanceDB integration tests
+        run: |
+          pytest -q tests/test_lancedb_integration.py tests/test_indexer_vectors_metadata.py
+name: Integration Tests (opt-in)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rocksdict:
+        description: 'Run rocksdict (trigram) integration tests'
+        required: false
+        default: 'false'
+      lancedb:
+        description: 'Run LanceDB (vector) integration tests'
+        required: false
+        default: 'false'
+
+jobs:
+  rocksdict-integration:
+    if: ${{ github.event.inputs.rocksdict == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      PYTHONHASHSEED: '0'
+      SIGIL_MCP_LANCEDB_STUB: '1' # avoid requiring LanceDB for trigram-focused job
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y universal-ctags
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Install Python deps and rocksdict
+        run: |
+          python -m pip install --upgrade pip
+          pip install rocksdict
+          pip install -r requirements.txt || true
+          pip install -e '.[dev]'
+      - name: Run trigram integration tests
+        run: |
+          pytest -q tests/test_storage_trigram.py tests/test_admin_api_integration.py
+
+  lancedb-integration:
+    if: ${{ github.event.inputs.lancedb == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      PYTHONHASHSEED: '0'
+      name: Integration Tests (opt-in)
+
+      on:
+        workflow_dispatch:
+          inputs:
+            rocksdict:
+              description: 'Run rocksdict (trigram) integration tests'
+              required: false
+              default: 'false'
+            lancedb:
+              description: 'Run LanceDB (vector) integration tests'
+              required: false
+              default: 'false'
+
+      jobs:
+        rocksdict-integration:
+          if: ${{ github.event.inputs.rocksdict == 'true' }}
+          runs-on: ubuntu-latest
+          env:
+            PYTHONHASHSEED: '0'
+            SIGIL_MCP_LANCEDB_STUB: '1' # avoid requiring LanceDB for trigram-focused job
+          steps:
+            - uses: actions/checkout@v4
+            - name: Set up Python
+              uses: actions/setup-python@v4
+              with:
+                python-version: '3.12'
+            - name: Install system deps
+              run: |
+                sudo apt-get update
+                sudo apt-get install -y universal-ctags
+            - name: Cache pip
+              uses: actions/cache@v4
+              with:
+                path: ~/.cache/pip
+                key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+                restore-keys: |
+                  ${{ runner.os }}-pip-
+            - name: Install Python deps and rocksdict
+              run: |
+                python -m pip install --upgrade pip
+                pip install rocksdict
+                pip install -r requirements.txt || true
+                pip install -e '.[dev]'
+            - name: Run trigram integration tests
+              run: |
+                pytest -q tests/test_storage_trigram.py tests/test_admin_api_integration.py
+
+        lancedb-integration:
+          if: ${{ github.event.inputs.lancedb == 'true' }}
+          runs-on: ubuntu-latest
+          env:
+            PYTHONHASHSEED: '0'
+            SIGIL_MCP_LANCEDB_STUB: '0'
+          steps:
+            - uses: actions/checkout@v4
+            - name: Set up Python
+              uses: actions/setup-python@v4
+              with:
+                python-version: '3.12'
+            - name: Install system deps
+              run: |
+                sudo apt-get update
+                sudo apt-get install -y universal-ctags
+            - name: Cache pip
+              uses: actions/cache@v4
+              with:
+                path: ~/.cache/pip
+                key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+                restore-keys: |
+                  ${{ runner.os }}-pip-
+            - name: Install Python deps and LanceDB
+              run: |
+                python -m pip install --upgrade pip
+                pip install lancedb pyarrow
+                pip install -r requirements.txt || true
+                pip install -e '.[dev]'
+            - name: Run LanceDB integration tests
+              run: |
+                pytest -q tests/test_lancedb_integration.py tests/test_indexer_vectors_metadata.py
