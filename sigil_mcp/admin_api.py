@@ -22,14 +22,9 @@ from starlette.routing import Route
 import sigil_mcp.server as server_state
 
 from .config import get_config, load_config, save_config
-from .server import (
-    REPOS,
-    build_vector_index_op,
-    external_mcp_status_op,
-    get_index_stats_op,
-    rebuild_index_op,
-    refresh_external_mcp_op,
-)
+from .server import (REPOS, build_vector_index_op, external_mcp_status_op,
+                     get_index_stats_op, rebuild_index_op,
+                     refresh_external_mcp_op)
 
 logger = logging.getLogger("sigil_admin")
 

@@ -8,10 +8,10 @@ call a license server.
 """
 from __future__ import annotations
 
-import os
 import logging
+import os
+from collections.abc import Callable
 from functools import wraps
-from typing import Callable
 
 logger = logging.getLogger(__name__)
 

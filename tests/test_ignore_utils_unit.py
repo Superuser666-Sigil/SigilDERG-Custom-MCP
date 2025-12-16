@@ -4,13 +4,9 @@
 
 from pathlib import Path
 
-from sigil_mcp.ignore_utils import (
-    _match_pattern,
-    is_ignored_by_gitignore,
-    load_gitignore,
-    load_include_patterns,
-    should_ignore,
-)
+from sigil_mcp.ignore_utils import (_match_pattern, is_ignored_by_gitignore,
+                                    load_gitignore, load_include_patterns,
+                                    should_ignore)
 
 
 def test_load_gitignore_reads_gitignore_and_info_exclude(tmp_path: Path):

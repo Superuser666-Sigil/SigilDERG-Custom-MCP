@@ -13,14 +13,8 @@ Tests for OAuth2 authentication module (oauth.py).
 import json
 import time
 
-from sigil_mcp.oauth import (
-    CLIENT_FILE,
-    TOKENS_FILE,
-    OAuthClient,
-    OAuthManager,
-    OAuthToken,
-    get_oauth_manager,
-)
+from sigil_mcp.oauth import (CLIENT_FILE, TOKENS_FILE, OAuthClient,
+                             OAuthManager, OAuthToken, get_oauth_manager)
 
 
 class TestOAuthClientManagement:

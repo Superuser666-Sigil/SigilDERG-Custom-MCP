@@ -21,12 +21,8 @@ from threading import Lock, Thread
 from typing import TYPE_CHECKING
 
 from .config import get_config
-from .ignore_utils import (
-    is_ignored_by_gitignore,
-    load_gitignore,
-    load_include_patterns,
-    should_ignore,
-)
+from .ignore_utils import (is_ignored_by_gitignore, load_gitignore,
+                           load_include_patterns, should_ignore)
 
 try:
     from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -39,7 +35,8 @@ except ImportError:
     FileSystemEventHandler = None  # type: ignore
     FileSystemEvent = None  # type: ignore
     if TYPE_CHECKING:
-        from watchdog.events import FileSystemEvent, FileSystemEventHandler  # type: ignore
+        from watchdog.events import (FileSystemEvent,  # type: ignore
+                                     FileSystemEventHandler)
         from watchdog.observers import Observer  # type: ignore
     else:
         Observer = None  # type: ignore

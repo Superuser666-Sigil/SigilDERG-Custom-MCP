@@ -7,14 +7,9 @@ import types
 
 import pytest
 
-from sigil_mcp.mcp_client import (
-    ExternalMCPConfigError,
-    ExternalMCPServer,
-    MCPClientManager,
-    MCPClientWrapper,
-    _normalize_name,
-    _normalize_server_type,
-)
+from sigil_mcp.mcp_client import (ExternalMCPConfigError, ExternalMCPServer,
+                                  MCPClientManager, MCPClientWrapper,
+                                  _normalize_name, _normalize_server_type)
 
 
 def test_normalize_server_type_invalid():

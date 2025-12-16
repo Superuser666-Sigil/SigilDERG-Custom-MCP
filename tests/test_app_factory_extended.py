@@ -4,12 +4,9 @@
 
 from types import SimpleNamespace
 
-from sigil_mcp.app_factory import (
-    ChatGPTComplianceMiddleware,
-    _configure_logging,
-    _wrap_for_chatgpt,
-    build_mcp_app,
-)
+from sigil_mcp.app_factory import (ChatGPTComplianceMiddleware,
+                                   _configure_logging, _wrap_for_chatgpt,
+                                   build_mcp_app)
 
 
 def test_chatgpt_middleware_rewrites_content_type():

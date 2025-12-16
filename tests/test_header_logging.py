@@ -14,11 +14,9 @@ import logging
 
 import pytest
 
-from sigil_mcp.middleware.header_logging import (
-    SENSITIVE_HEADERS,
-    HeaderLoggingASGIMiddleware,
-    redact_headers,
-)
+from sigil_mcp.middleware.header_logging import (SENSITIVE_HEADERS,
+                                                 HeaderLoggingASGIMiddleware,
+                                                 redact_headers)
 
 
 class TestHeaderRedaction:

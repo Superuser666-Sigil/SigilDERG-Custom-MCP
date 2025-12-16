@@ -1,5 +1,7 @@
 import pytest
-from sigil_mcp.storage.trigram import TrigramIndex, ROCKSDICT_AVAILABLE, ROCKSDB_AVAILABLE
+
+from sigil_mcp.storage.trigram import (ROCKSDB_AVAILABLE, ROCKSDICT_AVAILABLE,
+                                       TrigramIndex)
 
 
 def test_trigram_index_basic(tmp_path):

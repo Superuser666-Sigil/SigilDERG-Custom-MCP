@@ -33,7 +33,8 @@ except ImportError:
 
 if TYPE_CHECKING:
     from openai import OpenAI as OpenAIType
-    from sentence_transformers import SentenceTransformer as SentenceTransformerType
+    from sentence_transformers import \
+        SentenceTransformer as SentenceTransformerType
 
 
 class EmbeddingProvider(Protocol):

@@ -6,16 +6,16 @@ layout and helpers for reading/writing/deleting blobs.
 """
 from __future__ import annotations
 
-import zlib
 import logging
+import zlib
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 class BlobStore:
-    def __init__(self, base_path: Path, repos_conn: Optional[Any] = None):
+    def __init__(self, base_path: Path, repos_conn: Any | None = None):
         self.base_path = base_path
         self.base_path.mkdir(parents=True, exist_ok=True)
         self.repos_conn = repos_conn
@@ -30,7 +30,7 @@ class BlobStore:
         except Exception:
             logger.debug("Failed to write blob %s", blob_sha, exc_info=True)
 
-    def read_blob(self, blob_sha: str) -> Optional[bytes]:
+    def read_blob(self, blob_sha: str) -> bytes | None:
         blob_file = self.base_path / blob_sha[:2] / blob_sha[2:]
         try:
             if blob_file.exists():
@@ -39,7 +39,7 @@ class BlobStore:
             logger.debug("Failed to read blob %s", blob_sha, exc_info=True)
         return None
 
-    def delete_blob_if_unreferenced(self, blob_sha: str, rel_path: Optional[str] = None) -> None:
+    def delete_blob_if_unreferenced(self, blob_sha: str, rel_path: str | None = None) -> None:
         """Delete blob file if no other document references it.
 
         If a `repos_conn` was provided at construction time, use it to check

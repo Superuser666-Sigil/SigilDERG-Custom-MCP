@@ -1,5 +1,3 @@
-import pytest
-
 from sigil_mcp.storage.vector import VectorIndex
 
 

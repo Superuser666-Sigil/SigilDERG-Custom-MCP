@@ -11,12 +11,11 @@ Designed to work well with ChatGPT and other AI assistants via MCP.
 # pyright: reportGeneralTypeIssues=false
 
 import hashlib
-import json
 import logging
 import os
 import re
-import sqlite3
-import subprocess
+# sqlite3 and subprocess are provided to storage/backends when needed; keep
+# this module free of direct DB/process imports to avoid unused import issues.
 import threading
 import zlib
 from collections import defaultdict
@@ -30,22 +29,11 @@ from typing import Any, cast
 
 import numpy as np
 
-from .analysis import (
-    Symbol,
-    SymbolExtractor,
-    chunk_text,
-    classify_path,
-    count_tokens,
-    enforce_chunk_size_limits,
-    is_jsonl_path,
-    parse_jsonl_records,
-)
-from .ignore_utils import (
-    is_ignored_by_gitignore,
-    load_gitignore,
-    load_include_patterns,
-    should_ignore,
-)
+from .analysis import (Symbol, SymbolExtractor, chunk_text, classify_path,
+                       count_tokens, enforce_chunk_size_limits, hard_wrap,
+                       is_jsonl_path, parse_jsonl_records)
+from .ignore_utils import (is_ignored_by_gitignore, load_gitignore,
+                           load_include_patterns, should_ignore)
 
 # Trigram store requires rocksdict (RocksDB-backed Python bindings).
 try:
@@ -68,11 +56,11 @@ except ImportError:
 
 from .config import get_config
 from .schema import get_code_chunk_model
+from .storage.blob import BlobStore
 from .storage.metadata import MetadataStore
+from .storage.symbols import SymbolStore
 from .storage.trigram import TrigramIndex
 from .storage.vector import VectorIndex
-from .storage.blob import BlobStore
-from .storage.symbols import SymbolStore
 
 # Optional tokenizer support
 try:
@@ -1675,7 +1663,7 @@ class SigilIndex:
             logger.warning(f"Error indexing {file_path}: {e}")
             return None
 
-    
+
 
     def _build_trigram_index(self, repo_id: int) -> int:
         """Build trigram index for a repository's documents.
@@ -1903,54 +1891,54 @@ class SigilIndex:
     def _serialize_trigram_set(self, trigrams: set[str]) -> bytes:
         # Delegate to TrigramIndex instance
         try:
-            return getattr(self, "_trigram_index").serialize_trigram_set(trigrams)
+            return self._trigram_index.serialize_trigram_set(trigrams)
         except Exception:
             logger.debug("Failed to serialize trigram set", exc_info=True)
             return zlib.compress(b"")
 
     def _deserialize_trigram_set(self, blob: bytes) -> set[str]:
         try:
-            return getattr(self, "_trigram_index").deserialize_trigram_set(blob)
+            return self._trigram_index.deserialize_trigram_set(blob)
         except Exception:
             logger.debug("Failed to deserialize trigram set", exc_info=True)
             return set()
 
     def _trigram_commit(self) -> None:
         try:
-            getattr(self, "_trigram_index").commit()
+            self._trigram_index.commit()
         except Exception:
             logger.debug("Trigram commit failed", exc_info=True)
 
     def _trigram_get_doc_ids(self, gram: str) -> set[int]:
         try:
-            return getattr(self, "_trigram_index").get_doc_ids(gram)
+            return self._trigram_index.get_doc_ids(gram)
         except Exception:
             return set()
 
     def _trigram_set_doc_ids(self, gram: str, doc_ids: set[int]) -> None:
         try:
-            getattr(self, "_trigram_index").set_doc_ids(gram, doc_ids)
+            self._trigram_index.set_doc_ids(gram, doc_ids)
         except Exception:
             logger.debug("Failed to set doc_ids for trigram %s", gram, exc_info=True)
         return
 
     def _trigram_delete(self, gram: str) -> None:
         try:
-            getattr(self, "_trigram_index").delete(gram)
+            self._trigram_index.delete(gram)
         except Exception:
             logger.debug("Failed to delete trigram %s", gram, exc_info=True)
         return
 
     def _trigram_iter_items(self):
         try:
-            return getattr(self, "_trigram_index").iter_items()
+            return self._trigram_index.iter_items()
         except Exception:
             logger.debug("Failed to iterate trigram items", exc_info=True)
             return []
 
     def _trigram_count(self) -> int:
         try:
-            return getattr(self, "_trigram_index").count()
+            return self._trigram_index.count()
         except Exception:
             logger.debug("Failed to get trigram count", exc_info=True)
             return 0
@@ -2675,7 +2663,7 @@ class SigilIndex:
         records = []
         first_chunk_text = chunks[0][3] if chunks else None
         classify = self._classify_path(rel_path, sample_text=first_chunk_text)
-        for (chunk_idx, start_line, end_line, chunk_text), vector in zip(
+        for (chunk_idx, start_line, end_line, chunk_content), vector in zip(
             chunks, embeddings, strict=False
         ):
             records.append(
@@ -2687,7 +2675,7 @@ class SigilIndex:
                     "chunk_index": int(chunk_idx),
                     "start_line": int(start_line),
                     "end_line": int(end_line),
-                    "content": chunk_text,
+                    "content": chunk_content,
                     "is_code": bool(classify["is_code"]),
                     "is_doc": bool(classify["is_doc"]),
                     "is_config": bool(classify["is_config"]),
@@ -3257,7 +3245,7 @@ class SigilIndex:
         # Close trigram index (backend-agnostic)
         if hasattr(self, "_trigram_index") and getattr(self, "_trigram_index", None) is not None:
             try:
-                getattr(self, "_trigram_index").close()
+                self._trigram_index.close()
             except Exception:
                 logger.debug("Error closing trigram index", exc_info=True)
 

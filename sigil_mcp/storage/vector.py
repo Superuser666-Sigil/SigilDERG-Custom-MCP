@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class VectorIndex:
                 logger.exception("Failed to initialize LanceDB; falling back to stub")
                 self._db = _InMemoryStub(self.dimension)
 
-    def table(self, name: str) -> Optional[Any]:
+    def table(self, name: str) -> Any | None:
         try:
             if name in self._tables:
                 return self._tables[name]
@@ -115,7 +115,7 @@ class VectorIndex:
                 table.add(records)
                 return
             # Some LanceDB objects may wrap add under different names; attempt generic call
-            getattr(table, "add")(records)
+            table.add(records)
         except Exception:
             logger.exception("Failed to add records to vector table")
 
@@ -126,7 +126,7 @@ class VectorIndex:
             if hasattr(table, "delete"):
                 table.delete(where)
                 return
-            getattr(table, "delete")(where)
+            table.delete(where)
         except Exception:
             logger.exception("Failed to delete rows from vector table (where=%s)", where)
 
@@ -137,7 +137,7 @@ class VectorIndex:
             if hasattr(table, "update"):
                 table.update(where=where, values=values)
                 return
-            getattr(table, "update")(where=where, values=values)
+            table.update(where=where, values=values)
         except Exception:
             logger.exception("Failed to update rows on vector table (where=%s)", where)
 

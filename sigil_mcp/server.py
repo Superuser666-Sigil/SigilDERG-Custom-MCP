@@ -3,11 +3,11 @@
 # Commercial licenses are available. Contact: davetmire85@gmail.com
 
 import asyncio
+import concurrent.futures
 import logging
 import os
 import sys
 import threading
-import concurrent.futures
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -36,29 +36,16 @@ from .app_factory import build_mcp_app
 from .auth import initialize_api_key
 from .config import get_config
 from .indexer import SigilIndex
-from .mcp_client import (
-    ExternalMCPConfigError,
-    MCPClientManager,
-    get_global_manager,
-    set_global_manager,
-)
+from .mcp_client import (ExternalMCPConfigError, MCPClientManager,
+                         get_global_manager, set_global_manager)
 from .middleware.header_logging import HeaderLoggingASGIMiddleware
 from .oauth import get_oauth_manager
-from .security import (
-    AuthSettings,
-)
-from .security import (
-    check_authentication as _security_check_authentication,
-)
-from .security import (
-    check_ip_whitelist as _security_check_ip_whitelist,
-)
-from .security import (
-    is_local_connection as _security_is_local_connection,
-)
-from .security import (
-    is_redirect_uri_allowed as _security_is_redirect_uri_allowed,
-)
+from .security import AuthSettings
+from .security import check_authentication as _security_check_authentication
+from .security import check_ip_whitelist as _security_check_ip_whitelist
+from .security import is_local_connection as _security_is_local_connection
+from .security import \
+    is_redirect_uri_allowed as _security_is_redirect_uri_allowed
 from .watcher import WATCHDOG_AVAILABLE, FileWatchManager
 
 # Import Admin API app (conditional to avoid circular imports)
@@ -98,11 +85,12 @@ def index_file_task(config_json: str | None, repo_name: str, repo_root: str, fil
     """
     try:
         # Import inside function to keep the top-level module picklable and small.
-        from sigil_mcp.indexer import SigilIndex
-        from sigil_mcp.config import load_config
         import json
-        from pathlib import Path
         import tempfile
+        from pathlib import Path
+
+        from sigil_mcp.config import load_config
+        from sigil_mcp.indexer import SigilIndex
 
         # Load provided config snapshot into a temp file so the Config loader
         # can perform its validations and defaults. This keeps worker logic
@@ -355,7 +343,8 @@ def is_local_connection(client_ip: str | None = None) -> bool:
 
 def _initialize_external_mcp():
     """Initialize external MCP servers and register their tools."""
-    global _MCP_CLIENT_MANAGER, _MCP_CLIENT_TASK
+    global _MCP_CLIENT_TASK
+
     if _MCP_CLIENT_MANAGER is not None:
         return
     if _MCP_CLIENT_TASK is not None and not _MCP_CLIENT_TASK.done():
@@ -374,7 +363,7 @@ def _initialize_external_mcp():
         return
 
     async def _register_and_set():
-        global _MCP_CLIENT_MANAGER, _MCP_CLIENT_TASK
+        global _MCP_CLIENT_MANAGER
         try:
             await manager.register_with_fastmcp(mcp, tool_decorator=_safe_tool_decorator)
         except Exception as exc:  # pragma: no cover - defensive against runtime loop issues

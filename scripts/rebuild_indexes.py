@@ -15,11 +15,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # Re-export helpers for callers that import from scripts.rebuild_indexes
-from sigil_mcp.scripts.rebuild_indexes import (  # noqa: F401
-    main,
-    rebuild_all_indexes,
-    rebuild_single_repo_index,
-)
+from sigil_mcp.scripts.rebuild_indexes import (main,  # noqa: F401
+                                               rebuild_all_indexes,
+                                               rebuild_single_repo_index)
 
 if __name__ == "__main__":
     raise SystemExit(main())

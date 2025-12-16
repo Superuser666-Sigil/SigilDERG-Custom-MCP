@@ -6,10 +6,10 @@ so the later refactor can swap in this class with minimal changes.
 
 from __future__ import annotations
 
-import os
-import zlib
 import json
 import logging
+import os
+import zlib
 from pathlib import Path
 from typing import Any, cast
 
@@ -91,7 +91,7 @@ class TrigramIndex:
         except Exception:
             logger.debug("Failed to serialize doc_ids", exc_info=True)
             return zlib.compress(b"")
-        
+
 
     @staticmethod
     def _deserialize_doc_ids(blob: bytes) -> set[int]:

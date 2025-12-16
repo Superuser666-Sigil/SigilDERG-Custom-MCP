@@ -8,15 +8,9 @@ Tests for authentication module (auth.py).
 
 from pathlib import Path
 
-from sigil_mcp.auth import (
-    _update_api_key_path,
-    generate_api_key,
-    get_api_key_from_env,
-    get_api_key_path,
-    hash_api_key,
-    initialize_api_key,
-    verify_api_key,
-)
+from sigil_mcp.auth import (_update_api_key_path, generate_api_key,
+                            get_api_key_from_env, get_api_key_path,
+                            hash_api_key, initialize_api_key, verify_api_key)
 
 
 def _api_key_file():

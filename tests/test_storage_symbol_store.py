@@ -1,7 +1,7 @@
 import sqlite3
 
-from sigil_mcp.storage.symbols import SymbolStore
 from sigil_mcp.analysis.symbols import Symbol
+from sigil_mcp.storage.symbols import SymbolStore
 
 
 def test_symbol_store_crud(tmp_path):

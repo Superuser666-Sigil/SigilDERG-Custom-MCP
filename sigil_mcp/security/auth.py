@@ -151,7 +151,8 @@ def check_authentication(
             parts = auth_header.split()
             if len(parts) == 2 and parts[0].lower() == "bearer":
                 token = parts[1]
-                from ..oauth import get_oauth_manager  # Lazy import to avoid cycles
+                from ..oauth import \
+                    get_oauth_manager  # Lazy import to avoid cycles
 
                 oauth_manager = get_oauth_manager()
                 if oauth_manager.verify_token(token):

@@ -6,7 +6,7 @@ CRUD operations so `indexer.py` can delegate symbol persistence.
 from __future__ import annotations
 
 import sqlite3
-from typing import Iterable, List
+from collections.abc import Iterable
 
 from ..analysis import Symbol
 
@@ -50,7 +50,7 @@ class SymbolStore:
         cur = self.conn.cursor()
         cur.execute("DELETE FROM symbols WHERE doc_id = ?", (doc_id,))
 
-    def get_symbols_for_doc(self, doc_id: int) -> List[Symbol]:
+    def get_symbols_for_doc(self, doc_id: int) -> list[Symbol]:
         """Return Symbol objects for a given document id by joining
         the documents table to provide file path information.
         """

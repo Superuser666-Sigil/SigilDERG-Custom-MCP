@@ -5,15 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from sigil_mcp.mcp_client import (
-    ExternalMCPConfigError,
-    ExternalMCPServer,
-    MCPClientManager,
-    MCPClientWrapper,
-    _normalize_name,
-    get_global_manager,
-    set_global_manager,
-)
+from sigil_mcp.mcp_client import (ExternalMCPConfigError, ExternalMCPServer,
+                                  MCPClientManager, MCPClientWrapper,
+                                  _normalize_name, get_global_manager,
+                                  set_global_manager)
 
 
 def test_normalize_name_requires_value():

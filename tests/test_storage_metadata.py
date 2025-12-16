@@ -1,4 +1,3 @@
-import os
 from sigil_mcp.storage.metadata import MetadataStore
 
 

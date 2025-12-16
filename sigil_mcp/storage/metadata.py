@@ -7,11 +7,10 @@ it can be swapped in incrementally.
 
 from __future__ import annotations
 
-import sqlite3
-from pathlib import Path
-from datetime import datetime
 import logging
-from typing import Optional
+import sqlite3
+from datetime import datetime
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +135,7 @@ class MetadataStore:
         row = cur.fetchone()
         return int(row[0])
 
-    def get_repo_id(self, name: str) -> Optional[int]:
+    def get_repo_id(self, name: str) -> int | None:
         cur = self.conn.cursor()
         cur.execute("SELECT id FROM repos WHERE name = ?", (name,))
         row = cur.fetchone()

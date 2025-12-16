@@ -422,7 +422,8 @@ class TestLlamaCppProvider:
         """Test error when model file doesn't exist."""
         with patch("sigil_mcp.llamacpp_provider.LLAMACPP_AVAILABLE", True):
             with patch("sigil_mcp.llamacpp_provider.Llama"):
-                from sigil_mcp.llamacpp_provider import LlamaCppEmbeddingProvider
+                from sigil_mcp.llamacpp_provider import \
+                    LlamaCppEmbeddingProvider
 
                 with pytest.raises(FileNotFoundError):
                     LlamaCppEmbeddingProvider(
@@ -441,7 +442,8 @@ class TestLlamaCppProvider:
                 mock_instance.n_ctx.return_value = 100  # Small context
                 mock_llama.return_value = mock_instance
 
-                from sigil_mcp.llamacpp_provider import LlamaCppEmbeddingProvider
+                from sigil_mcp.llamacpp_provider import \
+                    LlamaCppEmbeddingProvider
 
                 provider = LlamaCppEmbeddingProvider(model_path=fake_model, dimension=4096)
 

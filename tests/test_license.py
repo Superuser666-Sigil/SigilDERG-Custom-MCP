@@ -1,5 +1,3 @@
-import os
-
 from sigil_mcp import license as license_mod
 
 

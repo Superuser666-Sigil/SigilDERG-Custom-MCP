@@ -1,6 +1,5 @@
 import concurrent.futures
 from pathlib import Path
-import time
 
 import sigil_mcp.server as server
 
