@@ -38,7 +38,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # Include LanceDB extras so vector tests import cleanly
-          pip install "..[watch,dev,lancedb]" || pip install ".[watch,lancedb]"
+          pip install -e '.[watch,dev,lancedb]' || pip install '.[watch,lancedb]'
           pip install pytest pytest-cov
 
       - name: Lint (flake8)
@@ -52,6 +52,7 @@ jobs:
         with:
           name: coverage-xml
           path: coverage.xml
+name: CI
 name: CI
 
 on:
@@ -92,7 +93,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # Include LanceDB extras so vector tests import cleanly
-          pip install ".[watch,dev,lancedb]" || pip install ".[watch,lancedb]"
+          pip install -e '.[watch,dev,lancedb]' || pip install '.[watch,lancedb]'
           pip install pytest pytest-cov
 
       - name: Lint (flake8)
