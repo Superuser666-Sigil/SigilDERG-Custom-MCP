@@ -18,14 +18,19 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Python deps (including rocksdict)
+      - name: Install Python deps (including rocksdict) and project
         run: |
           python -m pip install --upgrade pip
           # Prefer the rocksdict package (Python wrapper around RocksDB) over
           # compiling/linking to system RocksDB in CI. Install it first so it's
           # available for the test harness and any other packages.
           pip install rocksdict
+          # Install runtime requirements
           pip install -r requirements.txt
+          # Install this project in editable mode with dev extras so tests and
+          # local harness can import `sigil_mcp` and tools like pytest are
+          # available in CI (pytest is in the [dev] extras in pyproject.toml).
+          pip install -e '.[dev]'
 
       - name: Run offload harness
         env:
